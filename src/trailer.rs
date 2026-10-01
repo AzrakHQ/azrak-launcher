@@ -64,7 +64,7 @@ struct Lib {
 fn lib() -> Option<&'static Lib> {
     static LIB: OnceLock<Option<Lib>> = OnceLock::new();
     LIB.get_or_init(|| {
-        let lib = ["libmpv.so.2", "libmpv.so.1", "libmpv.so"].iter().find_map(|n| unsafe { libloading::Library::new(n) }.ok())?;
+        let lib = crate::hostos::libmpv_candidates().iter().find_map(|n| unsafe { libloading::Library::new(n) }.ok())?;
         // Each signature follows libmpv's public C API; the library outlives every pointer.
         unsafe {
             macro_rules! sym { ($name:literal) => { *lib.get(concat!($name, "\0").as_bytes()).ok()? }; }

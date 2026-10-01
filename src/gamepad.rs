@@ -1,6 +1,9 @@
 //! Controller input straight from evdev (/dev/input/event*). No udev/SDL dependency.
 //! Works for DualSense, DualShock 4, Xbox and most pads with the standard Linux mapping,
 //! and keeps working while a game has focus (needed for the PS button toggle).
+//!
+//! On macOS, controllers come from the system through gilrs instead (see the macOS items below).
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))] // the evdev code is Linux-only
 
 use std::collections::HashMap;
 use std::os::fd::RawFd;
@@ -109,6 +112,7 @@ fn gamepad_paths() -> Vec<String> {
 
 /// Names of the connected controllers, for showing whether games will get one. Reads the same
 /// device list as `gamepad_paths`, so it works even without permission to open the devices.
+#[cfg(target_os = "linux")]
 pub fn connected() -> Vec<String> {
     let Ok(text) = std::fs::read_to_string("/proc/bus/input/devices") else { return Vec::new() };
     let mut names: Vec<String> = Vec::new();
@@ -136,6 +140,16 @@ pub fn connected() -> Vec<String> {
         }
     }
     names
+}
+
+/// Names of the controllers macOS reports, kept current by the `run` loop below.
+#[cfg(target_os = "macos")]
+static MAC_PADS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Names of the connected controllers, for showing whether games will get one.
+#[cfg(target_os = "macos")]
+pub fn connected() -> Vec<String> {
+    MAC_PADS.lock().map(|n| n.clone()).unwrap_or_default()
 }
 
 /// "DualSense Wireless Controller connected" or "No controller connected".
@@ -170,10 +184,46 @@ pub fn spawn(emit: impl Fn(Pad) + Send + 'static) {
         .ok();
 }
 
+/// Turns "which directions are held" into presses with auto-repeat, like a keyboard: one press
+/// at once, a pause, then a steady repeat. Shared by the Linux and macOS input backends.
+#[derive(Default)]
+struct Repeater {
+    /// Direction -> when its next repeat is due.
+    next: HashMap<Pad, Instant>,
+}
+
+const REPEAT_AFTER: Duration = Duration::from_millis(380);
+const REPEAT_EVERY: Duration = Duration::from_millis(85);
+
+impl Repeater {
+    /// `held` is [up, down, left, right]. Calls `emit` for every press that is due at `now`.
+    fn update(&mut self, held: [bool; 4], now: Instant, mut emit: impl FnMut(Pad)) {
+        for (i, p) in [Pad::Up, Pad::Down, Pad::Left, Pad::Right].into_iter().enumerate() {
+            if !held[i] {
+                self.next.remove(&p);
+            } else if let Some(next) = self.next.get_mut(&p) {
+                if now >= *next {
+                    *next = now + REPEAT_EVERY;
+                    emit(p);
+                }
+            } else {
+                self.next.insert(p, now + REPEAT_AFTER);
+                emit(p);
+            }
+        }
+    }
+
+    /// How long until the next repeat is due (zero if overdue), or None if nothing is held.
+    fn next_due(&self, now: Instant) -> Option<Duration> {
+        self.next.values().map(|t| t.saturating_duration_since(now)).min()
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn run(emit: impl Fn(Pad)) {
     let mut devices: Vec<Device> = Vec::new();
     let mut last_scan = Instant::now() - Duration::from_secs(60);
-    let mut held: HashMap<Pad, Instant> = HashMap::new(); // direction -> next repeat time
+    let mut repeater = Repeater::default();
     let mut buf = [0u8; 24 * 64];
     loop {
         if last_scan.elapsed() > Duration::from_secs(3) {
@@ -192,7 +242,7 @@ fn run(emit: impl Fn(Pad)) {
         }
         // Wait for input, or until the next key-repeat is due.
         let now = Instant::now();
-        let timeout = held.values().map(|t| t.saturating_duration_since(now)).min().unwrap_or(Duration::from_millis(3000));
+        let timeout = repeater.next_due(now).unwrap_or(Duration::from_millis(3000));
         let mut fds: Vec<libc::pollfd> = devices.iter().map(|d| libc::pollfd { fd: d.fd, events: libc::POLLIN, revents: 0 }).collect();
         unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, timeout.as_millis().min(3000) as i32) };
 
@@ -251,19 +301,159 @@ fn run(emit: impl Fn(Pad)) {
             dirs[2] |= d.buttons[2] || ax(16) < -0.5 || ax(0) < -0.55;
             dirs[3] |= d.buttons[3] || ax(16) > 0.5 || ax(0) > 0.55;
         }
-        let now = Instant::now();
-        for (i, p) in [Pad::Up, Pad::Down, Pad::Left, Pad::Right].into_iter().enumerate() {
-            if !dirs[i] {
-                held.remove(&p);
-            } else if let Some(next) = held.get_mut(&p) {
-                if now >= *next {
-                    *next = now + Duration::from_millis(85);
-                    emit(p);
+        repeater.update(dirs, Instant::now(), |p| emit(p));
+    }
+}
+
+/// macOS: controllers through `gilrs` (IOKit underneath). It maps pads to one standard layout, so
+/// buttons arrive by position (South = ✕ on a PlayStation pad, A on an Xbox pad).
+#[cfg(target_os = "macos")]
+fn map_gilrs_button(button: gilrs::Button) -> Option<Pad> {
+    use gilrs::Button::*;
+    Some(match button {
+        South => Pad::Confirm,
+        East => Pad::Back,
+        North => Pad::Triangle,
+        West => Pad::Square,
+        LeftTrigger => Pad::L1,
+        RightTrigger => Pad::R1,
+        LeftTrigger2 => Pad::L2,
+        RightTrigger2 => Pad::R2,
+        Start => Pad::Options,
+        Mode => Pad::Ps,
+        DPadUp => Pad::Up,
+        DPadDown => Pad::Down,
+        DPadLeft => Pad::Left,
+        DPadRight => Pad::Right,
+        _ => return None,
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn run(emit: impl Fn(Pad)) {
+    use gilrs::{Axis, Event, EventType, GamepadId, Gilrs};
+
+    /// What one controller is holding: d-pad buttons [up, down, left, right] and the left stick.
+    #[derive(Default)]
+    struct State {
+        dpad: [bool; 4],
+        stick: [f32; 2], // x, y (gilrs reports up as positive y)
+    }
+
+    let mut gilrs = match Gilrs::new() {
+        Ok(g) => g,
+        Err(e) => {
+            crate::log!("controllers unavailable: {e}");
+            return;
+        }
+    };
+    let mut states: HashMap<GamepadId, State> = HashMap::new();
+    let mut repeater = Repeater::default();
+    loop {
+        // Sleep until input arrives or a direction repeat is due (never long: pads can appear).
+        let wait = repeater.next_due(Instant::now()).unwrap_or(Duration::from_millis(500)).min(Duration::from_millis(500));
+        let mut first = gilrs.next_event_blocking(Some(wait));
+        while let Some(Event { id, event, .. }) = first.take().or_else(|| gilrs.next_event()) {
+            let st = states.entry(id).or_default();
+            match event {
+                // Directions are tracked as held state; the Repeater turns them into presses.
+                EventType::ButtonPressed(b, _) => match map_gilrs_button(b) {
+                    Some(p) if (p as usize) < 4 => st.dpad[p as usize] = true,
+                    Some(p) => emit(p),
+                    None => {}
+                },
+                EventType::ButtonReleased(b, _) => {
+                    if let Some(p) = map_gilrs_button(b) {
+                        if (p as usize) < 4 {
+                            st.dpad[p as usize] = false;
+                        }
+                    }
                 }
-            } else {
-                held.insert(p, now + Duration::from_millis(380));
-                emit(p);
+                EventType::AxisChanged(Axis::LeftStickX, v, _) => st.stick[0] = v,
+                EventType::AxisChanged(Axis::LeftStickY, v, _) => st.stick[1] = v,
+                EventType::Disconnected => {
+                    crate::log!("controller disconnected");
+                    states.remove(&id);
+                }
+                _ => {}
             }
         }
+        // Keep the list of connected pads current for the Settings and launch screens.
+        let mut names: Vec<String> = Vec::new();
+        for (_, pad) in gilrs.gamepads() {
+            if pad.is_connected() && !names.iter().any(|n| n == pad.name()) {
+                names.push(pad.name().to_string());
+            }
+        }
+        if let Ok(mut shared) = MAC_PADS.lock() {
+            if *shared != names {
+                *shared = names;
+            }
+        }
+        let mut dirs = [false; 4];
+        for st in states.values() {
+            dirs[0] |= st.dpad[0] || st.stick[1] > 0.55;
+            dirs[1] |= st.dpad[1] || st.stick[1] < -0.55;
+            dirs[2] |= st.dpad[2] || st.stick[0] < -0.55;
+            dirs[3] |= st.dpad[3] || st.stick[0] > 0.55;
+        }
+        repeater.update(dirs, Instant::now(), |p| emit(p));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Run the repeater at `at` ms after `t0` and collect what it presses.
+    fn step(r: &mut Repeater, held: [bool; 4], t0: Instant, at: u64) -> Vec<Pad> {
+        let mut out = Vec::new();
+        r.update(held, t0 + Duration::from_millis(at), |p| out.push(p));
+        out
+    }
+    const NONE: [bool; 4] = [false; 4];
+    const DOWN: [bool; 4] = [false, true, false, false];
+
+    #[test]
+    fn a_held_direction_presses_at_once_then_pauses_then_repeats() {
+        let (mut r, t0) = (Repeater::default(), Instant::now());
+        assert_eq!(step(&mut r, DOWN, t0, 0), [Pad::Down], "immediate press");
+        assert!(step(&mut r, DOWN, t0, 100).is_empty(), "still in the initial pause");
+        assert!(step(&mut r, DOWN, t0, 379).is_empty());
+        assert_eq!(step(&mut r, DOWN, t0, 380), [Pad::Down], "first repeat");
+        assert!(step(&mut r, DOWN, t0, 400).is_empty());
+        assert_eq!(step(&mut r, DOWN, t0, 465), [Pad::Down], "then every 85 ms");
+        assert_eq!(step(&mut r, DOWN, t0, 550), [Pad::Down]);
+    }
+
+    #[test]
+    fn releasing_stops_the_repeat_and_a_new_press_starts_over() {
+        let (mut r, t0) = (Repeater::default(), Instant::now());
+        step(&mut r, DOWN, t0, 0);
+        assert!(step(&mut r, NONE, t0, 100).is_empty());
+        assert_eq!(r.next_due(t0 + Duration::from_millis(100)), None);
+        assert!(step(&mut r, NONE, t0, 500).is_empty(), "nothing repeats after release");
+        assert_eq!(step(&mut r, DOWN, t0, 600), [Pad::Down], "pressed again: immediate");
+        assert!(step(&mut r, DOWN, t0, 700).is_empty(), "with the initial pause again");
+    }
+
+    #[test]
+    fn directions_repeat_independently() {
+        let (mut r, t0) = (Repeater::default(), Instant::now());
+        assert_eq!(step(&mut r, DOWN, t0, 0), [Pad::Down]);
+        // Right joins while Down is mid-pause: Right presses at once, Down keeps its own clock.
+        assert_eq!(step(&mut r, [false, true, false, true], t0, 200), [Pad::Right]);
+        assert_eq!(step(&mut r, [false, true, false, true], t0, 380), [Pad::Down]);
+        // Right's initial pause ends at 580, and Down (repeating every 85 ms since 380) is due too.
+        assert_eq!(step(&mut r, [false, true, false, true], t0, 580), [Pad::Down, Pad::Right]);
+    }
+
+    #[test]
+    fn next_due_says_when_to_wake_for_a_repeat() {
+        let (mut r, t0) = (Repeater::default(), Instant::now());
+        assert_eq!(r.next_due(t0), None);
+        step(&mut r, DOWN, t0, 0);
+        assert_eq!(r.next_due(t0 + Duration::from_millis(100)), Some(Duration::from_millis(280)));
+        assert_eq!(r.next_due(t0 + Duration::from_millis(900)), Some(Duration::ZERO), "overdue means now");
     }
 }

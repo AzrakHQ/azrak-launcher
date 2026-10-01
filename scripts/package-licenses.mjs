@@ -7,7 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-export const TARGET = 'x86_64-unknown-linux-gnu';
+// Linux unless the release job names another target (the macOS bundle passes aarch64-apple-darwin).
+export const TARGET = process.env.PS5_LICENSE_TARGET || 'x86_64-unknown-linux-gnu';
 const ROYALTY = 'LicenseRef-Slint-Royalty-free-2.0';
 const RQBIT_COMMIT = 'a499d2f243d124e144aef137afe7cb304a6e3f36';
 const SLINT_COMMIT = '372cf0ee5577c3dfec309a45e7b778ba4e81b734';

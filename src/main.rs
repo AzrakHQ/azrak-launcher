@@ -10,6 +10,10 @@ mod sfo;
 mod shad;
 mod shad_ui;
 mod pkgx;
+#[cfg(target_os = "linux")]
+mod sandbox;
+#[cfg(not(target_os = "linux"))]
+#[path = "sandbox_stub.rs"]
 mod sandbox;
 mod vpn;
 mod pc;
@@ -34,6 +38,7 @@ mod kyty_ui;
 mod update;
 mod library;
 mod library_layout;
+mod hostos;
 mod present;
 mod psn;
 mod sessions;
@@ -69,6 +74,8 @@ fn main() {
         pc::print_gpus();
         return;
     }
+    // Torrent downloads hold every file of the torrent open; the default limit on macOS is 256.
+    hostos::raise_open_file_limit();
     let mut windowed = false;
     let mut monitor: Option<String> = None;
     let mut force_sync = false;

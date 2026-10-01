@@ -441,9 +441,7 @@ impl Worker {
         }
     }
     fn fail(&self, key: &str, error: anyhow::Error) {
-        // Engine errors can contain tracker/magnet URLs; redact them from the UI.
-        let message = regex::Regex::new(r"(?:https?://|udp://|magnet:\?)[^\s]+")
-            .unwrap().replace_all(&error.to_string(), "[network URL]").chars().take(500).collect::<String>();
+        let message = describe(&error);
         self.update(key, |job| {
             if job.state != State::Complete { job.state = State::Failed; }
             job.error = message; job.clear_runtime();
@@ -873,8 +871,31 @@ impl Worker {
     }
 }
 
+/// The error text shown in the UI: the whole cause chain ("error opening X in read/write mode:
+/// Too many open files"), not just the outermost message, with network URLs redacted because
+/// engine errors can contain tracker/magnet URLs.
+fn describe(error: &anyhow::Error) -> String {
+    regex::Regex::new(r"(?:https?://|udp://|magnet:\?)[^\s]+")
+        .unwrap()
+        .replace_all(&format!("{error:#}"), "[network URL]")
+        .chars()
+        .take(500)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn describe_shows_the_root_cause_and_hides_urls() {
+        use anyhow::Context;
+        let e = Err::<(), _>(std::io::Error::from_raw_os_error(24)).context("error opening \"/x/a.bank\" in read/write mode").unwrap_err();
+        let text = describe(&e);
+        assert!(text.starts_with("error opening \"/x/a.bank\" in read/write mode: "), "{text}");
+        assert!(text.len() > "error opening \"/x/a.bank\" in read/write mode: ".len(), "root cause missing: {text}");
+        let tracker = anyhow::anyhow!("announce failed for udp://tracker.example:6969/announce?key=secret");
+        assert_eq!(describe(&tracker), "announce failed for [network URL]");
+    }
+
     use super::*;
 
     fn job(base: &Path, key: &str) -> Job {
@@ -1021,7 +1042,7 @@ mod tests {
     #[test]
     fn loopback_completed_seed_uploads_verified_bytes_and_restart_seeds_again() {
         runtime().block_on(async {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = crate::hostos::real_tempdir();
             let (mut worker, source, source_handle, expected, key) = completed_worker(temp.path(), true).await;
             assert!(Policy::default().seed_after_download, "production seeding defaults on");
             let job = worker.job(&key).unwrap();
@@ -1099,7 +1120,7 @@ mod tests {
     #[test]
     fn loopback_disabled_completion_stops_and_enable_seeds_finished_but_never_paused() {
         runtime().block_on(async {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = crate::hostos::real_tempdir();
             let (mut worker, source, _, expected, key) = completed_worker(temp.path(), false).await;
             let complete = worker.job(&key).unwrap();
             assert!(!complete.seeding);
@@ -1131,7 +1152,7 @@ mod tests {
     fn loopback_restart_with_missing_or_changed_files_never_downloads() {
         runtime().block_on(async {
             for change in ["delete", "corrupt"] {
-                let temp = tempfile::tempdir().unwrap();
+                let temp = crate::hostos::real_tempdir();
                 let (mut worker, source, source_handle, expected, key) = completed_worker(temp.path(), true).await;
                 let payload = worker.job(&key).unwrap().folder.join("public-domain-fixture.bin");
                 worker.shutdown().await;
@@ -1167,7 +1188,7 @@ mod tests {
     #[test]
     fn loopback_settings_off_stops_all_completed_handles_immediately_and_keeps_data() {
         runtime().block_on(async {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = crate::hostos::real_tempdir();
             let (mut worker, source, _, expected, key) = completed_worker(temp.path(), true).await;
             // A second independently authored torrent proves OFF stops all seeds, not just one.
             let second_path = temp.path().join("second-fixture.bin");
@@ -1212,7 +1233,7 @@ mod tests {
         runtime().block_on(async {
             // Separate fixtures exercise Remove both while seeding and after manual Stop seeding.
             for stop_first in [false, true] {
-                let temp = tempfile::tempdir().unwrap();
+                let temp = crate::hostos::real_tempdir();
                 let (worker, source, _, expected, key) = completed_worker(temp.path(), true).await;
                 let store = worker.store.clone();
                 let session = worker.session.as_ref().unwrap().clone();
@@ -1365,7 +1386,7 @@ mod tests {
     #[test]
     fn loopback_shutdown_before_completion_tick_preserves_fully_verified_handle() {
         runtime().block_on(async {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = crate::hostos::real_tempdir();
             let (source, torrent, _, expected) = seeder(temp.path()).await;
             let mut worker = Worker::new(temp.path().join("state"), Arc::new(Mutex::new(vec![])), Policy {
                 local_only: true, loopback_listener: true, ..Default::default()
@@ -1401,7 +1422,7 @@ mod tests {
 
     #[test]
     fn seeding_flags_are_never_persisted_or_restored_and_settings_commands_are_bounded() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::hostos::real_tempdir();
         let mut job = job(temp.path(), "0123456789abcdef0123456789abcdef01234567");
         job.state = State::Complete; job.done = 65536; job.total = 65536;
         job.seeding = true; job.upload_speed = 0.125; job.speed = 1.0; job.peers = 5; job.eta = "old ETA".into();
@@ -1428,7 +1449,7 @@ mod tests {
 
     #[test]
     fn loopback_prepare_start_pause_restore_resume_and_complete() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::hostos::real_tempdir();
         let rt = runtime();
         let (seeder, torrent, seed_handle, expected) = rt.block_on(seeder(temp.path()));
         let store = temp.path().join("state");
@@ -1482,7 +1503,7 @@ mod tests {
 
     #[test]
     fn loopback_active_shutdown_cancel_and_remove_keep_partial_payload() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::hostos::real_tempdir();
         let rt = runtime();
         let (seeder, torrent, _, _) = rt.block_on(seeder(temp.path()));
         let store = temp.path().join("state");
@@ -1521,7 +1542,7 @@ mod tests {
 
     #[test]
     fn owned_folder_rejects_unowned_and_linked_markers_and_resets_permissions() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::hostos::real_tempdir();
         let job = job(temp.path(), "0123456789abcdef0123456789abcdef01234567");
         std::fs::create_dir(&job.folder).unwrap();
         assert!(owned_folder(&job).is_err(), "preexisting unmarked directory is unowned");
@@ -1547,7 +1568,7 @@ mod tests {
 
     #[test]
     fn metadata_rejects_unsafe_names_links_conflicts_and_hash_mismatch() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::hostos::real_tempdir();
         for part in ["", ".", "..", "/absolute", "dir/file", "dir\\file", "nul\0name", "control\nname", MARKER] {
             let (key, bytes) = metadata(&[&[part]], None, false);
             assert!(inspect_metadata(&bytes, &key, temp.path()).is_err(), "accepted {part:?}");
@@ -1568,7 +1589,7 @@ mod tests {
 
     #[test]
     fn space_check_uses_missing_and_sparse_files_not_saved_verified_progress() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::hostos::real_tempdir();
         let (key, bytes) = metadata(&[&["payload"]], None, false);
         inspect_metadata(&bytes, &key, temp.path()).unwrap();
         assert_eq!(required_space(&bytes, temp.path()).unwrap(), 65536);
@@ -1586,7 +1607,7 @@ mod tests {
     fn stale_resolution_success_error_abort_and_panic_cannot_replace_retry() {
         runtime().block_on(async {
             for outcome in 0..4 {
-                let temp = tempfile::tempdir().unwrap();
+                let temp = crate::hostos::real_tempdir();
                 let key = "0123456789abcdef0123456789abcdef01234567";
                 let jobs = Arc::new(Mutex::new(vec![job(temp.path(), key)]));
                 let mut worker = Worker::new(temp.path().join("store"), jobs, Policy { local_only: true, ..Default::default() });
@@ -1625,7 +1646,7 @@ mod tests {
     #[test]
     fn current_resolution_panic_fails_job_and_releases_active_handle() {
         runtime().block_on(async {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = crate::hostos::real_tempdir();
             let key = "0123456789abcdef0123456789abcdef01234567";
             let jobs = Arc::new(Mutex::new(vec![job(temp.path(), key)]));
             let mut worker = Worker::new(temp.path().join("store"), jobs, Policy::default());
@@ -1642,7 +1663,7 @@ mod tests {
 
     #[test]
     fn restoring_active_manifest_is_paused_and_constructs_no_engine() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::hostos::real_tempdir();
         let key = "0123456789abcdef0123456789abcdef01234567";
         let mut job = job(temp.path(), key);
         job.state = State::Downloading; job.done = 100; job.total = 200;
@@ -1659,7 +1680,7 @@ mod tests {
     #[test]
     fn immediate_checking_cancel_and_already_paused_handle_are_removed() {
         runtime().block_on(async {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = crate::hostos::real_tempdir();
             let (key, bytes) = metadata(&[&["payload"]], None, false);
             let mut job = job(temp.path(), &key); job.state = State::Ready;
             let jobs = Arc::new(Mutex::new(vec![job]));
@@ -1705,7 +1726,7 @@ mod tests {
 
     #[test]
     fn rejects_unowned_symlink_hardlink_and_traversal_destinations() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = crate::hostos::real_tempdir();
         assert!(check_path(temp.path(), Path::new("../escape")).is_err());
         assert!(check_path(temp.path(), Path::new("/etc/passwd")).is_err());
         assert!(check_path(temp.path(), Path::new("folder\\escape")).is_err());

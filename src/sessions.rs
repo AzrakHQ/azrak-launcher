@@ -15,6 +15,7 @@ const EMULATOR_NAMES: [&str; 3] = ["kyty_emulator", "kyty_emulator.exe", "shadps
 
 // ------------------------------------------------------------------ X11 helpers (xdotool)
 
+/// Empty without an X display (as on macOS, where only Gamescope's helpers reach this).
 fn xdotool(args: &[&str]) -> String {
     if std::env::var_os("DISPLAY").is_none() {
         return String::new();
@@ -30,6 +31,7 @@ fn xdotool(args: &[&str]) -> String {
 /// Visible windows of a session: of its process and of every process in its group (a PC game's
 /// start script hands over to the game, often through Wine; games the launcher starts lead their
 /// own process group).
+#[cfg(target_os = "linux")]
 pub fn windows_of_pid(pid: u32) -> Vec<String> {
     let mut pids = group_members(pid);
     if !pids.contains(&pid) {
@@ -38,7 +40,16 @@ pub fn windows_of_pid(pid: u32) -> Vec<String> {
     pids.iter().flat_map(|p| xdotool(&["search", "--onlyvisible", "--pid", &p.to_string()]).split_whitespace().map(String::from).collect::<Vec<_>>()).collect()
 }
 
+/// Running processes whose process group is `pgid`.
+#[cfg(target_os = "macos")]
+pub fn group_members(pgid: u32) -> Vec<u32> {
+    // No /proc on macOS: pgrep lists a process group's members.
+    let out = Command::new("pgrep").args(["-g", &pgid.to_string()]).stderr(Stdio::null()).output();
+    out.map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().filter_map(|p| p.parse().ok()).collect()).unwrap_or_default()
+}
+
 /// Running processes whose process group is `pgid` (not zombies).
+#[cfg(target_os = "linux")]
 pub fn group_members(pgid: u32) -> Vec<u32> {
     let Ok(rd) = std::fs::read_dir("/proc") else { return vec![] };
     rd.flatten().filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok()).filter(|pid| {
@@ -50,6 +61,7 @@ pub fn group_members(pgid: u32) -> Vec<u32> {
     }).collect()
 }
 
+#[cfg(target_os = "linux")]
 pub fn activate_pid_window(pid: u32) -> bool {
     if gamescope() {
         return gamescope_show(pid);
@@ -67,6 +79,7 @@ pub fn show_launcher() {
     activate_pid_window(std::process::id());
 }
 
+#[cfg(target_os = "linux")]
 fn active_window_pid() -> u32 {
     if gamescope() {
         let focused = xprop(&["-root", "GAMESCOPE_FOCUSED_WINDOW"]);
@@ -190,8 +203,43 @@ fn pc_command(game: &LocalGame) -> Result<Command, String> {
     Ok(command)
 }
 
+// ------------------------------------------------------------------ macOS window helpers (AppleScript)
+// These drive System Events, so macOS asks once for Accessibility permission. Without it every
+// helper answers "no window", and the launcher falls back to timeouts and signals.
+
+/// Output of the script, or None when it failed (e.g. Accessibility permission not granted).
+#[cfg(target_os = "macos")]
+fn osascript(script: &str) -> Option<String> {
+    let out = Command::new("osascript").args(["-e", script]).stderr(Stdio::null()).output().ok()?;
+    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// AppleScript for "the process with this unix id", as System Events sees it.
+#[cfg(target_os = "macos")]
+fn process_with_pid(pid: u32) -> String {
+    format!("(first process whose unix id is {pid})")
+}
+
+/// One placeholder per window of the process (callers only count them).
+#[cfg(target_os = "macos")]
+pub fn windows_of_pid(pid: u32) -> Vec<String> {
+    let n: usize = osascript(&format!(r#"tell application "System Events" to count windows of {}"#, process_with_pid(pid))).and_then(|v| v.parse().ok()).unwrap_or(0);
+    (0..n).map(|i| i.to_string()).collect()
+}
+
+#[cfg(target_os = "macos")]
+pub fn activate_pid_window(pid: u32) -> bool {
+    osascript(&format!(r#"tell application "System Events" to set frontmost of {} to true"#, process_with_pid(pid))).is_some()
+}
+
+#[cfg(target_os = "macos")]
+fn active_window_pid() -> u32 {
+    osascript(r#"tell application "System Events" to get unix id of first process whose frontmost is true"#).and_then(|v| v.parse().ok()).unwrap_or(0)
+}
+
 // ------------------------------------------------------------------ /proc helpers
 
+#[cfg(target_os = "linux")]
 fn boot_time() -> f64 {
     std::fs::read_to_string("/proc/stat")
         .ok()
@@ -199,6 +247,7 @@ fn boot_time() -> f64 {
         .unwrap_or(0.0)
 }
 
+#[cfg(target_os = "linux")]
 fn proc_start(pid: u32) -> f64 {
     let ticks = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
@@ -208,6 +257,7 @@ fn proc_start(pid: u32) -> f64 {
         .unwrap_or_else(now_secs)
 }
 
+#[cfg(target_os = "linux")]
 fn is_alive(pid: u32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
         .ok()
@@ -215,7 +265,64 @@ fn is_alive(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+/// The folder a game lives in: a path to a file inside it (eboot.bin) means its folder, but a
+/// `.zar` archive is the game itself.
+fn game_folder(game: String) -> String {
+    let gp = Path::new(&game);
+    if gp.is_file() && !game.ends_with(".zar") {
+        return gp.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or(game);
+    }
+    game
+}
+
+/// Elapsed time as `ps -o etime=` prints it: "05:03", "1:02:03" or "2-01:00:00" (days-h:m:s).
+#[cfg(any(target_os = "macos", test))]
+fn parse_etime(s: &str) -> Option<f64> {
+    let (days, rest) = match s.split_once('-') {
+        Some((d, r)) => (d.parse::<f64>().ok()?, r),
+        None => (0.0, s),
+    };
+    let parts: Vec<&str> = rest.split(':').collect();
+    if parts.len() > 3 {
+        return None;
+    }
+    let mut secs = 0.0;
+    for part in parts {
+        secs = secs * 60.0 + part.parse::<f64>().ok()?;
+    }
+    Some(days * 86400.0 + secs)
+}
+
+/// One line of `ps -axww -o pid=,etime=,command=` as (pid, seconds running, command line).
+#[cfg(any(target_os = "macos", test))]
+fn parse_ps_line(line: &str) -> Option<(u32, f64, &str)> {
+    let (pid, rest) = line.trim_start().split_once(char::is_whitespace)?;
+    let (etime, command) = rest.trim_start().split_once(char::is_whitespace)?;
+    Some((pid.parse().ok()?, parse_etime(etime)?, command.trim_start()))
+}
+
+/// The game path from an emulator's command line; None unless it is the emulator running a game.
+/// `ps` joins the arguments with spaces, so a path containing spaces ends at the next " --" option.
+#[cfg(any(target_os = "macos", test))]
+fn emulator_game(command: &str, extra_name: &str) -> Option<String> {
+    let names = EMULATOR_NAMES.iter().copied().chain((!extra_name.is_empty()).then_some(extra_name));
+    let is_emulator = names.into_iter().any(|name| {
+        command.match_indices(name).any(|(i, _)| {
+            // The program's own name: after a "/" (or at the start), and ending the program word.
+            let after = &command[i + name.len()..];
+            (i == 0 || command[..i].ends_with('/')) && (after.is_empty() || after.starts_with(' '))
+        })
+    });
+    if !is_emulator {
+        return None;
+    }
+    let after = command.split_once(" --game ")?.1;
+    let game = after.split(" --").next().unwrap_or(after).trim();
+    (!game.is_empty()).then(|| game.to_string())
+}
+
 /// pid -> (game path, start time) for every running emulator.
+#[cfg(target_os = "linux")]
 fn scan_emulators(extra_name: &str) -> HashMap<u32, (String, f64)> {
     let mut found = HashMap::new();
     let Ok(rd) = std::fs::read_dir("/proc") else { return found };
@@ -236,11 +343,32 @@ fn scan_emulators(extra_name: &str) -> HashMap<u32, (String, f64)> {
                 game = cwd.join(&game).to_string_lossy().into_owned();
             }
         }
-        let gp = Path::new(&game);
-        if gp.is_file() && !game.ends_with(".zar") {
-            game = gp.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or(game);
-        }
-        found.insert(pid, (game, proc_start(pid)));
+        found.insert(pid, (game_folder(game), proc_start(pid)));
+    }
+    found
+}
+
+// macOS has no /proc: emulators are found by reading `ps` instead.
+
+/// Alive means running: a zombie (exited, not yet reaped) is gone for our purposes, as on Linux.
+#[cfg(target_os = "macos")]
+fn is_alive(pid: u32) -> bool {
+    if !crate::hostos::pid_exists(pid) {
+        return false;
+    }
+    let state = Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]).stderr(Stdio::null()).output().ok();
+    state.is_none_or(|o| !String::from_utf8_lossy(&o.stdout).trim_start().starts_with('Z'))
+}
+
+#[cfg(target_os = "macos")]
+fn scan_emulators(extra_name: &str) -> HashMap<u32, (String, f64)> {
+    let mut found = HashMap::new();
+    let Ok(out) = Command::new("ps").args(["-axww", "-o", "pid=,etime=,command="]).stderr(Stdio::null()).output() else { return found };
+    let now = now_secs();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        let Some((pid, elapsed, command)) = parse_ps_line(line) else { continue };
+        let Some(game) = emulator_game(command, extra_name) else { continue };
+        found.insert(pid, (game_folder(game), now - elapsed));
     }
     found
 }
@@ -423,16 +551,10 @@ impl Sessions {
         };
         std::thread::spawn(move || {
             // 1) Close the window like Alt+F4 so the emulator shuts down cleanly (saves caches).
-            // Gamescope has no window manager to act on Alt+F4.
-            let wins = if gamescope() { vec![] } else { windows_of_pid(pid) };
-            if let Some(w) = wins.last() {
-                xdotool(&["windowactivate", w]);
-                std::thread::sleep(Duration::from_millis(250));
-                xdotool(&["key", "--clearmodifiers", "alt+F4"]);
-                if wait_gone(pid, group, 4.0) {
-                    return;
-                }
+            if close_window_gracefully(pid, group) {
+                return;
             }
+            // 2) Terminate, then 3) kill.
             terminate(pid, own, group);
         });
     }
@@ -543,6 +665,25 @@ impl Sessions {
     }
 }
 
+/// Ask the game's window to close (like Alt+F4) so the emulator saves its caches.
+/// True once the game is gone.
+#[cfg(target_os = "linux")]
+fn close_window_gracefully(pid: u32, group: bool) -> bool {
+    // Gamescope has no window manager to act on Alt+F4.
+    let wins = if gamescope() { vec![] } else { windows_of_pid(pid) };
+    let Some(w) = wins.last() else { return false };
+    xdotool(&["windowactivate", w]);
+    std::thread::sleep(Duration::from_millis(250));
+    xdotool(&["key", "--clearmodifiers", "alt+F4"]);
+    wait_gone(pid, group, 4.0)
+}
+
+/// macOS goes straight to SIGTERM: there is no reliable way to close another app's window.
+#[cfg(target_os = "macos")]
+fn close_window_gracefully(_pid: u32, _group: bool) -> bool {
+    false
+}
+
 /// Terminate, then kill, a game's process (and its process group, if the launcher started it).
 fn terminate(pid: u32, own: bool, group: bool) {
     for (sig, wait) in [(libc::SIGTERM, 4.0), (libc::SIGKILL, 2.0)] {
@@ -612,8 +753,46 @@ pub fn shell_split(s: &str) -> Vec<String> {
     out
 }
 
+/// The reason KytyPS5 gave for exiting, from its log: the text under its `--- Error ---` heading,
+/// without the source-file location it appends. `None` when it printed no such section.
+pub fn emulator_error(log: &str) -> Option<String> {
+    let after = log.split("--- Error ---").nth(1)?;
+    let text: Vec<&str> = after.lines().map(str::trim).skip_while(|l| l.is_empty()).take_while(|l| !l.is_empty()).collect();
+    let mut joined = text.join(" ");
+    // "... in /path/to/file.cpp:933" is for the emulator's developers, not for the player.
+    if let Some(i) = joined.rfind(" in /") {
+        if joined[i..].contains(".cpp:") || joined[i..].contains(".h:") {
+            joined.truncate(i);
+        }
+    }
+    let joined = joined.trim().to_string();
+    (!joined.is_empty()).then(|| joined.chars().take(300).collect())
+}
+
+/// The last part of a log file, as text (logs can be large; the error is at the end).
+pub fn log_tail(path: &Path) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(path) else { return String::new() };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let _ = f.seek(SeekFrom::Start(len.saturating_sub(64 * 1024)));
+    let mut bytes = Vec::new();
+    let _ = f.read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{emulator_error, emulator_game, game_folder, parse_etime, parse_ps_line};
+
+    #[test]
+    fn emulator_error_reads_the_reason_without_the_source_location() {
+        let log = "Initialized: Audio\n--- Build ---\nOfficial build KytyPS5-2026-10-01-b3e419f\n--- Error ---\nCould not find suitable device:\n  Apple M4 Max: image view minLod is not supported; shaderCullDistance is not supported in /Users/runner/work/KytyPS5/src/vulkanWindow.cpp:933\n\n";
+        assert_eq!(emulator_error(log).unwrap(), "Could not find suitable device: Apple M4 Max: image view minLod is not supported; shaderCullDistance is not supported");
+        assert_eq!(emulator_error("all fine\nno error section"), None);
+        assert_eq!(emulator_error("--- Error ---\n\n"), None);
+        assert_eq!(emulator_error("--- Error ---\nout of memory\n").unwrap(), "out of memory");
+    }
+
     #[test]
     fn stop_kills_what_a_start_script_left_behind() {
         use std::os::unix::process::CommandExt;
@@ -631,5 +810,63 @@ mod tests {
     #[test]
     fn split() {
         assert_eq!(super::shell_split(r#"--a "b c" 'd' e\ f"#), vec!["--a", "b c", "d", "e f"]);
+    }
+
+    #[test]
+    fn etime_formats_from_ps() {
+        assert_eq!(parse_etime("05:03"), Some(303.0));
+        assert_eq!(parse_etime("1:02:03"), Some(3723.0));
+        assert_eq!(parse_etime("2-01:00:00"), Some(2.0 * 86400.0 + 3600.0));
+        assert_eq!(parse_etime("00:07"), Some(7.0));
+        assert_eq!(parse_etime("nonsense"), None);
+        assert_eq!(parse_etime("1:2:3:4"), None);
+        assert_eq!(parse_etime(""), None);
+    }
+
+    #[test]
+    fn ps_lines_split_into_pid_elapsed_and_command() {
+        assert_eq!(parse_ps_line("  4242       12:34 /opt/kyty/kyty_emulator --game /g/x"), Some((4242, 754.0, "/opt/kyty/kyty_emulator --game /g/x")));
+        assert_eq!(parse_ps_line("1 1-00:00:01 /sbin/launchd"), Some((1, 86401.0, "/sbin/launchd")));
+        assert_eq!(parse_ps_line("not a ps line"), None);
+        assert_eq!(parse_ps_line(""), None);
+    }
+
+    #[test]
+    fn emulator_command_lines() {
+        let game = |c: &str| emulator_game(c, "");
+        assert_eq!(game("/opt/kyty/kyty_emulator --game /games/CUSA1"), Some("/games/CUSA1".into()));
+        // ps joins arguments with spaces: the path ends at the next option.
+        assert_eq!(game("/opt/kyty/kyty_emulator --game /Users/me/My Games/CUSA 1 --fullscreen --amd-cpu"), Some("/Users/me/My Games/CUSA 1".into()));
+        // The emulator itself may live in a folder with spaces.
+        assert_eq!(game("/Users/me/Library/Application Support/ps5/kyty/current/kyty_emulator --game /g/x"), Some("/g/x".into()));
+        assert_eq!(game("kyty_emulator --game /g/x"), Some("/g/x".into()));
+        // Not running a game, or not the emulator.
+        assert_eq!(game("/opt/kyty/kyty_emulator --help"), None);
+        assert_eq!(game("/opt/kyty/kyty_emulator --game"), None);
+        assert_eq!(game("/usr/bin/vim --game /g/x"), None);
+        // The .exe name is a known emulator name too (as on Linux).
+        assert_eq!(game("/opt/kyty/kyty_emulator.exe --game /g/x"), Some("/g/x".into()));
+        assert_eq!(game("/opt/kyty/kyty_emulator.exe.bak --game /g/x"), None);
+        assert_eq!(game("/opt/my_kyty_emulator --game /g/x"), None);
+    }
+
+    #[test]
+    fn a_custom_emulator_name_counts_too() {
+        assert_eq!(emulator_game("/opt/custom/my-kyty --game /g/x", "my-kyty"), Some("/g/x".into()));
+        assert_eq!(emulator_game("/opt/custom/my-kyty --game /g/x", ""), None);
+    }
+
+    #[test]
+    fn a_game_file_means_its_folder_except_for_zar_archives() {
+        let t = tempfile::tempdir().unwrap();
+        let folder = t.path().join("CUSA1");
+        std::fs::create_dir(&folder).unwrap();
+        std::fs::write(folder.join("eboot.bin"), b"").unwrap();
+        std::fs::write(t.path().join("game.zar"), b"").unwrap();
+        let s = |p: std::path::PathBuf| p.to_string_lossy().into_owned();
+        assert_eq!(game_folder(s(folder.join("eboot.bin"))), s(folder.clone()));
+        assert_eq!(game_folder(s(folder.clone())), s(folder));
+        assert_eq!(game_folder(s(t.path().join("game.zar"))), s(t.path().join("game.zar")));
+        assert_eq!(game_folder("/does/not/exist".into()), "/does/not/exist");
     }
 }

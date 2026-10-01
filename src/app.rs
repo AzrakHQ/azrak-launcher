@@ -1301,7 +1301,13 @@ impl App {
                     Some(code) => {
                         crate::log!("{} crashed (exit {code}), log: {}", e.name, e.log.display());
                         audio::play(Sound::Error);
-                        (format!("{} stopped unexpectedly", e.name), if pc { format!("The game exited with code {code}.") } else { format!("{emulator} exited with code {code}.") })
+                        // Prefer the emulator's own reason (for example, missing graphics features) over a bare code.
+                        let reason = match crate::sessions::emulator_error(&crate::sessions::log_tail(&e.log)) {
+                            _ if pc => format!("The game exited with code {code}."),
+                            Some(reason) => format!("{emulator}: {reason}."),
+                            None => format!("{emulator} exited with code {code}."),
+                        };
+                        (format!("{} stopped unexpectedly", e.name), reason)
                     }
                     None if pc => (format!("{} closed right after starting", e.name), "It may need something this PC doesn't have (Wine, a library).".into()),
                     None => (format!("{} closed right after starting", e.name), format!("{emulator} may not support it yet.")),
@@ -2405,7 +2411,12 @@ impl App {
 
     pub fn resume_game(&mut self) {
         if !self.sessions.resume() {
-            self.toast("Couldn't switch to the game", "Its window wasn't found. Resume needs xdotool installed.", 2);
+            let hint = if cfg!(target_os = "macos") {
+                "Its window wasn't found. Resume needs Accessibility permission for PS5 Launcher."
+            } else {
+                "Its window wasn't found. Resume needs xdotool installed."
+            };
+            self.toast("Couldn't switch to the game", hint, 2);
         }
     }
 
@@ -2633,8 +2644,11 @@ impl App {
             loop {
                 std::thread::sleep(Duration::from_millis(250));
                 let el = start.elapsed();
-                let gone = !std::path::Path::new(&format!("/proc/{pid}")).exists();
-                let shown = el > Duration::from_millis(1200) && !crate::sessions::windows_of_pid(pid).is_empty();
+                let gone = !crate::hostos::pid_exists(pid);
+                // Window detection needs Accessibility permission on macOS; without it, assume the window
+                // is up after a few seconds rather than keeping the splash for the full 90.
+                let shown = el > Duration::from_millis(1200)
+                    && (!crate::sessions::windows_of_pid(pid).is_empty() || (cfg!(target_os = "macos") && el > Duration::from_secs(6)));
                 if gone || shown || el > Duration::from_secs(90) {
                     // A moment more once the window exists, so the game's first frame is ready.
                     if shown {
@@ -2804,7 +2818,8 @@ impl App {
 }
 
 pub fn open_url(url: &str) {
-    let _ = std::process::Command::new("xdg-open")
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let _ = std::process::Command::new(opener)
         .arg(url)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

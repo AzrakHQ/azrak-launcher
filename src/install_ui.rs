@@ -50,7 +50,8 @@ impl App {
         // PC games are named after the game (their folder and Library name), not the release.
         let name = match game { Some(game) if platform == crate::platform::Platform::Pc => game.name.clone(), _ => job.name };
         let request = installer::Request { key: key.clone(), topic: job.topic, name,
-            source: job.folder, destination: util::expand_home(&destination), expected_ids: ids, platform };
+            source: crate::hostos::resolve_existing(&job.folder),
+            destination: crate::hostos::resolve_existing(&util::expand_home(&destination)), expected_ids: ids, platform };
         match self.installer.start(request) {
             Ok(()) => {
                 self.install_states.insert(key.clone(), installer::State::Inspecting);

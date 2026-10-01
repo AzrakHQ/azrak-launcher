@@ -1,8 +1,8 @@
 # PS5 Launcher
 
-A PS5-style home screen for Linux. Browse PS5 and PS4 games with their official artwork, download
-and install them, and play them with the [KytyPS5](https://github.com/KytyPS5/KytyPS5) (PS5) and
-[shadPS4](https://github.com/shadps4-emu/shadPS4) (PS4) emulators, using a controller, keyboard or
+A PS5-style home screen for Linux and macOS. Browse PS5 and PS4 games with their official artwork,
+download and install them, and play them with the [KytyPS5](https://github.com/KytyPS5/KytyPS5) (PS5)
+and [shadPS4](https://github.com/shadps4-emu/shadPS4) (PS4) emulators, using a controller, keyboard or
 mouse.
 
 ![PS5 Launcher: the Home screen, a Game Hub, then the Library filtered to PS4 games and a PS4 game's Hub](docs/demo/demo-loop.webp)
@@ -35,6 +35,59 @@ sudo apt install xdotool mpv libarchive13
 ```
 
 To uninstall: `./ps5-launcher-linux-x86_64/install.sh --uninstall`
+
+## macOS
+
+macOS 11 or later, Apple Silicon or Intel. KytyPS5's macOS build is x86-64 (with its own copy of MoltenVK for Vulkan), so on Apple Silicon it runs through
+Rosetta 2.
+
+1. Install the prerequisites once (Rosetta is for Apple Silicon only):
+
+   ```bash
+   softwareupdate --install-rosetta --agree-to-license
+   brew install libarchive mpv   # mpv provides libmpv, which plays trailers inside the launcher
+   ```
+
+2. Download `ps5-launcher-macos-universal.zip` from the Releases page and unzip it.
+3. Move **PS5 Launcher** to Applications.
+4. Open it once as described under **"Not Opened" warning** below.
+5. Continue with **Getting started** below. The launcher downloads KytyPS5 for you.
+
+### "Not Opened: Apple could not verify…" warning
+
+The app isn't notarized (that needs a paid Apple Developer account), so macOS blocks the first
+launch of anything downloaded through a browser. It doesn't mean the file is damaged. Do one of:
+
+- Right-click **PS5 Launcher** and choose **Open**, then **Open** again in the dialog.
+- Open **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to the
+  blocked "PS5 Launcher" message (it appears after the first blocked attempt).
+- Or in a terminal, remove the download flag:
+
+  ```bash
+  xattr -dr com.apple.quarantine "/Applications/PS5 Launcher.app"
+  ```
+
+If you downloaded just the bare `ps5-launcher` binary (for example a CI build) instead of the app,
+it also needs the executable bit: `chmod +x ps5-launcher && xattr -d com.apple.quarantine ps5-launcher`.
+Prefer the app: the bare binary has no icon and some window features work worse.
+
+Controllers (through the system's game controller support), sound effects, games started outside
+the launcher, choosing a display in Settings, and automatic updates of the app all work on macOS too.
+
+What's different on macOS:
+
+- **Many games won't start yet, and on Apple Silicon possibly none.** KytyPS5 needs Vulkan features
+  that MoltenVK (the Vulkan-on-Metal layer) doesn't provide on Apple GPUs, and it exits at startup
+  with "Could not find suitable device … image view minLod / shaderBufferInt64Atomics /
+  shaderCullDistance is not supported". The launcher shows that reason when it happens. This is a
+  limit of the emulator and MoltenVK, not of the launcher; see the compatibility badges on the
+  game cards and kytyps5.github.io.
+- **Switching between a game and the launcher** (the Tab and PS button shortcuts, Resume) needs
+  *Privacy & Security → Accessibility* permission for PS5 Launcher. Without it the launcher still
+  starts and stops games, but can't raise or close their windows.
+  The app is signed ad hoc, so macOS may ask for the permission again after an update.
+- **Automatic updates** replace the whole app, so it must be somewhere you can write to (such as
+  `/Applications` as an admin user). Otherwise download the new zip.
 
 ## Or turn a spare PC into a console
 

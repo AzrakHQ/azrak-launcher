@@ -301,6 +301,31 @@ Interrupted records restore as failed and never auto-extract. A forced crash can
 leave hidden staging files, which are not installed games or automatically reused.
 Installation records live in the launcher's XDG configuration installs subfolder.
 
+## macOS port
+
+Linux is the primary platform. macOS is built and unit-tested in CI on
+`macos-14` (`.github/workflows/ci.yml`), and shipped as `ps5-launcher-macos-universal.zip`
+(`packaging/macos/bundle.sh`: a universal, ad-hoc-signed `PS5 Launcher.app`).
+
+Low-level OS differences live in `src/platform.rs` behind `cfg(target_os)`, with tests that run on
+both. Smaller OS checks sit next to the code they affect (`kyty.rs`, `update.rs`, `app.rs`), and
+`sessions.rs` (window control through AppleScript instead of `xdotool`),
+`compat.rs` (`sysctl` instead of `/proc`), `gamepad.rs` (gilrs instead of evdev), `audio.rs`
+(`afplay` instead of ALSA) and `update.rs` (swaps the whole `.app` bundle) have macOS branches.
+
+Not verified on real hardware, so check these first when something misbehaves on a Mac:
+
+- KytyPS5's macOS release asset names. `kyty.rs::asset_matches` accepts any `.tar.gz`, `.tgz`
+  or `.zip` whose name contains `macos`, `darwin` or `osx`, and expects `kyty_emulator` at the
+  top of the archive (or one folder down).
+- Window detection needs Accessibility permission; without it the launcher falls back to timeouts.
+- Split archives: libarchive reopens volumes, so `platform::fd_open_path` gives a path with a fresh
+  offset (`/dev/fd/N` on macOS shares the offset).
+- libarchive is loaded from Homebrew's paths (`platform::libarchive_candidates`).
+
+Forks can build with `PS5_LAUNCHER_REPO=owner/name` to follow their own releases (the release
+workflow sets it to the repository it runs in).
+
 ## Tests
 
 `cargo test --offline` runs the launcher unit tests; this is a binary crate,

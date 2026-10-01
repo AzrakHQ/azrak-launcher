@@ -2,7 +2,7 @@
 name = "ps5-launcher"
 version = "1.16.1"
 edition = "2021"
-description = "A fast, native PS5-style game launcher for Linux"
+description = "A fast, native PS5-style game launcher for Linux and macOS"
 rust-version = "1.92"
 
 [dependencies]
@@ -27,6 +27,11 @@ anyhow = "1"
 url = "2"
 data-encoding = "2"
 
+# Controller input on macOS (Linux reads evdev directly; see src/gamepad.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+# gilrs-core refuses to build without a Windows backend feature, even on macOS; xinput is inert here.
+gilrs = { version = "0.11", default-features = false, features = ["xinput"] }
+
 [dev-dependencies]
 tempfile = "3"
 
@@ -39,6 +44,14 @@ lto = "thin"
 codegen-units = 4
 strip = true
 panic = "unwind"
+
+# For CI: the same optimization as release (tests run at release speed) but without LTO and with
+# more codegen units, so linking takes a fraction of the time. Release builds still use `release`.
+[profile.ci]
+inherits = "release"
+lto = "off"
+codegen-units = 16
+strip = "none"
 
 # Decoding images in debug builds is painfully slow; optimize dependencies even there.
 [profile.dev.package."*"]

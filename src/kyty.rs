@@ -90,15 +90,59 @@ pub fn tag_commit(tag: &str) -> &str {
     tag.rsplit('-').next().unwrap_or("")
 }
 
-/// Latest Linux x86_64 build on GitHub: the newest release that has one. A release is published
-/// before its builds finish uploading, and one platform's build can fail, so the newest release
-/// may have no Linux build yet (on 2026-10-14 it had only macOS's).
-pub fn latest_release() -> Result<Release, String> {
-    let v = http_json(&format!("https://api.github.com/repos/{REPO}/releases?per_page=10"))?;
-    pick_release(&v)
+/// Whether a release asset is the KytyPS5 build for `os` ("linux" or "macos").
+///
+/// Linux builds are named like "...Linux...x86_64....tar.gz". KytyPS5 ships macOS as an
+/// x86-64 build that runs under Rosetta 2, so on macOS the architecture isn't checked and any
+/// archive whose name says macOS (or Darwin/OSX) matches.
+fn asset_matches(name: &str, os: &str) -> bool {
+    if os == "macos" {
+        let n = name.to_ascii_lowercase();
+        return ["macos", "darwin", "osx"].iter().any(|k| n.contains(k)) && [".tar.gz", ".tgz", ".zip"].iter().any(|e| n.ends_with(e));
+    }
+    name.contains("Linux") && name.contains("x86_64") && name.ends_with(".tar.gz")
 }
 
-fn pick_release(releases: &serde_json::Value) -> Result<Release, String> {
+/// Zip files start with "PK" and a record type. Sniffed from the content because the download
+/// is saved under one fixed name whatever its format.
+fn is_zip(path: &Path) -> bool {
+    use std::io::Read as _;
+    let mut magic = [0u8; 4];
+    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && matches!(&magic, b"PK\x03\x04" | b"PK\x05\x06")
+}
+
+/// Unpack a downloaded emulator archive into `dest`: KytyPS5 ships Linux as .tar.gz and macOS
+/// as .zip. On macOS `ditto` is used for zips since it keeps permissions and symlinks.
+fn extract(archive: &Path, dest: &Path) -> bool {
+    let mut cmd;
+    if is_zip(archive) {
+        if cfg!(target_os = "macos") {
+            cmd = Command::new("ditto");
+            cmd.args(["-x", "-k"]).arg(archive).arg(dest);
+        } else {
+            cmd = Command::new("unzip");
+            cmd.args(["-q", "-o"]).arg(archive).arg("-d").arg(dest);
+        }
+    } else {
+        cmd = Command::new("tar");
+        cmd.arg(if cfg!(target_os = "macos") { "-xf" } else { "-xzf" }).arg(archive).arg("-C").arg(dest);
+    }
+    cmd.status().is_ok_and(|s| s.success())
+}
+
+fn os_label() -> &'static str {
+    if std::env::consts::OS == "macos" { "macOS" } else { "Linux" }
+}
+
+/// Latest build for this OS on GitHub: the newest release that has one. A release is published
+/// before its builds finish uploading, and one platform's build can fail, so the newest release
+/// may have no build for this OS yet (on 2026-10-14 it had only macOS's).
+pub fn latest_release() -> Result<Release, String> {
+    let v = http_json(&format!("https://api.github.com/repos/{REPO}/releases?per_page=10"))?;
+    pick_release(&v, std::env::consts::OS)
+}
+
+fn pick_release(releases: &serde_json::Value, os: &str) -> Result<Release, String> {
     let mut list: Vec<&serde_json::Value> = releases.as_array().ok_or("no releases found")?.iter()
         .filter(|r| r["draft"].as_bool() != Some(true) && r["prerelease"].as_bool() != Some(true))
         .collect();
@@ -108,14 +152,14 @@ fn pick_release(releases: &serde_json::Value) -> Result<Release, String> {
     list.sort_by(|a, b| b["published_at"].as_str().unwrap_or("").cmp(a["published_at"].as_str().unwrap_or("")));
     list.into_iter().find_map(|r| {
         let asset = r["assets"].as_array()?.iter()
-            .find(|a| a["name"].as_str().is_some_and(|n| n.contains("Linux") && n.contains("x86_64") && n.ends_with(".tar.gz")))?;
+            .find(|a| a["name"].as_str().is_some_and(|n| asset_matches(n, os)))?;
         Some(Release {
             tag: r["tag_name"].as_str()?.to_string(),
             url: asset["browser_download_url"].as_str().unwrap_or("").to_string(),
             size: asset["size"].as_u64().unwrap_or(0),
             sha256: asset["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).unwrap_or("").to_string(),
         })
-    }).ok_or_else(|| "no recent release has a Linux build yet".to_string())
+    }).ok_or_else(|| format!("no recent release has a {} build yet", os_label()))
 }
 
 /// The KytyPS5 build a game runs on: the managed build's tag, or a custom build's
@@ -271,11 +315,11 @@ pub fn install(rel: &Release, progress: &dyn Fn(String, f32)) -> Result<(), Stri
     let staging = versions.join(format!("{}.tmp", rel.tag));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
-    let ok = Command::new("tar").arg("-xzf").arg(&archive).arg("-C").arg(&staging).status().is_ok_and(|s| s.success());
+    let ok = extract(&archive, &staging);
     let _ = std::fs::remove_file(&archive);
     if !ok {
         let _ = std::fs::remove_dir_all(&staging);
-        return Err("could not extract the archive (is `tar` installed?)".into());
+        return Err("could not extract the archive (is `tar` installed, and `unzip` for zip files?)".into());
     }
     // Some archives wrap everything in one top-level folder.
     let mut dir = staging.clone();
@@ -287,7 +331,11 @@ pub fn install(rel: &Release, progress: &dyn Fn(String, f32)) -> Result<(), Stri
     let emu = dir.join("kyty_emulator");
     if binary_version(&emu).is_none() {
         let _ = std::fs::remove_dir_all(&staging);
-        return Err("the downloaded emulator does not run on this system".into());
+        return Err(if cfg!(target_os = "macos") {
+            "the downloaded emulator does not run (on Apple Silicon it needs Rosetta: run `softwareupdate --install-rosetta`)".into()
+        } else {
+            "the downloaded emulator does not run on this system".into()
+        });
     }
     link_data_dirs(&dir)?;
     let final_dir = versions.join(&rel.tag);
@@ -350,10 +398,10 @@ mod tests {
             rel("KytyPS5-2026-10-12-df5b9b9", "2026-10-12T13:17:34Z", vec![asset("KytyPS5-2026-10-12-df5b9b9-Linux-x86_64.tar.gz")]),
             beta,
         ]);
-        let r = pick_release(&list).unwrap();
+        let r = pick_release(&list, "linux").unwrap();
         assert_eq!(r.tag, "KytyPS5-2026-10-12-df5b9b9", "newest by date with a Linux build, never a pre-release");
         assert_eq!(r.sha256, "ab");
-        assert!(pick_release(&serde_json::Value::Array(vec![rel("only-mac", "2026-10-13T00:00:00Z", vec![asset("x-macOS.zip")])])).is_err());
+        assert!(pick_release(&serde_json::Value::Array(vec![rel("only-mac", "2026-10-13T00:00:00Z", vec![asset("x-macOS.zip")])]), "linux").is_err());
     }
 
     use super::*;
@@ -361,5 +409,110 @@ mod tests {
     fn tags() {
         assert_eq!(pretty("KytyPS5-2026-09-29-59a1760"), "2026-09-29 · 59a1760");
         assert_eq!(tag_commit("KytyPS5-2026-09-29-59a1760"), "59a1760");
+    }
+}
+
+#[cfg(test)]
+mod asset_tests {
+    use super::asset_matches;
+
+    #[test]
+    fn linux_wants_the_x86_64_tarball() {
+        assert!(asset_matches("KytyPS5-2026-10-01-4479808-Linux-x86_64.tar.gz", "linux"));
+        assert!(!asset_matches("KytyPS5-2026-10-01-4479808-Linux-aarch64.tar.gz", "linux"));
+        assert!(!asset_matches("KytyPS5-2026-10-01-4479808-Windows-x86_64.zip", "linux"));
+        assert!(!asset_matches("KytyPS5-2026-10-01-4479808-macOS-x86_64.tar.gz", "linux"));
+    }
+
+    #[test]
+    fn macos_takes_a_macos_archive_of_either_kind() {
+        assert!(asset_matches("KytyPS5-2026-10-01-4479808-macOS-x86_64.tar.gz", "macos"));
+        assert!(asset_matches("KytyPS5-macos.zip", "macos"));
+        assert!(asset_matches("kyty-darwin-x86_64.tgz", "macos"));
+        assert!(!asset_matches("KytyPS5-2026-10-01-4479808-Linux-x86_64.tar.gz", "macos"));
+        assert!(!asset_matches("KytyPS5-2026-10-01-4479808-Windows-x86_64.zip", "macos"));
+        assert!(!asset_matches("KytyPS5-macOS.dmg", "macos"));
+    }
+}
+
+#[cfg(test)]
+mod extract_tests {
+    use super::{extract, is_zip};
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    fn have(tool: &str) -> bool {
+        Command::new(tool).arg("--help").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().is_ok()
+    }
+
+    /// A folder shaped like KytyPS5's macOS zip: a flat executable, a library and a symlink.
+    fn payload(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("kyty_emulator"), b"#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(dir.join("kyty_emulator"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("libMoltenVK.dylib"), b"lib").unwrap();
+        std::os::unix::fs::symlink("kyty_emulator", dir.join("emu-link")).unwrap();
+    }
+
+    fn check(dest: &std::path::Path) {
+        assert!(dest.join("kyty_emulator").is_file());
+        assert_eq!(std::fs::metadata(dest.join("kyty_emulator")).unwrap().permissions().mode() & 0o111, 0o111, "executable bit kept");
+        assert_eq!(std::fs::read(dest.join("libMoltenVK.dylib")).unwrap(), b"lib");
+        assert_eq!(std::fs::read_link(dest.join("emu-link")).unwrap(), std::path::Path::new("kyty_emulator"));
+    }
+
+    #[test]
+    fn zip_is_told_apart_from_gzip_by_content() {
+        let t = tempfile::tempdir().unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            let p = t.path().join(name);
+            std::fs::write(&p, bytes).unwrap();
+            p
+        };
+        assert!(is_zip(&write("a.part", b"PK\x03\x04rest")));
+        assert!(is_zip(&write("empty.zip", b"PK\x05\x06")));
+        assert!(!is_zip(&write("b.part", &[0x1f, 0x8b, 8, 0])));
+        assert!(!is_zip(&write("short", b"PK")));
+        assert!(!is_zip(&t.path().join("missing")));
+    }
+
+    #[test]
+    fn a_zip_extracts_with_permissions_and_symlinks() {
+        if !have("zip") {
+            return;
+        }
+        let t = tempfile::tempdir().unwrap();
+        let src = t.path().join("src");
+        payload(&src);
+        // Named like the download: the extension says nothing about the format.
+        let archive = t.path().join("KytyPS5-tag.tar.gz.part");
+        assert!(Command::new("zip").current_dir(&src).args(["-qry"]).arg(&archive).arg(".").status().unwrap().success());
+        let dest = t.path().join("out");
+        std::fs::create_dir(&dest).unwrap();
+        assert!(extract(&archive, &dest));
+        check(&dest);
+    }
+
+    #[test]
+    fn a_tar_gz_extracts_too() {
+        let t = tempfile::tempdir().unwrap();
+        let src = t.path().join("src");
+        payload(&src);
+        let archive = t.path().join("a.tar.gz.part");
+        assert!(Command::new("tar").arg("-czf").arg(&archive).arg("-C").arg(&src).arg(".").status().unwrap().success());
+        let dest = t.path().join("out");
+        std::fs::create_dir(&dest).unwrap();
+        assert!(extract(&archive, &dest));
+        check(&dest);
+    }
+
+    #[test]
+    fn garbage_does_not_extract() {
+        let t = tempfile::tempdir().unwrap();
+        let archive = t.path().join("bad");
+        std::fs::write(&archive, b"not an archive at all").unwrap();
+        let dest = t.path().join("out");
+        std::fs::create_dir(&dest).unwrap();
+        assert!(!extract(&archive, &dest));
     }
 }

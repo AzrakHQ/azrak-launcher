@@ -12,6 +12,8 @@ const REPORT_FORM: &str = "https://github.com/KytyPS5/KytyPS5/issues/new?templat
 /// shadPS4's community list for PS4 games, published as one file per update.
 const SHAD_URL: &str = "https://github.com/shadps4-compatibility/shadps4-game-compatibility/releases/latest/download/compatibility_data.json";
 pub const SHAD_LIST_PAGE: &str = "https://github.com/shadps4-compatibility/shadps4-game-compatibility/issues";
+/// The system the report comes from, as the shadPS4 form's "Operating System" list spells it.
+const THIS_OS: &str = if cfg!(target_os = "macos") { "macOS" } else { "Linux" };
 const SHAD_REPORT_FORM: &str = "https://github.com/shadps4-compatibility/shadps4-game-compatibility/issues/new?template=game_compatibility.yml";
 
 /// The community list page for a console's emulator.
@@ -325,12 +327,12 @@ pub fn report_url_for(name: &str, title_id: &str, emulator_version: &str, game_v
             Status::Logo => "Boots",
             Status::DoesntBoot => "Nothing",
         };
-        let details = format!("{} on Linux.", status.meaning());
+        let details = format!("{} on {THIS_OS}.", status.meaning());
         let log = log_excerpt(log);
         let mut url = format!("{SHAD_REPORT_FORM}&title={}", q(&format!("{title_id} - {name}")));
         for (field, value) in [
             ("game-name", name), ("game-serial", title_id), ("game-version", game_version),
-            ("emulator-version", emulator_version), ("emulation-status", label), ("Operating-System", "Linux"),
+            ("emulator-version", emulator_version), ("emulation-status", label), ("Operating-System", THIS_OS),
             ("processor", &sys.cpu), ("graphics-card", &sys.gpu), ("emulation-description", &details), ("log", &log),
         ] {
             if !value.is_empty() {
@@ -340,10 +342,10 @@ pub fn report_url_for(name: &str, title_id: &str, emulator_version: &str, game_v
         return url;
     }
     let kyty_version = emulator_version;
-    let mut url = format!("{REPORT_FORM}&title={}", q(&format!("[GAME STATUS]: {name} (linux)")));
+    let mut url = format!("{REPORT_FORM}&title={}", q(&format!("[GAME STATUS]: {name} ({})", THIS_OS.to_lowercase())));
     let sys = system_info();
     let log = log_excerpt(log);
-    let details = format!("{} on Linux.", status.meaning());
+    let details = format!("{} on {THIS_OS}.", status.meaning());
     for (field, value) in [
         ("game-title", name),
         ("game-id", title_id),
@@ -405,6 +407,7 @@ struct SystemInfo {
     ram: String,
 }
 
+#[cfg(target_os = "linux")]
 fn system_info() -> SystemInfo {
     let read = |p: &str| std::fs::read_to_string(p).unwrap_or_default();
     let field = |text: &str, key: &str| {
@@ -434,9 +437,59 @@ fn system_info() -> SystemInfo {
     SystemInfo { os, cpu: field(&read("/proc/cpuinfo"), "model name"), gpu, ram }
 }
 
+/// GPU names from `system_profiler SPDisplaysDataType` ("Chipset Model: Apple M2 Pro").
+/// Plain text so it can be tested anywhere.
+#[cfg(any(target_os = "macos", test))]
+fn parse_chipsets(text: &str) -> String {
+    text.lines()
+        .filter_map(|l| l.trim().strip_prefix("Chipset Model:"))
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+#[cfg(target_os = "macos")]
+fn system_info() -> SystemInfo {
+    let run = |cmd: &str, args: &[&str]| {
+        std::process::Command::new(cmd)
+            .args(args)
+            .stderr(std::process::Stdio::null())
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default()
+    };
+    let version = run("sw_vers", &["-productVersion"]);
+    let kernel = run("sysctl", &["-n", "kern.osrelease"]);
+    let mut os = format!("macOS {version}").trim().to_string();
+    if !kernel.is_empty() {
+        os = format!("{os} (kernel {kernel})");
+    }
+    let ram = run("sysctl", &["-n", "hw.memsize"])
+        .parse::<f64>()
+        .map(|bytes| format!("{:.0} GB RAM", bytes / 1024.0 / 1024.0 / 1024.0))
+        .unwrap_or_default();
+    SystemInfo {
+        os,
+        cpu: run("sysctl", &["-n", "machdep.cpu.brand_string"]),
+        gpu: parse_chipsets(&run("system_profiler", &["SPDisplaysDataType"])),
+        ram,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
     use super::*;
+
+    #[test]
+    fn chipsets_from_system_profiler() {
+        let text = "Graphics/Displays:\n\n    Apple M2 Pro:\n\n      Chipset Model: Apple M2 Pro\n      Type: GPU\n      Bus: Built-In\n";
+        assert_eq!(parse_chipsets(text), "Apple M2 Pro");
+        let two = "      Chipset Model: Intel UHD Graphics 630\n      Chipset Model: AMD Radeon Pro 5500M\n";
+        assert_eq!(parse_chipsets(two), "Intel UHD Graphics 630; AMD Radeon Pro 5500M");
+        assert_eq!(parse_chipsets(""), "");
+    }
     #[test]
     fn parses_feed() {
         let json = br#"{"PPSA02929":{"status":"InGame","reports":2,"platforms":{"windows":{"status":"InGame","version":"0.2.2 (KytyPS5-2026-08-18-6bf6929)"},"linux":{"status":"MainMenu","version":"v0.3.0"}}},"PPSA1":{"status":"Weird"}}"#;
@@ -478,6 +531,7 @@ mod tests {
         let url = report_url_for("Firewatch", "CUSA04118", "0.18.0", "01.08", Status::MainMenu, "");
         assert!(url.starts_with(SHAD_REPORT_FORM));
         assert!(url.contains("&game-serial=CUSA04118") && url.contains("&emulation-status=Menus") && url.contains("&game-version=01%2E08"));
+        assert!(url.contains(&format!("&Operating-System={THIS_OS}")), "the report names the system it comes from");
         assert_eq!(list_page(crate::platform::Platform::Ps4), SHAD_LIST_PAGE);
     }
 

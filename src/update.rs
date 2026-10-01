@@ -2,7 +2,7 @@
 //!
 //! The launcher checks at start and every 6 hours. A newer release is downloaded in the
 //! background, verified (SHA-256 from GitHub), test-run, and swapped in place of the running
-//! binary (Linux keeps the running program alive until it exits). The new version then starts
+//! binary, or on macOS the whole app bundle (both keep the running program alive until it exits). The new version then starts
 //! on the next launch, or right away with **Restart now** (never while a game is running).
 
 use crate::app::*;
@@ -12,8 +12,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-pub const REPO: &str = "MohamedAliRashad/ps5-launcher";
+/// Where updates come from. A fork can build with `PS5_LAUNCHER_REPO=owner/name` to follow its own releases.
+pub const REPO: &str = match option_env!("PS5_LAUNCHER_REPO") {
+    Some(repo) => repo,
+    None => "MohamedAliRashad/ps5-launcher",
+};
+#[cfg(target_os = "linux")]
 const ASSET: &str = "ps5-launcher-linux-x86_64.tar.gz";
+#[cfg(target_os = "macos")]
+const ASSET: &str = "ps5-launcher-macos-universal.zip";
 const CHECK_INTERVAL: f64 = 6.0 * 3600.0;
 
 #[derive(Clone, Debug)]
@@ -67,7 +74,7 @@ pub fn latest_release() -> Result<Release, String> {
     let v = http_json(&format!("https://api.github.com/repos/{REPO}/releases/latest"))?;
     let tag = v["tag_name"].as_str().ok_or("no releases found")?;
     let assets = v["assets"].as_array().cloned().unwrap_or_default();
-    let asset = assets.iter().find(|a| a["name"] == ASSET).ok_or("this release has no Linux build yet")?;
+    let asset = assets.iter().find(|a| a["name"] == ASSET).ok_or_else(|| format!("this release has no {} build yet", if cfg!(target_os = "macos") { "macOS" } else { "Linux" }))?;
     let mut sha256 = asset["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).unwrap_or("").to_string();
     if sha256.is_empty() {
         // Older releases: a separate .sha256 file.
@@ -85,24 +92,71 @@ pub fn latest_release() -> Result<Release, String> {
     })
 }
 
-/// The installed binary, if the launcher may replace it itself.
+/// The `.app` bundle that holds this executable, when it runs from one.
+#[cfg(any(target_os = "macos", test))]
+fn bundle_of(exe: &Path) -> Option<PathBuf> {
+    // <name>.app/Contents/MacOS/<exe>
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let app = contents.parent()?;
+    (macos.file_name()? == "MacOS" && contents.file_name()? == "Contents" && app.extension()? == "app").then(|| app.to_path_buf())
+}
+
+fn writable(dir: &Path) -> bool {
+    std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()).is_ok_and(|c| unsafe { libc::access(c.as_ptr(), libc::W_OK) } == 0)
+}
+
+/// What an update replaces, if the launcher may replace it itself: the installed binary on Linux,
+/// the whole app bundle on macOS (the returned path is the executable inside it).
 pub fn replaceable_exe() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().and_then(|p| p.canonicalize()).map_err(|e| e.to_string())?;
-    if exe.components().any(|c| c.as_os_str() == "target") && exe.parent().is_some_and(|p| p.ends_with("release") || p.ends_with("debug")) {
+    if exe.components().any(|c| c.as_os_str() == "target") && exe.parent().is_some_and(|p| p.ends_with("release") || p.ends_with("debug") || p.ends_with("ci")) {
         return Err("running from a source build (update with git pull + ./install.sh)".into());
     }
-    let dir = exe.parent().ok_or("no install folder")?;
-    let c = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()).map_err(|e| e.to_string())?;
-    if unsafe { libc::access(c.as_ptr(), libc::W_OK) } != 0 {
-        return Err(format!("{} is not writable (installed system-wide? re-run the install command with sudo)", dir.display()));
+    #[cfg(target_os = "macos")]
+    {
+        let app = bundle_of(&exe).ok_or("PS5 Launcher isn't running from its app bundle; download the new version from the releases page")?;
+        let dir = app.parent().ok_or("no install folder")?;
+        if !writable(dir) {
+            return Err(format!("{} is not writable; download the new version from the releases page", dir.display()));
+        }
+        return Ok(exe);
     }
-    Ok(exe)
+    #[cfg(not(target_os = "macos"))]
+    {
+        let dir = exe.parent().ok_or("no install folder")?;
+        if !writable(dir) {
+            return Err(format!("{} is not writable (installed system-wide? re-run the install command with sudo)", dir.display()));
+        }
+        Ok(exe)
+    }
+}
+
+/// Put `new` where `old` is, keeping `old` until the move has worked. Both are directories.
+#[cfg(any(target_os = "macos", test))]
+fn swap_dirs(old: &Path, new: &Path) -> Result<(), String> {
+    let name = old.file_name().ok_or("bad install path")?.to_string_lossy().into_owned();
+    let aside = old.with_file_name(format!(".{name}.replaced"));
+    let _ = std::fs::remove_dir_all(&aside);
+    std::fs::rename(old, &aside).map_err(|e| e.to_string())?;
+    if let Err(e) = std::fs::rename(new, old) {
+        let _ = std::fs::rename(&aside, old);
+        return Err(e.to_string());
+    }
+    let _ = std::fs::remove_dir_all(&aside);
+    Ok(())
 }
 
 /// Download, verify, test and swap in the new binary. Returns the installed version.
 pub fn install(rel: &Release, exe: &Path, progress: &dyn Fn(String, f32)) -> Result<(), String> {
-    let dir = exe.parent().ok_or("no install folder")?;
-    // Work next to the binary so the final rename stays on one filesystem.
+    // The folder holding what gets replaced: the binary's, or on macOS the bundle's.
+    #[cfg(target_os = "macos")]
+    let app = bundle_of(exe).ok_or("not running from an app bundle")?;
+    #[cfg(target_os = "macos")]
+    let dir = app.parent().ok_or("no install folder")?.to_path_buf();
+    #[cfg(not(target_os = "macos"))]
+    let dir = exe.parent().ok_or("no install folder")?.to_path_buf();
+    // Work next to the install so the final rename stays on one filesystem.
     let work = dir.join(".ps5-launcher-update");
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
@@ -123,8 +177,20 @@ pub fn install(rel: &Release, exe: &Path, progress: &dyn Fn(String, f32)) -> Res
         return Err(e);
     }
     progress(format!("Installing PS5 Launcher {}…", rel.version), 1.0);
-    let ok = Command::new("tar").arg("-xzf").arg(&archive).arg("-C").arg(&work).status().is_ok_and(|s| s.success());
-    let new_bin = work.join("ps5-launcher-linux-x86_64").join("ps5-launcher");
+    #[cfg(target_os = "macos")]
+    let (ok, new_item, new_bin) = {
+        // ditto keeps the bundle's permissions and structure; the zip holds <dir>/PS5 Launcher.app.
+        let ok = Command::new("ditto").args(["-x", "-k"]).arg(&archive).arg(&work).status().is_ok_and(|s| s.success());
+        let new_app = work.join("ps5-launcher-macos-universal").join("PS5 Launcher.app");
+        let bin = new_app.join("Contents/MacOS/ps5-launcher");
+        (ok, new_app, bin)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (ok, new_item, new_bin) = {
+        let ok = Command::new("tar").arg("-xzf").arg(&archive).arg("-C").arg(&work).status().is_ok_and(|s| s.success());
+        let bin = work.join("ps5-launcher-linux-x86_64").join("ps5-launcher");
+        (ok, bin.clone(), bin)
+    };
     if !ok || !new_bin.is_file() {
         cleanup();
         return Err("could not unpack the update".into());
@@ -137,11 +203,15 @@ pub fn install(rel: &Release, exe: &Path, progress: &dyn Fn(String, f32)) -> Res
         return Err(format!("the new version does not run on this system ({})", if reported.is_empty() { "no output" } else { &reported }));
     }
     let _ = std::fs::set_permissions(&new_bin, std::fs::Permissions::from_mode(0o755));
-    // Keep the old binary for a manual rollback, then swap atomically.
-    let _ = std::fs::copy(exe, dir.join("ps5-launcher.previous"));
-    let staged = dir.join(".ps5-launcher.new");
-    std::fs::rename(&new_bin, &staged).map_err(|e| e.to_string())?;
-    let r = std::fs::rename(&staged, exe).map_err(|e| e.to_string());
+    #[cfg(target_os = "macos")]
+    let r = swap_dirs(&app, &new_item);
+    #[cfg(not(target_os = "macos"))]
+    let r = {
+        // Keep the old binary for a manual rollback, then swap atomically.
+        let _ = std::fs::copy(exe, dir.join("ps5-launcher.previous"));
+        let staged = dir.join(".ps5-launcher.new");
+        std::fs::rename(&new_item, &staged).map_err(|e| e.to_string()).and_then(|_| std::fs::rename(&staged, exe).map_err(|e| e.to_string()))
+    };
     cleanup();
     r?;
     crate::log!("PS5 Launcher updated to {}", rel.version);
@@ -318,5 +388,40 @@ mod tests {
         assert!(is_newer("v1.10.0", "1.9.3"));
         assert!(!is_newer("1.2.0", "1.2.0"));
         assert!(!is_newer("1.1.0", "1.2.0"));
+    }
+
+    #[test]
+    fn finds_the_bundle_around_an_executable() {
+        let exe = Path::new("/Applications/PS5 Launcher.app/Contents/MacOS/ps5-launcher");
+        assert_eq!(bundle_of(exe), Some(PathBuf::from("/Applications/PS5 Launcher.app")));
+        assert_eq!(bundle_of(Path::new("/usr/local/bin/ps5-launcher")), None);
+        assert_eq!(bundle_of(Path::new("/x/Foo.app/Contents/Resources/ps5-launcher")), None);
+        assert_eq!(bundle_of(Path::new("/x/Foo/Contents/MacOS/ps5-launcher")), None);
+    }
+
+    #[test]
+    fn swap_dirs_replaces_and_leaves_no_leftovers() {
+        let t = tempfile::tempdir().unwrap();
+        let old = t.path().join("App.app");
+        let new = t.path().join("stage").join("App.app");
+        std::fs::create_dir_all(old.join("Contents")).unwrap();
+        std::fs::write(old.join("Contents/v"), "1").unwrap();
+        std::fs::create_dir_all(new.join("Contents")).unwrap();
+        std::fs::write(new.join("Contents/v"), "2").unwrap();
+        swap_dirs(&old, &new).unwrap();
+        assert_eq!(std::fs::read_to_string(old.join("Contents/v")).unwrap(), "2");
+        assert!(!new.exists());
+        let names: Vec<_> = std::fs::read_dir(t.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        assert!(!names.iter().any(|n| n.ends_with(".replaced")), "{names:?}");
+    }
+
+    #[test]
+    fn failed_swap_keeps_the_old_install() {
+        let t = tempfile::tempdir().unwrap();
+        let old = t.path().join("App.app");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("v"), "1").unwrap();
+        assert!(swap_dirs(&old, &t.path().join("missing")).is_err());
+        assert_eq!(std::fs::read_to_string(old.join("v")).unwrap(), "1");
     }
 }
