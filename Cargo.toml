@@ -21,11 +21,16 @@ flate2 = "1"
 html-escape = "0.2"
 percent-encoding = "2"
 sha2 = "0.10"
+oozextract = { path = "third_party/oozextract", features = ["verbose_errors"] }
 librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 anyhow = "1"
 url = "2"
 data-encoding = "2"
+rsa = { version = "0.9", default-features = false, features = ["std"] }
+aes = "0.8"
+cbc = "0.1"
+hmac = "0.12"
 
 # Controller input on macOS (Linux reads evdev directly; see src/gamepad.rs).
 [target.'cfg(target_os = "macos")'.dependencies]

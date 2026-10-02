@@ -9,12 +9,6 @@ mod platform;
 mod sfo;
 mod shad;
 mod shad_ui;
-mod pkgx;
-#[cfg(target_os = "linux")]
-mod sandbox;
-#[cfg(not(target_os = "linux"))]
-#[path = "sandbox_stub.rs"]
-mod sandbox;
 mod vpn;
 mod pc;
 mod pc_ui;
@@ -22,6 +16,9 @@ mod pcgame;
 mod system;
 mod system_ui;
 mod exfat;
+mod pkg;
+mod pkg4;
+mod pkg4_data;
 mod results;
 mod trailer;
 mod config;

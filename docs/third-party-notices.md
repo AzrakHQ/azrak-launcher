@@ -82,6 +82,14 @@ v9.0.1 repository tree has no applicable standalone NOTICE file. This is not a
 claim that no other source attribution exists. Apache-2.0 does not impose a
 general in-application “Built with librqbit” branding requirement.
 
+## shadPS4 code in this release
+
+`src/pkg4.rs` (the PS4 package reader) and `src/pkg4_data.rs` (its RSA keys and entry names) are
+ported from shadPS4 v0.7.0, Copyright 2024 shadPS4 Emulator Project, under GPL-2.0-or-later
+(<https://github.com/shadps4-emu/shadPS4>). Their file system walk follows LibOrbisPkg (MIT,
+<https://github.com/maxton/LibOrbisPkg>); no LibOrbisPkg code is copied. A binary that contains
+GPL code is distributed under the GPL's terms, which include offering the corresponding source.
+
 ## Tools downloaded at run time
 
 These are not part of this release. The launcher downloads them from their official
@@ -89,8 +97,6 @@ GitHub releases when needed, verifies a SHA-256 checksum and runs them as separa
 programs, under their own licenses:
 
 - **KytyPS5** (PS5 games) and **shadPS4** (PS4 games, GPL-2.0).
-- **ShadPs4Plus PKG Extractor 1.0** (GPL-2.0, <https://github.com/AzaharPlus/shadPS4Plus>),
-  fetched the first time a PS4 PKG release is installed. Its source is available there.
 
 ## Scope requiring separate review
 

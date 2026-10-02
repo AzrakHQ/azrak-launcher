@@ -41,6 +41,22 @@ pub fn root() -> PathBuf {
     crate::util::data_dir().join("shadps4")
 }
 
+/// shadPS4's add-on (DLC) folder, where PS4 packages' DLC is installed.
+pub fn addons_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(dir) = TEST_ADDONS.with(|t| t.borrow().clone()) {
+        return dir;
+    }
+    std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| crate::util::expand_home("~/.local/share"))
+        .join("shadPS4").join("addcont")
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A stand-in add-on folder for the installer's tests (this thread only).
+    pub static TEST_ADDONS: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
 /// The managed emulator to launch (stable path across updates).
 pub fn emulator() -> PathBuf {
     root().join("current").join("squashfs-root").join("AppRun")

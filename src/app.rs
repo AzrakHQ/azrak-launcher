@@ -2286,7 +2286,7 @@ impl App {
             "pkg_info" => {
                 let others = t.game.map(|g| self.groups.releases(g).iter().filter(|i| !self.games[**i].g.is_pkg()).count()).unwrap_or(0);
                 let tip = if others > 0 { "This game has another release that isn't a PKG: switch to it with the release selector." } else { "Look for a release of this game that is a folder, an archive or an exFAT image." };
-                self.toast("This release is a PS5 PKG package", &format!("PS5 games install from extracted releases only, not PKG packages. {tip}"), 0);
+                self.toast("This release is a PS5 PKG package", &format!("The launcher doesn't download PS5 PKG releases: it can't tell a debug package from a retail one before the download. {tip}"), 0);
             }
             "install" => {
                 if let Some(job) = self.download_for_target(t) { self.prepare_install(&job.key); }

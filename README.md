@@ -191,10 +191,14 @@ need a processor from 2013 or later (with AVX2).
 becomes its tag on your PC. Every so often, choose **Settings → Share your game ratings** to send
 your results to the community lists (needs a free GitHub account).
 
-PS4 releases shipped as **PKG packages** install like any other: the launcher unpacks the game,
-its update and its DLC for shadPS4 (it fetches a small PKG extractor the first time, and needs
-Linux 5.13 or newer). PS5 PKG
-releases can't be installed; pick a release that is a folder, an archive or an exFAT image.
+Releases shipped as **PKG packages** install like any other:
+
+- **PS5 debug packages** unpack on Linux and macOS. Retail PS5 packages can't be installed: their
+  key is on the console. Pick a release that is a folder, an archive or an exFAT image.
+- **PS4 fake packages (fPKG)** unpack on Linux and macOS: the launcher unpacks the game, its
+  update and its DLC for shadPS4. Retail PS4 packages can't be unpacked.
+- A release that already holds the extracted game installs as a folder. Packages next to it, such
+  as DLC unlockers (small packages that turn on DLC), are copied with it.
 
 ## PC games
 

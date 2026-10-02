@@ -1,0 +1,27 @@
+[package]
+name = "oozextract"
+version = "0.5.5"
+edition = "2021"
+build = "build.rs"
+description = "Kraken / Mermaid / Selkie / Leviathan / LZNA / Bitknit decompressor (vendored from oozextract 0.5.5, patched for the Kraken excess-bytes table)"
+license = "MIT"
+repository = "https://github.com/lvlvllvlvllvlvl/oozextract"
+publish = false
+
+[lib]
+name = "oozextract"
+path = "src/lib.rs"
+
+[features]
+async = []
+tokio = []
+wasm = []
+x86_sse = []
+verbose_errors = []
+
+[dependencies]
+bytemuck = "1.19.0"
+bytes = "1.8.0"
+futures = "0.3.31"
+log = "0.4.22"
+wide = "0.7.28"

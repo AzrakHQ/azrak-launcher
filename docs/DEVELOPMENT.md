@@ -293,12 +293,44 @@ installation itself never executes their contents.
 Loose game folders are copied. RAR, ZIP, 7z and TAR-family decoding uses dynamically
 loaded system libarchive; no archive helper process is executed. Matching multipart
 RAR and split 7z volumes are ordered and checked for gaps, but decoder support varies
-with the installed libarchive version. Password-protected archives, PS5 PKG packages,
-PKGs inside archives, and archives containing multiple complete games are unsupported
-(PS4 PKG releases: see *PS4 games*).
+with the installed libarchive version. Password-protected archives, PKGs inside archives,
+and archives containing multiple complete games are unsupported. PS5 debug packages
+(FIH) unpack natively; retail PS5 packages are refused. PS4 PKG releases: see *PS4 games*.
 An unsupported or malformed archive fails with an explanation instead of publishing
 a partial library entry. RAR4 stored, ZIP, 7z/split 7z and TAR generated fixtures were
 tested on libarchive 3.7.2; compressed/solid/multipart RAR variants are not certified.
+
+PS5 **debug packages** (`.pkg` files that start with `7F 46 49 48`, "FIH") are unpacked
+by `src/pkg.rs`, without a helper process and without any key. The package's outer file
+system is readable, `sce_sys` files come from its metadata block, and the game files are
+rebuilt block by block from `pfs_image.dat` using `naps_pkg_layout.dat`. Blocks are stored
+raw or as Oodle Kraken with the headers removed. The launcher puts the headers back and
+decodes them with a vendored, patched copy of the MIT-licensed `oozextract` crate
+(`third_party/oozextract`, see its `NOTICE.md` for the changes). A release folder may hold several
+packages. The installer takes the one that holds a game (`sce_sys/param.json` and
+`eboot.bin`), preferring the package nearest the top of the folder, so a backport overlay
+or DLC pack beside the base game is ignored. Equal depth is refused. Retail packages
+(signed byte `0x80`) need a console key and are refused.
+
+A release folder that already holds an extracted game (a `sce_sys/param.json`, or a game's
+`sce_sys/param.sfo`, with a nonempty `eboot.bin` beside `sce_sys`) installs as a folder. The
+installer then opens no package, and packages next to the game, such as DLC unlockers, are copied
+with it. Some real unlockers are debug packages with an encrypted file system, which the reader
+refuses. Only the release folder's own `.pkg` files are unpacked as PS4 packages; a `.pkg` inside an
+archive, an image or a PS5 package is part of the game. The catalog still offers no download for
+PS5 PKG releases, because its listings don't say whether a package is debug or retail.
+
+The depth rule is a rule of thumb: the installer does not read a package's content type. A base
+game and a backport at the same depth (for example `Base/a.pkg` and `Backport/b.pkg`) are
+refused until you move one out, and an overlay placed higher than the base game would win.
+
+The package format is not documented by its vendor. The reader follows layouts seen in
+other open tools, and generated packages cover the stored, entropy-only and error paths in
+the unit tests. The Kraken LZ path can only be checked against a real package. Run
+`PS5_TEST_PKG=/path/to/game.pkg cargo test --release real_package -- --ignored` to do so;
+that test lists the package, reads `param.json` and checks that `eboot.bin` is a PS5 SELF file.
+Add `PS5_TEST_FULL=1` to decode every file too (a 160 GB game takes about 8 minutes). A game can
+unpack to several times the size of its package, so the install checks free space first.
 
 **Validation is not an authenticity, malware or universal checksum guarantee.**
 In particular, libarchive 3.7.2 accepted corrupted stored-RAR4 payload bytes despite
@@ -464,36 +496,32 @@ A `Platform` (PS5 or PS4) travels with each installed game and catalog release
   Updates every 6 hours, keeping the previous version for rollback. With **Update
   automatically** off, it installs only when a PS4 game is played. Saves stay in
   `~/.local/share/shadPS4`.
-- **PKG releases:** shadPS4 dropped its PKG installer in 0.8, so PS4 PKG releases are unpacked
-  with the standalone [ShadPs4Plus PKG Extractor](https://github.com/AzaharPlus/shadPS4Plus/releases/tag/PKG_EXTRACTOR_1_0)
-  (GPL-2.0, that same code), downloaded on first use with a pinned SHA-256 into
-  `~/.local/share/ps5-launcher/pkg-extractor` ([src/pkgx.rs](../src/pkgx.rs)). Each PKG is
-  classified (`--check-type`: game, update, DLC); the game and its update are extracted into
-  the installer's stage, validated like a folder release, and published as `<game>` and
-  `<game>-patch` (where shadPS4 looks for updates). DLC is extracted into a stage inside
-  `~/.local/share/shadPS4/addcont` and moved into place only after the game is published,
-  never over an add-on that's already there; any failure removes both stages.
-  - **Containment:** the extractor builds output paths from names inside the package, so it runs
-    under Landlock ([src/sandbox.rs](../src/sandbox.rs), Linux 5.13+): it may write only in the
-    stage it extracts into and a throwaway working folder (its `user` folder, which keeps
-    shadPS4's start-up code out of the real shadPS4 folder), and has no TCP. Without Landlock,
-    PKG installs are refused.
-  - **Completion:** the tool exits 0 even on errors and a crash can leave plausible files, so an
-    extraction counts only with a clean exit, its closing `THE END` line and the last
-    `Extracting file N of N`.
-  - **Writes:** it also ignores the result of every `fwrite`/`fflush`/`fclose`, so a full disk
-    or an I/O error would leave truncated files behind a normal report. A small preloaded guard
-    ([src/pkgguard.c](../src/pkgguard.c), built by `build.rs` with the system C compiler and
-    embedded) stops it on any failed open-for-writing, write, flush, truncate or close, and on
-    close checks that each file's size on disk covers everything written to it. It applies to
-    the `pkg_extractor` binary only, not the tools its AppImage script runs. The guard is kept
-    next to the extractor (a folder that can run programs; a noexec `TMPDIR` would make the
-    loader skip it silently), and it prints `PKG write guard active` from inside the extractor:
-    an extraction without that line is rejected.
-  - **Tests:** a fake extractor (a shell script run in the same sandbox) covers game + update +
-    DLC, crashes, and a package writing outside its folder. `PS5_LAUNCHER_PKG_EXTRACTOR` points at
-    a real extractor; with it and `PKG_FIXTURE`/`PKG_TITLE_ID`, `cargo test -- --ignored pkg_`
-    runs the end-to-end tests against a real PKG.
+- **PKG releases:** PS4 fake packages (fPKG, `.pkg` files that start with `7F 'C' 'N' 'T'`) are
+  unpacked natively on Linux and macOS by [src/pkg4.rs](../src/pkg4.rs), ported from shadPS4 v0.7.0
+  (GPL-2.0-or-later; its RSA keys and entry names are in [src/pkg4_data.rs](../src/pkg4_data.rs),
+  generated from shadPS4's sources). No helper program runs. The reader decrypts the per-entry
+  key (DK3) and the file system key (EKPFS) with the public fake RSA keys, derives the AES-XTS
+  keys of the outer file system with HMAC-SHA256, finds its PFSC container (64 KiB blocks, raw,
+  zlib, or a gap that reads as zeros) and walks the inner file system from its `uroot` folder,
+  as LibOrbisPkg does. Every package entry is written to `sce_sys/` (the licence files decrypted),
+  as the PKG extractor did; a file system file of the same name wins. Packages whose keys aren't
+  the fake ones fail with "isn't a fake package (fPKG)".
+  - **Placement:** a package is a game, an update (any content flag named `*PATCH*`) or an add-on
+    (param.sfo `CATEGORY` `ac`), decided as the ShadPs4Plus extractor did. The game and its
+    update are written into the installer's stage, validated like a folder release, and
+    published as `<game>` and `<game>-patch` (where shadPS4 looks for updates). DLC is written
+    into a stage inside `~/.local/share/shadPS4/addcont` as `<title>/<entitlement label>` and
+    moved into place only after the game is published, never over an add-on that's already
+    there; any failure removes both stages. Two updates in one release share `-patch`: the
+    later one (in release order) wins on files both hold, as with the extractor.
+  - **Safety:** every offset and size is range-checked; names with `/`, `..` or NUL are refused,
+    and output goes through the installer's pinned-folder writes. A compressed block must
+    unpack to exactly 64 KiB and pass zlib's checksum.
+  - **Tests:** a test-only builder makes small encrypted packages (game, update, add-on, raw and
+    compressed blocks, zero blocks, a listing over several blocks, retail and damaged ones).
+    `PS4_TEST_PKG=…/game.pkg cargo test --release real_ps4_package -- --ignored` lists a real
+    package; `PS5_TEST_RELEASE`/`PS5_TEST_DEST` with `real_release` installs a whole release.
+    Checked against a real release (CUSA44880: game, two updates, DLC; 8.6 GB in about a minute).
 - **Updates in folder and archive releases:** a PS4 update shipped with the game (param.sfo
   category `gp`, same title ID; beside it or inside its folder) is placed beside the game as
   `<game>-patch`, the same as from a PKG. It is never listed as a game.
