@@ -9,7 +9,8 @@ mouse.
 
 - **Your games on a PS5-style Home screen**, with official backgrounds, logos and trailers that
   play right in the launcher.
-- **A Library of 400+ PS5 games** with search, genre filters and sorting.
+- **A Library of 400+ PS5 games** with search, genre filters and sorting. New releases show up
+  by themselves: the list is updated daily.
 - **PS4 games too:** they run on shadPS4, which the launcher installs and updates by itself, like KytyPS5.
 - **See what runs:** every game shows how far it gets in its emulator.
 - **Download, install and play** without leaving the launcher, through your own VPN if you like.

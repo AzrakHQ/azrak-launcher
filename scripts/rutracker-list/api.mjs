@@ -10,8 +10,11 @@ import { platformFrom } from './platforms.mjs';
 // The tracker RuTracker's own magnet links announce to.
 const TRACKER = 'http://bt3.t-ru.org/ann?magnet';
 
-/** Fill magnets and peers from a `pvc` response; keeps magnets already read from topic pages. */
-export function applyApi(catalog, api) {
+/**
+ * Fill magnets and peers from a `pvc` response. Magnets already read from topic pages are kept;
+ * with `replaceChanged`, one whose torrent was re-uploaded (a new hash) is replaced.
+ */
+export function applyApi(catalog, api, { replaceChanged = false } = {}) {
   const fields = api.format.topic_id;
   const at = name => fields.indexOf(name);
   const observed = new Date(api.update_time * 1000).toISOString();
@@ -22,6 +25,9 @@ export function applyApi(catalog, api) {
     matched++;
     const hash = String(row[at('info_hash')] || '').toUpperCase();
     const valid = /^[A-F\d]{40}$/.test(hash);
+    const current = /urn:btih:([a-z\d]+)/i.exec(topic.magnet || '')?.[1]?.toUpperCase();
+    const magnet = topic.magnet && !(replaceChanged && valid && current !== hash) ? topic.magnet
+      : valid ? `magnet:?xt=urn:btih:${hash}&tr=${encodeURIComponent(TRACKER)}` : null;
     return {
       ...topic,
       seeders: row[at('seeders')] ?? topic.seeders,
@@ -29,8 +35,8 @@ export function applyApi(catalog, api) {
       size_bytes: row[at('tor_size_bytes')] ?? topic.size_bytes ?? null,
       registered_at: row[at('reg_time')] ? new Date(row[at('reg_time')] * 1000).toISOString() : topic.registered_at ?? null,
       peers_observed: observed,
-      magnet: topic.magnet || (valid ? `magnet:?xt=urn:btih:${hash}&tr=${encodeURIComponent(TRACKER)}` : null),
-      magnet_status: topic.magnet || valid ? 'available' : topic.magnet_status ?? 'not_found',
+      magnet,
+      magnet_status: magnet ? 'available' : topic.magnet_status ?? 'not_found',
     };
   });
   return { catalog: { ...catalog, topics, api_observed: observed }, matched, unlisted: Object.keys(api.result).length - matched };

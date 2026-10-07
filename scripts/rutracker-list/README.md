@@ -124,6 +124,21 @@ Uploader-provided claims are translated, not independently verified.
 - The Rust/Slint launcher consumes the English JSON locally. Browser collection
   remains separate; **Reload RuTracker catalog** only reloads the file.
 
+### Daily refresh without a browser
+
+[refresh.mjs](refresh.mjs) updates a source (Russian) catalog from RuTracker's public endpoints,
+which answer plain requests: the forum's Atom feed (`feed.rutracker.cc/atom/f/<forum>.atom`,
+titles of new and re-uploaded releases from the last 1–4 weeks) and the API
+(`api.rutracker.cc/v1/static/pvc/f/<forum>`, every release's hash, size and peers).
+[api.mjs](api.mjs) applies only the API to an existing catalog. Topics the API no longer lists
+are dropped, unless it answered for under 80% of the catalog. Then
+`translate.mjs --from-original` translates the new strings, and
+[publish-catalog.sh](publish-catalog.sh) pushes everything to the `catalog` branch the launcher
+downloads. [.github/workflows/catalog.yml](../../.github/workflows/catalog.yml) runs these daily.
+The branch must exist first: seed it once from a complete local collection
+(`dist/rutracker/{ps5,ps4}-topics.json`, their `.ru-backup.json` sources and
+`english-translations.json`) with `scripts/rutracker-list/publish-catalog.sh`.
+
 ### Publishing the offline launcher snapshot
 
 After collection and translation, `npm run publish` validates the complete English

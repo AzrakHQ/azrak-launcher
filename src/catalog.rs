@@ -92,7 +92,7 @@ impl CatalogFile {
     }
 
     pub fn stale(&self) -> bool {
-        self.games.is_empty() || SOURCES.iter().any(|src| {
+        self.games.is_empty() || now_secs() - last_check() > CATALOG_TTL || SOURCES.iter().any(|src| {
             let Ok(bytes) = source_bytes(src) else { return false };
             if bytes.is_empty() { return false; }
             let cache = read_cache(src);
@@ -141,15 +141,66 @@ fn merge(mut files: Vec<CatalogFile>) -> CatalogFile {
 /// Explicit override, then user data, then a source checkout's generated JSON.
 /// Installed binaries always have a bundled snapshot if none of those exist.
 fn source_path(src: &Source) -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os(src.env).filter(|path| !path.is_empty()) {
-        return Some(PathBuf::from(path));
+    if let Some(path) = override_path(src) {
+        return Some(path);
     }
-    let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| {
-        std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp")).join(".local/share")
-    }).join("ps5-launcher/rutracker").join(src.file);
+    let data = data_path(src);
     if data.is_file() { return Some(data); }
     let generated = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("dist/rutracker").join(src.file);
     generated.is_file().then_some(generated)
+}
+
+fn override_path(src: &Source) -> Option<PathBuf> {
+    std::env::var_os(src.env).filter(|path| !path.is_empty()).map(PathBuf::from)
+}
+
+/// Where downloaded catalogs live (and where a hand-collected one can be put).
+fn data_path(src: &Source) -> PathBuf {
+    std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| {
+        std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp")).join(".local/share")
+    }).join("ps5-launcher/rutracker").join(src.file)
+}
+
+/// The catalog the daily workflow publishes (.github/workflows/catalog.yml): new releases and
+/// fresh seeder counts without a launcher update.
+fn remote_base() -> String {
+    std::env::var("PS5_LAUNCHER_CATALOG_URL").unwrap_or_else(|_| format!("https://raw.githubusercontent.com/{}/catalog/", crate::update::REPO))
+}
+
+/// Download published catalogs that differ from the local ones, into the data folder. A file is
+/// only replaced by one that matches the published checksum and imports cleanly; any failure
+/// leaves the local catalog as it was. Returns how many catalogs changed.
+fn fetch_remote(progress: &dyn Fn(String)) -> Result<usize, String> {
+    use sha2::{Digest, Sha256};
+    let base = remote_base();
+    let manifest = crate::util::http_json(&format!("{base}catalog.json"))?;
+    let _ = atomic_write(&cache_dir().join("catalog-checked"), now_secs().to_string().as_bytes());
+    let mut changed = 0;
+    for src in SOURCES.iter().filter(|src| override_path(src).is_none()) {
+        let Some(sha) = manifest["files"][src.file]["sha256"].as_str() else { continue };
+        let path = data_path(src);
+        let local = std::fs::read(&path).ok().map(|bytes| format!("{:x}", Sha256::digest(&bytes)));
+        if local.as_deref() == Some(sha) {
+            continue;
+        }
+        progress(format!("Downloading the {} catalog", src.platform.label()));
+        let packed = crate::util::http_get(&format!("{base}{}.gz", src.file))?;
+        let mut bytes = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::Read::take(flate2::read::GzDecoder::new(&packed[..]), 256 << 20), &mut bytes)
+            .map_err(|error| format!("{} catalog: {error}", src.platform.label()))?;
+        if format!("{:x}", Sha256::digest(&bytes)) != sha {
+            return Err(format!("The downloaded {} catalog doesn't match its checksum", src.platform.label()));
+        }
+        import_for(src, &bytes)?;
+        atomic_write(&path, &bytes).map_err(|error| format!("Could not save the {} catalog: {error}", src.platform.label()))?;
+        changed += 1;
+    }
+    Ok(changed)
+}
+
+/// When the published catalog was last checked (0: never).
+fn last_check() -> f64 {
+    std::fs::read_to_string(cache_dir().join("catalog-checked")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0)
 }
 
 fn source_bytes(src: &Source) -> Result<Vec<u8>, String> {
@@ -228,7 +279,8 @@ fn import_for(src: &Source, bytes: &[u8]) -> Result<CatalogFile, String> {
     if topics.is_empty() || report["topic_count"].as_u64() != Some(topics.len() as u64) {
         return Err("RuTracker topic count is empty or does not match the listing".into());
     }
-    let snapshot_at = text(&report, "collected_at");
+    // Seeder counts are as fresh as the last daily refresh, else the original collection.
+    let snapshot_at = Some(text(&report, "refreshed_at")).filter(|at| !at.is_empty()).unwrap_or_else(|| text(&report, "collected_at"));
     let mut seen = HashSet::new();
     let mut games = Vec::with_capacity(topics.len());
     for topic in topics {
@@ -266,7 +318,7 @@ fn import_for(src: &Source, bytes: &[u8]) -> Result<CatalogFile, String> {
             description: (!summary.is_empty()).then_some(summary).into_iter().collect(),
             title_ids: ids, region: text(&info, "region"), magnet,
             seeders: topic["seeders"].as_u64(), leechers: topic["leechers"].as_u64(),
-            peers_observed: snapshot_at.clone(), game_info: info, platform: src.platform,
+            peers_observed: Some(text(topic, "peers_observed")).filter(|at| !at.is_empty()).unwrap_or_else(|| snapshot_at.clone()), game_info: info, platform: src.platform,
         });
     }
     // Topics, not title IDs, are the identity: retain regional/version variants.
@@ -281,9 +333,15 @@ fn save(src: &Source, file: CatalogFile) -> Result<CatalogFile, String> {
     Ok(file)
 }
 
-/// Re-import local metadata only: no website requests, torrent client or browser. The PS5
-/// catalog must import; a PS4 catalog is optional until it has been collected.
+/// Download the published catalog when it changed, then import the local catalogs. Never contacts
+/// RuTracker. The PS5 catalog must import; a PS4 catalog is optional until it has been collected.
 pub fn sync(progress: &dyn Fn(String)) -> Result<CatalogFile, String> {
+    progress("Checking for new releases".into());
+    // Offline or not published yet: the local catalogs still load.
+    match fetch_remote(progress) {
+        Ok(changed) => crate::log!("Published catalog: {changed} updated"),
+        Err(error) => crate::log!("Published catalog not downloaded: {error}"),
+    }
     progress("Loading RuTracker snapshots".into());
     let mut files = Vec::new();
     for (i, src) in SOURCES.iter().enumerate() {

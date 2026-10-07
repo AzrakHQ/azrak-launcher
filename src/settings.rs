@@ -309,14 +309,14 @@ impl App {
                 rows.push((SId::RawgRemove, row(4, "Remove RAWG key")));
             }
 
-            let mut r = row(4, "Reload game catalog");
+            let mut r = row(4, "Check for new releases");
             r.value = if self.syncing {
                 "Reloading…".into()
             } else {
                 let snapshot = self.games.first().map(|game| util::fmt_date(util::parse_iso_date(&game.g.peers_observed))).unwrap_or_default();
                 format!("{} · {}", plural(self.games.len(), "release"), if snapshot.is_empty() { "date unknown" } else { &snapshot }).into()
             };
-            r.hint = "Seeder counts are from that date, not live".into();
+            r.hint = "Checks by itself every 6 hours · the list is updated daily, with seeder counts from that day".into();
             rows.push((SId::Refresh, r));
         }
 
@@ -546,8 +546,7 @@ impl App {
             }
             SId::Refresh => {
                 audio::play(Sound::Select);
-                self.start_sync();
-                self.toast("Refreshing the catalog…", "New games appear as soon as it's done.", 0);
+                self.start_sync(true);
                 self.refresh_settings();
             }
             SId::Rescan => {

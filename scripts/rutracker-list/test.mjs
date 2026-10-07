@@ -172,3 +172,36 @@ test('the public API fills magnets and peers without topic pages', async () => {
   assert.equal(out.topics[2].magnet, 'magnet:?xt=urn:btih:FROMPAGE', "the page's own magnet wins");
   assert.equal(out.topics[3].magnet_status, 'not_checked', 'topics missing from the API are untouched');
 });
+
+test('the daily refresh adds feed releases, follows re-uploads and drops deleted topics', async () => {
+  const { parseFeed, refreshCatalog } = await import('./refresh.mjs');
+  const feed = parseFeed(`<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+    <entry><id>tag:rto.feed,2026-10-07:/t/7</id><link href="https://rutracker.org/forum/viewtopic.php?t=7"/>
+      <updated>2026-10-07T10:00:00+03:00</updated><title type="html"><![CDATA[[PS5] New Game [EUR / RUS / ENG / v1.000 / Лицензия] [6.17 GB]]]></title>
+      <author><name>uploader</name></author></entry>
+    <entry><link href="https://rutracker.org/forum/viewtopic.php?t=1"/><title>[Обновлено] [PS5] Old Game &amp; More [v1.002]</title></entry>
+    <entry><link href="https://rutracker.org/forum/viewtopic.php?t=8"/><title>Rules of the forum</title></entry>
+    <entry><link href="https://rutracker.org/forum/viewtopic.php?t=9"/><title>[PS5] Not registered yet</title></entry>
+  </feed>`);
+  assert.deepEqual(feed.map(e => [e.id, e.title]), [['7', '[PS5] New Game [EUR / RUS / ENG / v1.000 / Лицензия] [6.17 GB]'],
+    ['1', '[PS5] Old Game & More [v1.002]'], ['8', 'Rules of the forum'], ['9', '[PS5] Not registered yet']]);
+  const row = hash => [2, 3, 1791382052, 6624000000, 1, [], 0, hash, 1, 1];
+  const api = { format: { topic_id: ['tor_status', 'seeders', 'reg_time', 'tor_size_bytes', 'keeping_priority', 'keepers', 'seeder_last_seen', 'info_hash', 'topic_poster', 'leechers'] },
+    update_time: 1791382052, result: Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8].map(id => [id, row(String(id).repeat(40))])) };
+  const topics = [1, 2, 3, 4, 5, 6, 10].map(id => ({ id: String(id), title: `[PS5] Game ${id}`, size: '1.00 GB',
+    magnet: `magnet:?xt=urn:btih:${String(id).repeat(40)}`, magnet_status: 'available', game_info: { genre: 'Action' } }));
+  topics[1].magnet = `magnet:?xt=urn:btih:${'F'.repeat(40)}&tr=x`; // re-uploaded since
+  const platform = { tag: 'PS5' };
+  const { catalog, added, renamed, removed } = refreshCatalog({ topics, topic_count: 7 }, feed, api, platform);
+  assert.deepEqual([added, renamed, removed], [1, 1, 1], 'topic 10 is gone from the API; 8 is not a PS5 release; 9 has no torrent');
+  const byId = Object.fromEntries(catalog.topics.map(t => [t.id, t]));
+  assert.equal(byId[1].title, '[PS5] Old Game & More [v1.002]');
+  assert.equal(byId[1].game_info.genre, 'Action', 'details survive a rename');
+  assert.match(byId[2].magnet, /^magnet:\?xt=urn:btih:2{40}&tr=/, 'a re-uploaded torrent gets its new magnet');
+  assert.equal(byId[3].magnet, `magnet:?xt=urn:btih:${'3'.repeat(40)}`, 'an unchanged page magnet is kept');
+  assert.deepEqual([byId[7].size, byId[7].magnet_status, byId[7].game_info, byId[7].seeders], ['6.17 GB', 'available', null, 3]);
+  assert.equal(catalog.topic_count, catalog.topics.length);
+  // A broken API answer (most topics missing) never empties the catalog.
+  const broken = { ...api, result: { 1: api.result[1] } };
+  assert.equal(refreshCatalog({ topics, topic_count: 7 }, [], broken, platform).catalog.topics.length, 7);
+});

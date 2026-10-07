@@ -15,7 +15,7 @@ use crate::{AppWindow, ToastData};
 use slint::platform::Key;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -240,6 +240,7 @@ pub struct App {
     pub vpn_busy: String,
     /// The VPNs last shown in Settings, to refresh it when one connects or drops.
     pub vpn_seen: String,
+    pub catalog_timer: slint::Timer,
     /// This PC's processor, memory and graphics (read in the background at start).
     pub pc: Option<crate::pc::Specs>,
     pub pc_checking: bool,
@@ -398,6 +399,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         settings_advanced: false,
         vpn_busy: String::new(),
         vpn_seen: String::new(),
+        catalog_timer: slint::Timer::default(),
         pc: None,
         pc_checking: false,
         boot: Default::default(),
@@ -442,10 +444,13 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
 
     with_app(move |app| {
         if stale {
-            app.start_sync();
+            app.start_sync(false);
         } else {
             app.start_enrich();
         }
+        // New releases are published daily; a launcher left open for days still picks them up.
+        app.catalog_timer.start(slint::TimerMode::Repeated, Duration::from_secs_f64(crate::catalog::CATALOG_TTL),
+            || with_app(|app| app.start_sync(false)));
     });
 
     ui.show().expect("could not open window");
@@ -767,24 +772,31 @@ impl App {
 
     // ------------------------------------------------------------------ background jobs
 
-    pub fn start_sync(&mut self) {
+    /// Fetch the published catalog and reload. `by_hand` (Settings) always reports back; the
+    /// automatic checks only speak up when there are new releases.
+    pub fn start_sync(&mut self, by_hand: bool) {
         if self.syncing {
             return;
         }
         self.syncing = true;
-        self.set_status("Reloading RuTracker catalog…", true);
-        std::thread::spawn(|| {
+        let known: HashSet<i64> = self.games.iter().map(|g| g.g.id).collect();
+        self.set_status("Checking for new releases…", true);
+        std::thread::spawn(move || {
             let res = catalog::sync(&|p| post(move |app| app.set_status(&p, true)));
             post(move |app| {
                 app.syncing = false;
                 match res {
                     Ok(file) => {
-                        let first = app.games.is_empty();
+                        let first = known.is_empty();
+                        let new = file.games.iter().filter(|g| !known.contains(&g.id)).count();
                         app.catalog_updated = file.updated;
                         app.set_catalog(file.games);
                         app.push_all();
-                        if !first {
-                            app.toast("RuTracker catalog reloaded", &format!("{} games · {} releases", app.groups.members.len(), app.games.len()), 1);
+                        if !first && new > 0 {
+                            app.toast(&format!("{new} new release{} in the Library", if new == 1 { "" } else { "s" }),
+                                &format!("{} games · {} releases", app.groups.members.len(), app.games.len()), 1);
+                        } else if !first && by_hand {
+                            app.toast("No new releases", &format!("{} games · {} releases · seeders updated", app.groups.members.len(), app.games.len()), 1);
                         }
                         app.set_status("", false);
                         app.boot_catalog_done();
@@ -792,7 +804,9 @@ impl App {
                     }
                     Err(e) => {
                         app.set_status("", false);
-                        app.toast("Couldn't refresh the catalog", &e, 2);
+                        if by_hand || app.boot.active {
+                            app.toast("Couldn't refresh the catalog", &e, 2);
+                        }
                         if app.boot.active {
                             // Offline: don't hold the welcome screen for the catalog or artwork.
                             app.boot.waiting_art = false;

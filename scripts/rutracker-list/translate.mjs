@@ -78,6 +78,8 @@ assert.equal(result.topics.length, original.topics.length);
 for (let index = 0; index < original.topics.length; index++) {
   const before = original.topics[index], after = result.topics[index];
   for (const key of ['id', 'url', 'magnet', 'author', 'size', 'seeders', 'leechers']) assert.deepEqual(after[key], before[key], key);
+  // New releases from the daily refresh have no details until the browser collector reads them.
+  if (!before.game_info) { assert.equal(after.game_info, before.game_info); continue; }
   // Title IDs are compared after look-alike normalization (prepareCatalog), the only change allowed.
   for (const key of ['source_url', 'image_urls']) assert.deepEqual(after.game_info[key], before.game_info[key], key);
   assert.deepEqual(after.game_info.title_id, latinLookalikes(before.game_info.title_id), 'title_id');

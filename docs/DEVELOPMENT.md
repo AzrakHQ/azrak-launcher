@@ -120,11 +120,21 @@ Keyboard/controller navigation follows search/sort/density → status filters �
 The welcome screen and app assets use an original white/electric-blue **P5 chassis emblem**,
 not the former generic play-button icon. Source installation updates the matching desktop icon.
 
-**Settings → Advanced → Reload game catalog** re-imports local JSON; it does not scrape
-the website or refresh peer counts over the network. Source precedence is:
+**The catalog updates itself.** A daily workflow ([catalog.yml](../.github/workflows/catalog.yml))
+adds new and renamed releases from RuTracker's forum feeds, takes magnets, sizes and seeder
+counts for every release from its public API, translates new text and publishes the result to
+the `catalog` branch (one commit, replaced each day). The launcher fetches that branch's
+`catalog.json` at start when the last check is over 6 hours old, every 6 hours while it stays
+open, and from **Settings → Advanced → Check for new releases**. It downloads only the gzipped
+catalogs whose SHA-256 changed (about 0.4 MB for PS5, 1.6 MB for PS4) into the data folder, and
+keeps a download only if it matches the checksum and imports cleanly. It never contacts
+RuTracker itself. New releases are announced ("5 new releases in the Library"). Their release
+details (genre, title ID, languages) arrive with the next browser collection, since topic pages
+need a person at the browser. `PS5_LAUNCHER_CATALOG_URL` points the launcher at another copy.
+Source precedence is:
 
-1. `--catalog <PATH>` or `PS5_LAUNCHER_CATALOG_PATH`;
-2. `$XDG_DATA_HOME/ps5-launcher/rutracker/ps5-topics.json` (normally under `~/.local/share`);
+1. `--catalog <PATH>` or `PS5_LAUNCHER_CATALOG_PATH` (never replaced by a download);
+2. `$XDG_DATA_HOME/ps5-launcher/rutracker/ps5-topics.json` (normally under `~/.local/share`), where downloads go;
 3. the generated snapshot in a source checkout, if present;
 4. the embedded English snapshot in [assets/rutracker/ps5-topics.json](../assets/rutracker/ps5-topics.json).
 
@@ -137,21 +147,6 @@ To collect fresh metadata, use the separate [browser collector](../scripts/rutra
 complete any normal verification yourself, then translate the JSON to English.
 The collector is not part of launcher startup. Firmware/test claims remain
 uploader-provided console notes, not KytyPS5 compatibility guarantees.
-
-### Dynamic metadata: recommended next layer
-
-JSON remains a useful offline baseline and cache format; it need not be the only
-source of discovery. A future explicit **Refresh peer counts** action should fetch
-website statistics for the selected release, store a separate topic-keyed observation
-with its check time, and keep previous data when refresh fails. New-release discovery
-is a separate catalog update, not a side effect of refreshing one game's counts.
-
-That live website action is **not implemented yet**: anonymous RuTracker access can
-be blocked by verification/login, and the current collector establishes peer counts
-from forum listings, not a reliable per-topic endpoint. Do not interpret local reload
-as an online refresh. Refreshing website metadata must never resolve a magnet or
-start a torrent just to count peers. Website snapshots and this client's connected
-peers should remain separately labeled; neither is a guaranteed live swarm total.
 
 ## Background magnet downloads (details)
 
@@ -202,7 +197,7 @@ with a session-wide **128 KiB/s** upload cap. Disabling completed-download seedi
 does not disable uploads during downloads. Magnet discovery happens before a
 private flag is known; once metadata is known, the engine honors that flag for
 payload discovery. A private tracker may require authorized tracker credentials.
-Catalog seeders/leechers remain dated website snapshots, not live swarm totals.
+Catalog seeders/leechers are from the last daily refresh, not live swarm totals.
 
 ### Downloading only through a VPN
 

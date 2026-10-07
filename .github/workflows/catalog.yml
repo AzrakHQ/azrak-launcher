@@ -1,0 +1,46 @@
+# Daily game catalog: new and renamed releases from RuTracker's forum feeds, magnets and seeders
+# from its public API (no browser), translated, and published to the `catalog` branch, which the
+# launcher downloads every 6 hours. Release details for new topics still need the browser
+# collector (scripts/rutracker-list).
+name: Catalog
+
+on:
+  schedule:
+    - cron: "40 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: catalog
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: catalog
+          path: previous
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Start from the published catalog
+        run: |
+          mkdir -p dist/rutracker
+          for p in ps5 ps4; do
+            gunzip -c previous/$p-topics.ru.json.gz >dist/rutracker/$p-topics.json.ru-backup.json
+          done
+          gunzip -c previous/english-translations.json.gz >dist/rutracker/english-translations.json
+      - name: Refresh and translate
+        working-directory: scripts/rutracker-list
+        run: |
+          npm ci
+          for p in ps5 ps4; do
+            node refresh.mjs --platform $p
+            node translate.mjs --platform $p --from-original
+          done
+      - name: Publish
+        run: scripts/rutracker-list/publish-catalog.sh dist/rutracker "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}"
