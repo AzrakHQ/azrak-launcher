@@ -241,6 +241,28 @@ The native backend is pinned to **librqbit 9.0.1** with rustls, on a dedicated
 Tokio worker. See the [backend notes](rust-torrent-options.md) for APIs,
 network behavior and validation limits.
 
+## This PC (details)
+
+[src/pc.rs](../src/pc.rs) reads the processor and memory from `/proc`, and the graphics cards from
+Vulkan: `ps5-launcher --probe-gpu` loads `libvulkan.so.1`, lists each device's name, Vulkan
+version, type and device-local memory, and exits. It runs as a child process (10 s limit), so a
+broken driver can't crash or hang the launcher; if it fails, verdicts are left out rather than
+guessed. [src/pc_ui.rs](../src/pc_ui.rs) shows the result.
+
+What the verdicts check, for the strongest non-software GPU:
+
+| | PS5 games (KytyPS5) | PS4 games (shadPS4) |
+|---|---|---|
+| **Won't start** | no GPU, or no Vulkan 1.3 | no GPU, no Vulkan 1.3, or a CPU without x86-64-v3 (AVX2, BMI2, FMA…), which shadPS4 is compiled for |
+| **May run slowly** | integrated GPU, under 8 GB VRAM, under 6 cores / 12 threads, or under 16 GB RAM | integrated GPU, under 4 GB VRAM, under 4 cores / 8 threads, or under 8 GB RAM |
+
+These are the README's requirements, not measurements: there's no per-game performance data, so
+a verdict covers the console, and the Game Hub adds **Not enough space** when the download
+folder can't hold the game. A console whose games won't start gets a one-time notice (per PC).
+To see other PCs' screens, set `PS5_LAUNCHER_PRETEND_PC`, e.g.
+`"Intel Core i7-3770;4;8;0;8;NVIDIA GeForce GTX 680,1.2,discrete,2"` (CPU; cores; threads;
+AVX2 0/1; RAM GB; GPUs as `name,vulkan,type,VRAM GB` separated by `|`).
+
 ## Download → Install → Play (details)
 
 Once a download completes, choose **Install** in Downloads or its Game Hub.

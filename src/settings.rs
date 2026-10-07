@@ -18,6 +18,7 @@ pub enum SId {
     Fullscreen,
     ReturnOnExit,
     Controls,
+    ThisPc,
     // Downloads
     VpnOnly,
     Vpn,
@@ -96,6 +97,7 @@ impl App {
         r.value_kind = if connected { 1 } else { 0 };
         r.hint = if connected { "Your controller works in games with no setup" } else { "Games play best with a controller · open to see the keyboard keys" }.into();
         rows.push((SId::Controls, r));
+        rows.push((SId::ThisPc, self.this_pc_row()));
 
         header(&mut rows, "DOWNLOADS");
         // VPN: the toggle keeps downloads off every other connection; the row below manages the
@@ -336,8 +338,13 @@ impl App {
 
     /// Open Settings with "Share your results with KytyPS5" selected.
     pub fn open_share_setting(&mut self) {
+        self.open_setting(SId::Share);
+    }
+
+    /// Open Settings with this row selected.
+    pub fn open_setting(&mut self, id: SId) {
         self.open_settings();
-        if let Some(i) = self.settings_ids.iter().position(|s| *s == SId::Share) {
+        if let Some(i) = self.settings_ids.iter().position(|s| *s == id) {
             self.set_focus(Z_SETTINGS, i as i32);
             self.scroll_settings();
         }
@@ -584,6 +591,11 @@ impl App {
             }
             SId::Share => self.share_results(),
             SId::Controls => self.open_controls(),
+            SId::ThisPc => {
+                audio::play(Sound::Select);
+                self.pc_check();
+                self.refresh_settings();
+            }
             SId::Header => {}
         }
     }
@@ -653,6 +665,39 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// "This PC": whether PS5 and PS4 games run here, the specs, and what holds it back.
+    fn this_pc_row(&self) -> SettingData {
+        use crate::pc::Verdict;
+        use crate::platform::Platform;
+        let mut r = row(4, "This PC");
+        let Some(specs) = self.pc.as_ref().filter(|_| !self.pc_checking) else {
+            (r.value, r.hint) = ("Checking…".into(), "Reads the processor, memory and graphics card".into());
+            return r;
+        };
+        r.hint = specs.summary().into();
+        let (ps5, ps4) = (specs.verdict(Platform::Ps5), specs.verdict(Platform::Ps4));
+        let (Some(ps5), Some(ps4)) = (ps5, ps4) else {
+            (r.value, r.hint_kind) = ("Check again".into(), 2);
+            r.hint = format!("{} · the graphics check didn't finish", r.hint).into();
+            return r;
+        };
+        let lower = |v: &Verdict| v.headline().to_lowercase();
+        r.value = if ps5 == ps4 {
+            format!("PS5 and PS4 games {}", lower(&ps5)).replace("games won't start", "games won't start here")
+        } else {
+            format!("PS5: {} · PS4: {}", lower(&ps5), lower(&ps4))
+        }
+        .into();
+        r.value_kind = if ps5 == Verdict::Good && ps4 == Verdict::Good { 1 } else if matches!((&ps5, &ps4), (Verdict::No(_), _) | (_, Verdict::No(_))) { 2 } else { 0 };
+        // The first thing holding it back, in words.
+        if let Some((v, p)) = [(&ps5, Platform::Ps5), (&ps4, Platform::Ps4)].into_iter().find(|(v, _)| matches!(v, Verdict::No(_)))
+            .or_else(|| [(&ps5, Platform::Ps5), (&ps4, Platform::Ps4)].into_iter().find(|(v, _)| matches!(v, Verdict::Slow(_))))
+        {
+            r.hint = format!("{} · {}", crate::pc_ui::explain(v, p), r.hint).into();
+        }
+        r
     }
 
     /// Add a VPN from a provider's file: the desktop's file dialog, or typing the path.

@@ -1018,6 +1018,7 @@ impl App {
             h.release_label = format!("Release {position}/{} · {} · {} · {} · topic #{}", members.len(),
                 game.name, game.version, game.region, game.id).into();
         }
+        let pc = self.pc_fact(t);
         let summary: Vec<Fact> = [
             match &ce {
                 Some(e) if e.mine => ("YOUR RESULT", e.status.meaning().to_string()),
@@ -1031,11 +1032,16 @@ impl App {
             ("DOWNLOAD SIZE", g.map(|g| g.size.clone()).filter(|size| !size.is_empty()).unwrap_or_else(|| "Unknown".into())),
             if let Some(local) = t.local { ("INSTALLED VERSION", self.locals[local].l.version.clone()) }
             else { ("RELEASE VERSION", g.map(|g| g.version.clone()).unwrap_or_default()) },
-        ].into_iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| Fact { key: k.into(), value: v.into() }).collect();
+        ].into_iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| Fact { key: k.into(), value: v.into(), kind: 0 })
+            // Will it run here? Second, next to whether it runs at all; three boxes fit a row.
+            .enumerate().flat_map(|(i, f)| {
+                let pc = (i == 0).then(|| pc.clone()).flatten().map(|(k, v, kind)| Fact { key: k.into(), value: v.into(), kind });
+                std::iter::once(f).chain(pc)
+            }).take(3).collect();
         h.facts = model(summary.chunks(3).map(|c| FactRow { items: model(c.to_vec()) }).collect());
         let details: Vec<Fact> = facts.into_iter().filter(|(k, v)| !v.is_empty()
             && !matches!(*k, "SEEDERS · SNAPSHOT" | "LEECHERS · SNAPSHOT" | "OBSERVED · NOT LIVE" | "ON KYTYPS5" | "ON SHADPS4" | "SIZE" | "PUBLISHER" | "RELEASE" | "REGION"))
-            .map(|(k, v)| Fact { key: k.into(), value: v.into() }).collect();
+            .map(|(k, v)| Fact { key: k.into(), value: v.into(), kind: 0 }).collect();
         h.details = model(vec![FactRow { items: model(details) }]);
 
         let shots_urls = self.hub_shots.clone();

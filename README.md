@@ -122,6 +122,12 @@ Linux results come first. A result from Windows is marked **Win**, because games
 differently on Linux. In the Library, **In-game** lists every game that reaches gameplay, and
 **In-game on Linux** only the ones confirmed on Linux.
 
+**Will it run on my PC?** Each Game Hub also says **On this PC: Should run well**, **May run
+slowly** (with the reason, e.g. integrated graphics) or **Won't start** (e.g. a graphics card
+without Vulkan 1.3), and whether there's room for the download. The launcher checks your
+processor, memory and graphics card when it starts; see them in **Settings → This PC**. PS4 games
+need a processor from 2013 or later (with AVX2).
+
 **Help others:** when you close a game, the launcher asks how far it got, and your answer
 becomes its tag on your PC. Every so often, choose **Settings → Share your game ratings** to send
 your results to the community lists (needs a free GitHub account).

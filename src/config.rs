@@ -37,6 +37,8 @@ pub struct Config {
     pub vpn_only: bool,
     /// The VPN's network interface to use ("" = any connected VPN).
     pub vpn_interface: String,
+    /// The PC (its specs summary) last warned about games that can't run on it.
+    pub pc_noticed: String,
 }
 
 impl Default for Config {
@@ -64,6 +66,7 @@ impl Default for Config {
             rawg_art: Vec::new(),
             vpn_only: false,
             vpn_interface: String::new(),
+            pc_noticed: String::new(),
         }
     }
 }

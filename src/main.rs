@@ -12,6 +12,8 @@ mod shad_ui;
 mod pkgx;
 mod sandbox;
 mod vpn;
+mod pc;
+mod pc_ui;
 mod exfat;
 mod results;
 mod trailer;
@@ -53,6 +55,10 @@ OPTIONS:
 ";
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--probe-gpu") {
+        pc::print_gpus();
+        return;
+    }
     let mut windowed = false;
     let mut monitor: Option<String> = None;
     let mut force_sync = false;

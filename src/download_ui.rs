@@ -26,6 +26,7 @@ impl App {
             },
         };
         ui.set_download_privacy(privacy.into());
+        ui.set_download_warning(self.pc_download_warning(self.games[index].g.platform).into());
         self.open_downloads(None);
         ui.set_download_consent(true);
     }

@@ -240,6 +240,9 @@ pub struct App {
     pub vpn_busy: String,
     /// The VPNs last shown in Settings, to refresh it when one connects or drops.
     pub vpn_seen: String,
+    /// This PC's processor, memory and graphics (read in the background at start).
+    pub pc: Option<crate::pc::Specs>,
+    pub pc_checking: bool,
     pub boot: crate::boot::Boot,
     pub kyty: crate::kyty_ui::KytyUi,
     pub shad: crate::shad_ui::ShadUi,
@@ -395,6 +398,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         settings_advanced: false,
         vpn_busy: String::new(),
         vpn_seen: String::new(),
+        pc: None,
+        pc_checking: false,
         boot: Default::default(),
         kyty: Default::default(),
         shad: Default::default(),
@@ -425,6 +430,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
     with_app(|app| app.shad_start());
     with_app(|app| app.app_update_start());
     with_app(|app| app.compat_start());
+    with_app(|app| app.pc_check());
 
     wire_callbacks(&ui);
     crate::gamepad::spawn(|p| post(move |app| app.on_pad(p)));
@@ -2658,11 +2664,12 @@ impl App {
         match action {
             "downloads" => self.open_downloads(None),
             "share" => self.open_share_setting(),
+            "this-pc" => self.open_setting(crate::settings::SId::ThisPc),
             _ => {}
         }
     }
 
-    fn toast_with(&mut self, text: &str, sub: &str, kind: i32, image: Option<slint::Image>, app: bool, action: &str) {
+    pub fn toast_with(&mut self, text: &str, sub: &str, kind: i32, image: Option<slint::Image>, app: bool, action: &str) {
         self.toast_seq += 1;
         let id = self.toast_seq;
         self.toasts.push(ToastData {

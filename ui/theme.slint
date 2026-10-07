@@ -149,7 +149,7 @@ export struct CardData {
 
 export struct CardRow { index: int, cards: [CardData] }
 export struct GenreChip { index: int, label: string, count: string, on: bool, x: length, w: length }
-export struct Fact { key: string, value: string }
+export struct Fact { key: string, value: string, /* 1 good, 2 warning, 3 bad */ kind: int }
 export struct FactRow { items: [Fact] }
 export struct Shot { image: image, loaded: bool }
 
