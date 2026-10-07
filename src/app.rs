@@ -452,6 +452,10 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
     let tick = slint::Timer::default();
     tick.start(slint::TimerMode::Repeated, Duration::from_secs(1), || with_app(|app| app.tick()));
     with_app(|app| app.tick());
+    // Under Gamescope (PS5 Launcher OS) the launcher's window is only shown once it's tagged.
+    for ms in [300, 1000, 3000] {
+        slint::Timer::single_shot(Duration::from_millis(ms), || { std::thread::spawn(crate::sessions::claim_screen); });
+    }
 
     with_app(move |app| {
         if stale {
@@ -2642,6 +2646,8 @@ impl App {
                     // A moment more once the window exists, so the game's first frame is ready.
                     if shown {
                         std::thread::sleep(Duration::from_millis(400));
+                        // On a desktop the window manager already brought it up; Gamescope needs telling.
+                        crate::sessions::activate_pid_window(pid);
                     }
                     post(|app| app.hide_launch_splash());
                     return;

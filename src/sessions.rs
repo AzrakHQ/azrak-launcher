@@ -32,6 +32,9 @@ pub fn windows_of_pid(pid: u32) -> Vec<String> {
 }
 
 pub fn activate_pid_window(pid: u32) -> bool {
+    if gamescope() {
+        return gamescope_show(pid);
+    }
     match windows_of_pid(pid).last() {
         Some(w) => {
             xdotool(&["windowactivate", w]);
@@ -46,7 +49,64 @@ pub fn show_launcher() {
 }
 
 fn active_window_pid() -> u32 {
+    if gamescope() {
+        let focused = xprop(&["-root", "GAMESCOPE_FOCUSED_WINDOW"]);
+        let Some(window) = focused.rsplit('=').next().map(str::trim).filter(|w| w.parse::<u64>().is_ok()) else { return 0 };
+        return xdotool(&["getwindowpid", window]).parse().unwrap_or(0);
+    }
     xdotool(&["getactivewindow", "getwindowpid"]).parse().unwrap_or(0)
+}
+
+// ------------------------------------------------------------------ Gamescope (PS5 Launcher OS)
+//
+// Gamescope has no window manager to activate windows. In its Steam mode (`gamescope -e`, as on
+// SteamOS) each window carries a STEAM_GAME id, and the root window's
+// GAMESCOPECTRL_BASELAYER_APPID lists the ids to show, first match wins. A window without an id
+// is never shown, so the launcher tags its own window as soon as it exists (claim_screen).
+
+/// The launcher's own id; games use their process id.
+const LAUNCHER_APPID: u32 = 7;
+
+/// Running inside Gamescope (it sets this for the programs it starts).
+fn gamescope() -> bool {
+    std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_some()
+}
+
+fn xprop(args: &[&str]) -> String {
+    Command::new("xprop").args(args).stderr(Stdio::null()).output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
+}
+
+fn appid(pid: u32) -> u32 {
+    if pid == std::process::id() { LAUNCHER_APPID } else { pid }
+}
+
+/// Give a process's windows its id. Returns false when it has no window yet.
+fn gamescope_tag(pid: u32) -> bool {
+    let windows = windows_of_pid(pid);
+    for w in &windows {
+        xprop(&["-id", w, "-f", "STEAM_GAME", "32c", "-set", "STEAM_GAME", &appid(pid).to_string()]);
+    }
+    !windows.is_empty()
+}
+
+/// Show this process's window; the launcher stays behind it as the fallback.
+fn gamescope_show(pid: u32) -> bool {
+    if !gamescope_tag(pid) {
+        return false;
+    }
+    let order = if appid(pid) == LAUNCHER_APPID { LAUNCHER_APPID.to_string() } else { format!("{},{LAUNCHER_APPID}", appid(pid)) };
+    xprop(&["-root", "-f", "GAMESCOPECTRL_BASELAYER_APPID", "32c", "-set", "GAMESCOPECTRL_BASELAYER_APPID", &order]);
+    true
+}
+
+/// Under Gamescope, make the launcher's window showable (and shown if nothing else is).
+/// Call once its window exists; harmless anywhere else.
+pub fn claim_screen() {
+    if gamescope() && gamescope_tag(std::process::id())
+        && !xprop(&["-root", "GAMESCOPECTRL_BASELAYER_APPID"]).contains('=') {
+        gamescope_show(std::process::id());
+    }
 }
 
 // ------------------------------------------------------------------ /proc helpers
@@ -270,7 +330,8 @@ impl Sessions {
         };
         std::thread::spawn(move || {
             // 1) Close the window like Alt+F4 so the emulator shuts down cleanly (saves caches).
-            let wins = windows_of_pid(pid);
+            // Gamescope has no window manager to act on Alt+F4.
+            let wins = if gamescope() { vec![] } else { windows_of_pid(pid) };
             if let Some(w) = wins.last() {
                 xdotool(&["windowactivate", w]);
                 std::thread::sleep(Duration::from_millis(250));
@@ -313,6 +374,11 @@ impl Sessions {
 
     /// Returns true if anything changed.
     fn tick(&self) -> bool {
+        if gamescope() {
+            for pid in self.inner.lock().unwrap().live.iter().map(|s| s.pid).collect::<Vec<_>>() {
+                gamescope_tag(pid);
+            }
+        }
         let extra = self.config.lock().unwrap().emulator_path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let procs = scan_emulators(&extra);
         let mut changed = false;
