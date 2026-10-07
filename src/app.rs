@@ -249,6 +249,8 @@ pub struct App {
     /// The VPNs last shown in Settings, to refresh it when one connects or drops.
     pub vpn_seen: String,
     pub catalog_timer: slint::Timer,
+    /// Settings → SYSTEM on PS5 Launcher OS.
+    pub sys: crate::system_ui::SysUi,
     /// This PC's processor, memory and graphics (read in the background at start).
     pub pc: Option<crate::pc::Specs>,
     pub pc_checking: bool,
@@ -408,6 +410,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         vpn_busy: String::new(),
         vpn_seen: String::new(),
         catalog_timer: slint::Timer::default(),
+        sys: Default::default(),
         pc: None,
         pc_checking: false,
         boot: Default::default(),
@@ -1373,6 +1376,9 @@ impl App {
         self.push_downloads();
         if self.overlay == Overlay::Settings && self.edit_index < 0 && self.vpn_seen != crate::settings::vpn_signature() {
             self.refresh_settings();
+        }
+        if self.overlay == Overlay::Settings {
+            self.sys_poll();
         }
         let tm = util::local_time();
         let (h, m) = (tm.tm_hour, tm.tm_min);
@@ -2661,6 +2667,7 @@ impl App {
 
     pub fn open_settings(&mut self) {
         audio::play(Sound::Select);
+        self.sys_poll();
         self.build_settings();
         let first = self.settings_rows.iter().position(|r| r.kind != 0).unwrap_or(0) as i32;
         self.ui().set_settings_y(0.0);

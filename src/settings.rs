@@ -9,6 +9,16 @@ use crate::SettingData;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SId {
     Header,
+    // System (PS5 Launcher OS only; see system_ui.rs)
+    Internet,
+    WifiNet(u16),
+    BtPair,
+    BtFound(u16),
+    BtDevice(u16),
+    SoundOutput,
+    SystemUpdate,
+    Restart,
+    ShutDown,
     // Games
     Dirs,
     InstallDir,
@@ -69,6 +79,7 @@ impl App {
         let mut rows: Vec<(SId, SettingData)> = Vec::new();
         let header = |rows: &mut Vec<(SId, SettingData)>, label: &str| rows.push((SId::Header, row(0, label)));
 
+        rows.extend(self.system_rows());
         header(&mut rows, "GAMES");
         let mut r = row(1, "Game folders");
         r.value = cfg.game_dirs.iter().map(|d| util::display_path(d)).collect::<Vec<_>>().join("; ").into();
@@ -321,10 +332,18 @@ impl App {
         }
 
         header(&mut rows, "");
-        let mut r = row(4, "Quit PS5 Launcher");
-        r.value = "Ctrl+Q".into();
-        r.danger = true;
-        rows.push((SId::Quit, r));
+        if crate::system::on_os() {
+            // The launcher is the whole screen here: quitting it would only start it again.
+            rows.push((SId::Restart, row(4, "Restart")));
+            let mut r = row(4, "Shut down");
+            r.danger = true;
+            rows.push((SId::ShutDown, r));
+        } else {
+            let mut r = row(4, "Quit PS5 Launcher");
+            r.value = "Ctrl+Q".into();
+            r.danger = true;
+            rows.push((SId::Quit, r));
+        }
 
         // Rows between two headers form one card.
         for i in 0..rows.len() {
@@ -397,6 +416,9 @@ impl App {
 
     pub fn settings_change(&mut self, i: usize, dir: i32) {
         let Some(id) = self.settings_ids.get(i).copied() else { return };
+        if self.system_change(id, dir) {
+            return;
+        }
         match id {
             SId::Resolution => {
                 let cur = { let c = self.cfg.lock().unwrap(); (c.width, c.height) };
@@ -468,6 +490,9 @@ impl App {
 
     pub fn settings_activate(&mut self, i: usize) {
         let Some(id) = self.settings_ids.get(i).copied() else { return };
+        if self.system_activate(id, i) {
+            return;
+        }
         match id {
             SId::Emulator | SId::Dirs | SId::Extra | SId::Rawg | SId::DownloadDir | SId::InstallDir => {
                 let cfg = self.cfg.lock().unwrap().clone();
@@ -595,12 +620,15 @@ impl App {
                 self.pc_check();
                 self.refresh_settings();
             }
-            SId::Header => {}
+            _ => {}
         }
     }
 
     pub fn settings_commit_text(&mut self, i: usize, text: String) {
         let Some(id) = self.settings_ids.get(i).copied() else { return };
+        if self.system_commit_text(id, text.clone()) {
+            return;
+        }
         let t = text.trim().to_string();
         match id {
             SId::Emulator => {
