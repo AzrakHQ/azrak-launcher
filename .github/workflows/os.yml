@@ -1,8 +1,9 @@
 name: PS5 Launcher OS
 
-# The OS image (Bazzite + PS5 Launcher, see os/) and its installer ISO.
-# - Images: ghcr.io/<owner>/ps5-launcher-os:stable (AMD/Intel) and :nvidia. Rebuilt daily so
-#   installed machines get Bazzite's updates; they update themselves from these tags.
+# The OS images (see os/) and the installer ISO.
+# - Images: ghcr.io/<owner>/ps5-launcher-os:stable (AMD/Intel) and :nvidia (Bazzite + the
+#   launcher), and :minimal (Fedora bootc + Gamescope + the launcher, os/minimal). Rebuilt daily
+#   so installed machines get their base's updates; they update themselves from these tags.
 # - ISO: Fedora's network installer with os/ps5-launcher-os.ks, attached to the latest release.
 
 on:
@@ -37,8 +38,13 @@ jobs:
         include:
           - tag: stable
             base: ghcr.io/ublue-os/bazzite-deck:stable
+            file: os/Containerfile
           - tag: nvidia
             base: ghcr.io/ublue-os/bazzite-deck-nvidia:stable
+            file: os/Containerfile
+          - tag: minimal
+            base: quay.io/fedora/fedora-bootc:44
+            file: os/minimal/Containerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -64,9 +70,11 @@ jobs:
           owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
           echo "IMAGE=ghcr.io/$owner/ps5-launcher-os" >> "$GITHUB_ENV"
           sudo podman build --pull=always --build-arg BASE_IMAGE=${{ matrix.base }} \
+            --build-arg VERSION="$(date -u +%Y.%m.%d)" -f ${{ matrix.file }} \
             -t "ghcr.io/$owner/ps5-launcher-os:${{ matrix.tag }}" os
 
       - name: Check the image
+        if: matrix.tag != 'minimal'
         run: |
           img="$IMAGE:${{ matrix.tag }}"
           sudo podman run --rm --entrypoint /usr/bin/bash "$img" -c '
@@ -86,6 +94,24 @@ jobs:
             done
             grep -q kinoite /usr/share/ublue-os/image-info.json
             test -x /usr/libexec/bazzite-autologin'
+
+      - name: Check the minimal image
+        if: matrix.tag == 'minimal'
+        run: |
+          sudo podman run --rm --entrypoint /usr/bin/bash "$IMAGE:minimal" -c '
+            set -e
+            test -x /usr/libexec/ps5-launcher-os/session
+            test -s /usr/lib/ps5-launcher-os/release
+            systemctl is-enabled greetd.service NetworkManager.service bluetooth.service ps5-launcher-os-update.timer
+            test "$(systemctl is-enabled bootc-fetch-apply-updates.timer)" = masked
+            grep -q systemd.gpt_auto=0 /usr/lib/bootc/install/50-ps5-launcher-os.toml
+            for tool in gamescope cage xprop xdotool nmcli bluetoothctl pactl rpm-ostree bootc; do
+              command -v "$tool" >/dev/null || { echo "missing $tool"; exit 1; }
+            done
+            for lib in libmpv.so.2 libarchive.so.13 libxkbcommon-x11.so.0 libvulkan.so.1 libpulse.so.0 libXss.so.1; do
+              ldconfig -p | grep -q "$lib " || { echo "missing $lib"; exit 1; }
+            done
+            /usr/share/ps5-launcher-os/release/ps5-launcher --version'
 
       - name: Push
         run: |
