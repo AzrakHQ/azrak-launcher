@@ -94,6 +94,13 @@ impl App {
             }
         }
 
+        if !system::bt_available() {
+            let mut r = row(4, "Bluetooth");
+            r.value = "Not on this PC".into();
+            r.hint = "Wired controllers work as they are · a USB Bluetooth adapter adds wireless ones".into();
+            rows.push((SId::BtPair, r));
+            return self.system_rows_rest(rows);
+        }
         let mut r = row(4, "Pair a controller or headset");
         (r.value, r.value_kind) = match busy(SId::BtPair) {
             Some(text) => (text.into(), 0),
@@ -119,6 +126,12 @@ impl App {
             rows.push((SId::BtDevice(i as u16), r));
         }
 
+        self.system_rows_rest(rows)
+    }
+
+    /// Sound output and system updates.
+    fn system_rows_rest(&self, mut rows: Vec<(SId, SettingData)>) -> Vec<(SId, SettingData)> {
+        let s = &self.sys;
         if !s.outputs.is_empty() {
             let mut r = row(3, "Sound output");
             r.value = s.output.and_then(|i| s.outputs.get(i)).map(|o| o.label.clone()).unwrap_or_else(|| "Choose".into()).into();
@@ -167,7 +180,7 @@ impl App {
                 self.wifi_connect(i, None);
             }
             SId::BtPair => {
-                if self.sys.busy.is_some() {
+                if self.sys.busy.is_some() || !system::bt_available() {
                     return true;
                 }
                 self.sys_task(SId::BtPair, "Searching for 15 seconds…", |app, found: Vec<Device>| {

@@ -20,8 +20,22 @@ pub fn live() -> bool {
         || std::fs::read_to_string("/proc/cmdline").is_ok_and(|c| c.split_whitespace().any(|a| a == "rd.live.image"))
 }
 
-fn run(program: &str, args: &[&str]) -> Result<String, String> {
-    let out = Command::new(program).args(args).output().map_err(|_| format!("{program} isn't installed"))?;
+/// Run a system tool and wait at most `seconds` (some wait forever for missing hardware, e.g.
+/// bluetoothctl without a Bluetooth adapter).
+fn run_for(seconds: u64, program: &str, args: &[&str]) -> Result<String, String> {
+    use std::process::Stdio;
+    let mut child = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped())
+        .spawn().map_err(|_| format!("{program} isn't installed"))?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    while child.try_wait().map_err(|e| e.to_string())?.is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("{program} didn't answer"));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     if out.status.success() {
         Ok(text)
@@ -44,6 +58,10 @@ fn nm_fields(line: &str) -> Vec<String> {
         }
     }
     fields
+}
+
+fn run(program: &str, args: &[&str]) -> Result<String, String> {
+    run_for(10, program, args)
 }
 
 // ------------------------------------------------------------------ network
@@ -79,7 +97,7 @@ pub struct Wifi {
 
 /// Nearby Wi-Fi networks, strongest first, one entry per name.
 pub fn wifi_list() -> Result<Vec<Wifi>, String> {
-    run("nmcli", &["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "yes"]).map(|t| parse_wifi(&t))
+    run_for(30, "nmcli", &["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "yes"]).map(|t| parse_wifi(&t))
 }
 
 fn parse_wifi(text: &str) -> Vec<Wifi> {
@@ -101,7 +119,7 @@ pub fn wifi_connect(ssid: &str, password: Option<&str>) -> Result<(), String> {
     if let Some(p) = password.filter(|p| !p.is_empty()) {
         args.extend(["password", p]);
     }
-    run("nmcli", &args).map(|_| ())
+    run_for(60, "nmcli", &args).map(|_| ())
 }
 
 // ------------------------------------------------------------------ Bluetooth
@@ -122,8 +140,16 @@ fn parse_devices(text: &str) -> Vec<Device> {
     }).collect()
 }
 
+/// This PC has a Bluetooth adapter.
+pub fn bt_available() -> bool {
+    std::fs::read_dir("/sys/class/bluetooth").is_ok_and(|d| d.flatten().any(|e| e.file_name().to_string_lossy().starts_with("hci")))
+}
+
 /// Paired controllers and headsets, and which are connected.
 pub fn bt_paired() -> Vec<(Device, bool)> {
+    if !bt_available() {
+        return vec![];
+    }
     let connected: Vec<Device> = run("bluetoothctl", &["devices", "Connected"]).map(|t| parse_devices(&t)).unwrap_or_default();
     run("bluetoothctl", &["devices", "Paired"]).map(|t| parse_devices(&t)).unwrap_or_default().into_iter()
         .map(|d| { let on = connected.contains(&d); (d, on) }).collect()
@@ -132,7 +158,7 @@ pub fn bt_paired() -> Vec<(Device, bool)> {
 /// Look for devices in pairing mode for `seconds`, then list the new ones.
 pub fn bt_scan(seconds: u32) -> Vec<Device> {
     let _ = run("bluetoothctl", &["power", "on"]);
-    let _ = run("bluetoothctl", &["--timeout", &seconds.to_string(), "scan", "on"]);
+    let _ = run_for(seconds as u64 + 5, "bluetoothctl", &["--timeout", &seconds.to_string(), "scan", "on"]);
     let paired: Vec<Device> = bt_paired().into_iter().map(|(d, _)| d).collect();
     run("bluetoothctl", &["devices"]).map(|t| parse_devices(&t)).unwrap_or_default()
         .into_iter().filter(|d| !paired.contains(d)).collect()
@@ -140,9 +166,9 @@ pub fn bt_scan(seconds: u32) -> Vec<Device> {
 
 /// Pair, trust (so it reconnects by itself) and connect.
 pub fn bt_pair(address: &str) -> Result<(), String> {
-    run("bluetoothctl", &["--timeout", "25", "pair", address])?;
+    run_for(30, "bluetoothctl", &["--timeout", "25", "pair", address])?;
     run("bluetoothctl", &["trust", address])?;
-    run("bluetoothctl", &["--timeout", "15", "connect", address]).map(|_| ())
+    run_for(20, "bluetoothctl", &["--timeout", "15", "connect", address]).map(|_| ())
 }
 
 pub fn bt_remove(address: &str) -> Result<(), String> {
