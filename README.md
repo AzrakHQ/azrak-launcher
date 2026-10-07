@@ -12,7 +12,7 @@ mouse.
 - **A Library of 400+ PS5 games** with search, genre filters and sorting.
 - **PS4 games too:** they run on shadPS4, which the launcher installs and updates by itself, like KytyPS5.
 - **See what runs:** every game shows how far it gets in its emulator.
-- **Download, install and play** without leaving the launcher.
+- **Download, install and play** without leaving the launcher, through your own VPN if you like.
 - **Keeps itself and KytyPS5 up to date**, without touching your saves.
 
 ## Install
@@ -88,6 +88,12 @@ itself when it finds an NVIDIA graphics card. To get to the desktop, quit the la
 > Only download games you own. Downloads use BitTorrent: other people can see your IP address,
 > and finished downloads are shared while the launcher is open (turn this off in
 > **Settings → Keep sharing finished downloads**).
+
+**Hide your IP address with a VPN.** Turn on **Settings → Download only through a VPN**.
+Downloads then use only your VPN: if it disconnects, they pause and carry on when it's back,
+so your real address is never used. Bring your own VPN (WireGuard or OpenVPN): connect it with
+its app, or choose **Settings → Your VPN** and pick the `.conf` or `.ovpn` file from your
+provider's website.
 
 ## Controls
 

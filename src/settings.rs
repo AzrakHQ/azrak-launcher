@@ -19,6 +19,9 @@ pub enum SId {
     ReturnOnExit,
     Controls,
     // Downloads
+    VpnOnly,
+    Vpn,
+    VpnAdd,
     SeedCompleted,
     Downloads,
     // Updates
@@ -47,6 +50,11 @@ pub enum SId {
 
 fn row(kind: i32, label: &str) -> SettingData {
     SettingData { kind, label: label.into(), ..Default::default() }
+}
+
+/// What Settings shows about VPNs, to notice when one connects or drops.
+pub fn vpn_signature() -> String {
+    crate::vpn::list().iter().map(|v| format!("{}:{} ", v.name, v.connected)).collect()
 }
 
 fn plural(n: usize, one: &str) -> String {
@@ -90,6 +98,43 @@ impl App {
         rows.push((SId::Controls, r));
 
         header(&mut rows, "DOWNLOADS");
+        // VPN: the toggle keeps downloads off every other connection; the row below manages the
+        // VPN itself through NetworkManager, or just reports one that another app connected.
+        self.vpn_seen = vpn_signature();
+        let connected = crate::vpn::active(&cfg.vpn_interface);
+        let nm = crate::vpn::nm_available();
+        let saved = if nm { crate::vpn::nm_saved() } else { Vec::new() };
+        let mut r = row(2, "Download only through a VPN");
+        r.on = cfg.vpn_only;
+        (r.hint, r.hint_kind) = match (&connected, cfg.vpn_only) {
+            (_, false) => ("Hides your IP address from other players · uses your own VPN".into(), 0),
+            (Some(iface), true) => (format!("Protected · downloads only use {iface}").into(), 1),
+            (None, true) => ("Downloads wait until your VPN is connected".into(), 2),
+        };
+        rows.push((SId::VpnOnly, r));
+        let mut r = row(4, "Your VPN");
+        let active_saved = saved.iter().find(|v| v.active);
+        (r.value, r.value_kind, r.hint) = if !self.vpn_busy.is_empty() {
+            (self.vpn_busy.clone().into(), 0, "".into())
+        } else if let Some(v) = active_saved {
+            (format!("{} · Connected", v.name).into(), 1, "Press to disconnect".into())
+        } else if let Some(iface) = &connected {
+            (format!("{iface} · Connected").into(), 1, "Connected by your VPN app".into())
+        } else if let Some(v) = saved.first() {
+            (format!("{} · Connect", v.name).into(), 3, "Not connected".into())
+        } else if nm {
+            ("Add one".into(), 3, "From your VPN provider: a WireGuard .conf or OpenVPN .ovpn file".into())
+        } else {
+            ("None".into(), 0, "Connect your VPN app, and downloads use it".into())
+        };
+        rows.push((SId::Vpn, r));
+        if nm && !saved.is_empty() {
+            let dialog = crate::vpn::has_file_dialog();
+            let mut r = row(if dialog { 4 } else { 1 }, "Add a VPN from a file");
+            r.value = if dialog { "WireGuard .conf · OpenVPN .ovpn".into() } else { "".into() };
+            r.hint = if dialog { "Download the file from your VPN provider's website" } else { "Type the path of a WireGuard .conf or OpenVPN .ovpn file" }.into();
+            rows.push((SId::VpnAdd, r));
+        }
         let mut r = row(2, "Keep sharing finished downloads");
         r.on = cfg.seed_after_download;
         r.hint = "Helps other players download faster · uploads at most 128 KiB/s".into();
@@ -367,6 +412,19 @@ impl App {
                 self.save_cfg(|c| c.monitor = next.clone());
                 self.move_to_monitor(&next);
             }
+            SId::VpnOnly => {
+                let on = dir > 0;
+                let vpn = { let c = self.cfg.lock().unwrap(); on.then(|| c.vpn_interface.clone()) };
+                if let Err(error) = self.downloads.set_vpn(vpn) {
+                    self.toast("VPN setting unavailable", &error.to_string(), 2);
+                    return;
+                }
+                self.save_cfg(|c| c.vpn_only = on);
+                if on && crate::vpn::active(&self.cfg.lock().unwrap().vpn_interface).is_none() {
+                    self.toast("Downloads wait for your VPN", "They start as soon as it's connected.", 0);
+                }
+                self.push_downloads();
+            }
             SId::SeedCompleted => {
                 let on = dir > 0;
                 if let Err(error) = self.downloads.set_seed_after_download(on) {
@@ -418,7 +476,7 @@ impl App {
                 ui.set_edit_text(text.into());
                 ui.set_edit_index(i as i32);
             }
-            SId::Fullscreen | SId::Amd | SId::ReturnOnExit | SId::Sounds | SId::AutoUpdate | SId::SeedCompleted => {
+            SId::Fullscreen | SId::Amd | SId::ReturnOnExit | SId::Sounds | SId::AutoUpdate | SId::SeedCompleted | SId::VpnOnly => {
                 let on = self.settings_rows[i].on;
                 self.settings_change(i, if on { -1 } else { 1 });
             }
@@ -500,6 +558,28 @@ impl App {
                 self.scroll_settings();
             }
             SId::Downloads => self.open_downloads(None),
+            SId::Vpn => {
+                audio::play(Sound::Select);
+                if !self.vpn_busy.is_empty() || !crate::vpn::nm_available() {
+                    return;
+                }
+                let saved = crate::vpn::nm_saved();
+                if let Some(v) = saved.iter().find(|v| v.active) {
+                    let name = v.name.clone();
+                    self.vpn_task("Disconnecting…", move || crate::vpn::nm_down(&name).map(|_| ("VPN disconnected".to_string(), name)));
+                } else if crate::vpn::active("").is_some() {
+                    self.toast("Connected by your VPN app", "Switch it off there.", 0);
+                } else if let Some(v) = saved.first() {
+                    let name = v.name.clone();
+                    self.vpn_task("Connecting…", move || crate::vpn::nm_up(&name).map(|_| ("VPN connected".to_string(), name)));
+                } else {
+                    self.vpn_add(i);
+                }
+            }
+            SId::VpnAdd => {
+                audio::play(Sound::Select);
+                self.vpn_add(i);
+            }
             SId::Share => self.share_results(),
             SId::Controls => self.open_controls(),
             SId::Header => {}
@@ -524,6 +604,10 @@ impl App {
                 self.toast("Installed games rescanned", &format!("{n} game{} found.", if n == 1 { "" } else { "s" }), 1);
             }
             SId::Extra => self.save_cfg(|c| c.extra_args = t),
+            SId::VpnAdd if !t.is_empty() => {
+                let file = util::expand_home(&t);
+                self.vpn_task("Adding…", move || crate::vpn::nm_import(&file).map(|name| ("VPN added and connected".to_string(), name)));
+            }
             SId::DownloadDir => {
                 if t.is_empty() || !util::expand_home(&t).is_absolute() {
                     self.toast("Invalid download folder", "Use an absolute path or ~/Downloads/PS5.", 2);
@@ -567,6 +651,51 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Add a VPN from a provider's file: the desktop's file dialog, or typing the path.
+    fn vpn_add(&mut self, i: usize) {
+        if !self.vpn_busy.is_empty() {
+            return;
+        }
+        if !crate::vpn::has_file_dialog() {
+            self.edit_index = i as i32;
+            let ui = self.ui();
+            ui.set_edit_text("~/Downloads/".into());
+            ui.set_edit_index(i as i32);
+            return;
+        }
+        self.vpn_task("Choose the file…", || match crate::vpn::choose_file() {
+            Ok(Some(file)) => crate::vpn::nm_import(&file).map(|name| ("VPN added and connected".to_string(), name)),
+            Ok(None) => Ok((String::new(), String::new())),
+            Err(()) => Err("There's no file dialog on this PC".into()),
+        });
+    }
+
+    /// Run a NetworkManager step off the UI thread. `job` returns (toast title, VPN name), or an
+    /// empty title for nothing to report (a cancelled dialog).
+    fn vpn_task(&mut self, busy: &str, job: impl FnOnce() -> Result<(String, String), String> + Send + 'static) {
+        self.vpn_busy = busy.into();
+        self.refresh_settings();
+        std::thread::spawn(move || {
+            let result = job();
+            let _ = slint::invoke_from_event_loop(move || {
+                with_app(move |app| {
+                    app.vpn_busy.clear();
+                    match result {
+                        Ok((title, _)) if title.is_empty() => {}
+                        Ok((title, name)) => app.toast(&title, &name, 1),
+                        Err(error) => {
+                            app.toast("VPN didn't change", &error, 2);
+                            audio::play(Sound::Error);
+                        }
+                    }
+                    if app.overlay == Overlay::Settings {
+                        app.refresh_settings();
+                    }
+                })
+            });
+        });
     }
 
     /// Switch to another display. The UI scale is fixed per window at startup, so the

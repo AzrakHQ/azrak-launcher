@@ -118,6 +118,8 @@ export component DownloadConsent inherits Rectangle {
     in property <bool> install;
     in property <string> title;
     in property <string> error;
+    /// Who sees your IP address: empty for no VPN.
+    in property <string> privacy;
     in-out property <string> destination;
     callback confirm();
     callback close();
@@ -138,7 +140,7 @@ export component DownloadConsent inherits Rectangle {
             Text { text: root.install ? "Install game" : "Set up a download"; font-size: (38px * S.k); font-weight: 600; color: Theme.text; }
             Text { text: root.title; font-size: (24px * S.k); color: Theme.text2; wrap: word-wrap; max-height: (76px * S.k); overflow: elide; }
             Text {
-                text: root.install ? "Extract or copy this completed download into your game library. Installation runs in the background, checks free space and validates the game folder before publishing it. Existing games are never overwritten; original downloads are kept." : "Only download content you are authorized to obtain and share. Looking up this magnet contacts trackers, DHT and peers and reveals your IP address, even before its private flag is known. Transfers upload pieces, capped at 128 KiB/s. After completion, seeding continues by default while the launcher is open; switch it off in Settings or stop an individual seed in Downloads.";
+                text: root.install ? "Extract or copy this completed download into your game library. Installation runs in the background, checks free space and validates the game folder before publishing it. Existing games are never overwritten; original downloads are kept." : "Only download content you are authorized to obtain and share. " + (root.privacy != "" ? root.privacy : "Looking up this magnet contacts trackers, DHT and peers and reveals your IP address, even before its private flag is known.") + " Transfers upload pieces, capped at 128 KiB/s. After completion, seeding continues by default while the launcher is open; switch it off in Settings or stop an individual seed in Downloads.";
                 font-size: (19px * S.k); color: Theme.text2; wrap: word-wrap;
             }
             Text { text: root.install ? "Game library destination · confirm where the game will be installed" : "Destination · an owned subfolder will be created here"; font-size: (18px * S.k); color: Theme.text3; }

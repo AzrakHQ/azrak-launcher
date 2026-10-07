@@ -236,6 +236,10 @@ pub struct App {
     pub settings_ids: Vec<crate::settings::SId>,
     /// Settings' Advanced section is expanded (for this session).
     pub settings_advanced: bool,
+    /// A VPN connect, disconnect or import in progress ("Connecting…"), shown in Settings.
+    pub vpn_busy: String,
+    /// The VPNs last shown in Settings, to refresh it when one connects or drops.
+    pub vpn_seen: String,
     pub boot: crate::boot::Boot,
     pub kyty: crate::kyty_ui::KytyUi,
     pub shad: crate::shad_ui::ShadUi,
@@ -316,7 +320,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         library,
         art,
         sessions,
-        downloads: crate::downloads::Manager::load(cfg.lock().unwrap().seed_after_download),
+        downloads: { let c = cfg.lock().unwrap(); crate::downloads::Manager::load(c.seed_after_download, c.download_vpn()) },
         installer: crate::installer::Manager::load(),
         install_pending: None,
         install_states: HashMap::new(),
@@ -389,6 +393,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         row_flip: false,
         settings_ids: Vec::new(),
         settings_advanced: false,
+        vpn_busy: String::new(),
+        vpn_seen: String::new(),
         boot: Default::default(),
         kyty: Default::default(),
         shad: Default::default(),
@@ -1271,6 +1277,9 @@ impl App {
     pub fn tick(&mut self) {
         self.push_installs();
         self.push_downloads();
+        if self.overlay == Overlay::Settings && self.edit_index < 0 && self.vpn_seen != crate::settings::vpn_signature() {
+            self.refresh_settings();
+        }
         let tm = util::local_time();
         let (h, m) = (tm.tm_hour, tm.tm_min);
         let clock = format!("{}:{:02} {}", if h % 12 == 0 { 12 } else { h % 12 }, m, if h < 12 { "AM" } else { "PM" });

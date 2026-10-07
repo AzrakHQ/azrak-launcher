@@ -11,6 +11,7 @@ mod shad;
 mod shad_ui;
 mod pkgx;
 mod sandbox;
+mod vpn;
 mod exfat;
 mod results;
 mod trailer;

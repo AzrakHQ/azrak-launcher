@@ -301,7 +301,8 @@ impl App {
         self.downloads.shutdown();
         use std::os::unix::process::CommandExt;
         let err = Command::new(&exe).args(&args).env_remove("PS5_LAUNCHER_PRETEND_VERSION").exec();
-        self.downloads = crate::downloads::Manager::load(self.cfg.lock().unwrap().seed_after_download);
+        let (seed, vpn) = { let c = self.cfg.lock().unwrap(); (c.seed_after_download, c.download_vpn()) };
+        self.downloads = crate::downloads::Manager::load(seed, vpn);
         self.installer = crate::installer::Manager::load();
         self.push_downloads();
         self.toast_app("Couldn't restart", &err.to_string(), 2);

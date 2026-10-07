@@ -56,12 +56,16 @@ pub struct Job {
     #[serde(skip)] pub upload_speed: f64,
     /// Checking a completed download's files before it seeds again.
     #[serde(skip)] pub verifying: bool,
+    /// Stopped because "download only through a VPN" is on and the VPN isn't connected;
+    /// resumes by itself when it is.
+    #[serde(default)] pub waiting_vpn: bool,
 }
 
 impl Job {
     pub fn label(&self) -> &'static str {
         if self.state == State::Complete && self.seeding { "Complete · seeding" }
         else if self.state == State::Complete && self.verifying { "Complete · checking files to seed" }
+        else if self.waiting_vpn && !self.state.active() && self.state != State::Complete { "Paused · waiting for your VPN" }
         else { self.state.label() }
     }
     fn clear_runtime(&mut self) {
@@ -94,6 +98,10 @@ struct Policy {
     initial_peers: Vec<SocketAddr>,
     download_bps: Option<NonZeroU32>,
     seed_after_download: bool,
+    /// Download only through a VPN: `Some(preferred interface)` ("" = any connected VPN).
+    vpn: Option<String>,
+    /// Finds the connected VPN interface (tests substitute their own).
+    vpn_probe: fn(&str) -> Option<String>,
     // Test-only listener is restricted to ephemeral loopback TCP in local-only sessions.
     #[cfg(test)] loopback_listener: bool,
 }
@@ -102,13 +110,15 @@ impl Default for Policy {
     fn default() -> Self {
         Self {
             local_only: false, initial_peers: vec![], download_bps: None, seed_after_download: true,
+            vpn: None, vpn_probe: crate::vpn::active,
             #[cfg(test)] loopback_listener: false,
         }
     }
 }
 
-enum Command { Prepare(Job), Start(String), Pause(String), Cancel(String), Remove(String), StopSeed(String), SetSeedAfterDownload(bool), Shutdown }
+enum Command { Prepare(Job), Start(String), Pause(String), Cancel(String), Remove(String), StopSeed(String), SetSeedAfterDownload(bool), SetVpn(Option<String>), Shutdown }
 
+const VPN_WAIT: &str = "Waiting for your VPN: downloads only run through it (Settings → Downloads)";
 const FILES_CHANGED: &str = "The downloaded files were moved, changed or deleted, so this download can't seed. Remove it, or download it again.";
 
 pub struct Manager {
@@ -118,8 +128,9 @@ pub struct Manager {
 }
 
 impl Manager {
-    pub fn load(seed_after_download: bool) -> Self {
-        Self::new(crate::util::config_dir().join("transfers"), Policy { seed_after_download, ..Default::default() })
+    /// `vpn`: download only through a VPN (`Some(preferred interface)`, "" for any).
+    pub fn load(seed_after_download: bool, vpn: Option<String>) -> Self {
+        Self::new(crate::util::config_dir().join("transfers"), Policy { seed_after_download, vpn, ..Default::default() })
     }
 
     fn new(store: PathBuf, policy: Policy) -> Self {
@@ -151,7 +162,7 @@ impl Manager {
             folder: base.join(format!("torrent-{key}")), key: key.clone(), topic,
             name: name.chars().filter(|c| !c.is_control()).take(200).collect(), magnet,
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false,
         };
         self.tx.try_send(Command::Prepare(job.clone())).context("Download worker is busy or unavailable")?;
         jobs.push(job);
@@ -177,6 +188,11 @@ impl Manager {
     /// Changes future completion behavior; enabling never starts a restored/stopped torrent.
     pub fn set_seed_after_download(&self, enabled: bool) -> Result<()> {
         self.tx.try_send(Command::SetSeedAfterDownload(enabled)).context("Download worker is busy or unavailable")
+    }
+
+    /// Download only through a VPN (`Some(preferred interface)`), or through any connection.
+    pub fn set_vpn(&self, vpn: Option<String>) -> Result<()> {
+        self.tx.try_send(Command::SetVpn(vpn)).context("Download worker is busy or unavailable")
     }
 
     pub fn shutdown(&mut self) {
@@ -403,11 +419,13 @@ struct Worker {
     tasks: JoinSet<Result<Resolved>>,
     /// Completed downloads added paused while their files are checked, before seeding again.
     reseeding: std::collections::HashSet<String>,
+    /// The VPN interface the current session is bound to.
+    bound: Option<String>,
 }
 
 impl Worker {
     fn new(store: PathBuf, jobs: Arc<Mutex<Vec<Job>>>, policy: Policy) -> Self {
-        Self { store, jobs, policy, session: None, handles: HashMap::new(), peers: HashMap::new(), resolving: HashMap::new(), task_keys: HashMap::new(), tasks: JoinSet::new(), reseeding: Default::default() }
+        Self { store, jobs, policy, session: None, handles: HashMap::new(), peers: HashMap::new(), resolving: HashMap::new(), task_keys: HashMap::new(), tasks: JoinSet::new(), reseeding: Default::default(), bound: None }
     }
     fn job(&self, key: &str) -> Option<Job> { self.jobs.lock().unwrap().iter().find(|job| job.key == key).cloned() }
     fn update(&self, key: &str, f: impl FnOnce(&mut Job)) {
@@ -439,6 +457,13 @@ impl Worker {
             ..Default::default()
         };
         if self.policy.local_only { opts.dht = None; opts.disable_trackers = true; opts.listen = None; }
+        // Every connection, listener, tracker and DHT socket is bound to the VPN's interface, so
+        // nothing can leave by another route; without a connected VPN nothing starts.
+        let bound = match &self.policy.vpn {
+            Some(preferred) => Some((self.policy.vpn_probe)(preferred).context(VPN_WAIT)?),
+            None => None,
+        };
+        opts.bind_device_name = bound.clone();
         #[cfg(test)]
         if self.policy.local_only && self.policy.loopback_listener {
             opts.listen = Some(librqbit::ListenerOptions {
@@ -448,10 +473,68 @@ impl Worker {
         }
         let session = Session::new_with_opts(self.store.join("unused-default-output"), opts).await?;
         self.session = Some(session.clone());
+        self.bound = bound;
         Ok(session)
+    }
+
+    /// The VPN interface downloads must use, when "only through a VPN" is on: `Err` while it
+    /// isn't connected.
+    fn vpn_route(&self) -> std::result::Result<Option<String>, ()> {
+        match &self.policy.vpn {
+            None => Ok(None),
+            Some(preferred) => (self.policy.vpn_probe)(preferred).map(Some).ok_or(()),
+        }
+    }
+
+    /// Keep a transfer for later, until the VPN is connected.
+    fn wait_for_vpn(&mut self, key: &str) {
+        self.update(key, |job| {
+            if job.state != State::Complete { job.state = State::Paused; }
+            job.waiting_vpn = true; job.error.clear(); job.clear_runtime();
+        });
+        self.persist();
+    }
+
+    /// The kill switch, every couple of seconds: if the VPN downloads are bound to went away (or
+    /// another one replaced it), stop everything; once a VPN is connected again (or the setting
+    /// is off), resume what was stopped and seed again.
+    async fn vpn_check(&mut self) {
+        let route = self.vpn_route();
+        if self.session.is_some() && route.as_ref().map_or(true, |iface| *iface != self.bound) {
+            self.stop_all_for_vpn().await;
+        }
+        if route.is_ok() && self.session.is_none() {
+            let waiting: Vec<String> = self.jobs.lock().unwrap().iter().filter(|j| j.waiting_vpn).map(|j| j.key.clone()).collect();
+            for key in waiting {
+                self.update(&key, |job| job.waiting_vpn = false);
+                let complete = self.job(&key).is_some_and(|job| job.state == State::Complete);
+                if !complete {
+                    if let Err(error) = self.start(&key).await { self.fail(&key, error); }
+                }
+            }
+            if self.policy.seed_after_download { self.seed_all().await; }
+            self.persist();
+        }
+    }
+
+    /// Stop every transfer and seed and close the session (it is bound to a VPN that is gone or
+    /// changed); unfinished transfers resume when downloads may run again.
+    async fn stop_all_for_vpn(&mut self) {
+        let resolving: Vec<String> = self.resolving.keys().cloned().collect();
+        let keys: Vec<String> = self.handles.keys().cloned().chain(resolving).collect();
+        for key in keys {
+            let complete = self.job(&key).is_some_and(|job| job.state == State::Complete)
+                || self.handles.get(&key).is_some_and(|handle| handle.stats().finished);
+            let _ = self.stop_job(&key, if complete { State::Complete } else { State::Paused }).await;
+            self.wait_for_vpn(&key);
+        }
+        if let Some(session) = self.session.take() { let _ = tokio::time::timeout(Duration::from_secs(5), session.stop()).await; }
+        self.bound = None;
+        crate::log!("downloads stopped: the VPN they use isn't connected");
     }
     async fn resolve(&mut self, key: &str) -> Result<()> {
         if self.resolving.contains_key(key) || self.handles.contains_key(key) { return Ok(()); }
+        if self.vpn_route().is_err() { self.wait_for_vpn(key); return Ok(()); }
         let job = self.job(key).context("Missing transfer")?;
         let folder = owned_folder(&job)?;
         self.update(key, |job| { job.folder = folder.clone(); job.state = State::Resolving; job.error.clear(); });
@@ -502,6 +585,8 @@ impl Worker {
     async fn start(&mut self, key: &str) -> Result<()> {
         let job = self.job(key).context("Missing transfer")?;
         if job.state.active() || job.state == State::Complete { return Ok(()); }
+        if self.vpn_route().is_err() { self.wait_for_vpn(key); return Ok(()); }
+        self.update(key, |job| job.waiting_vpn = false);
         if let Some(handle) = self.handles.get(key).cloned() {
             self.session().await?.unpause(&handle).await?;
             self.update(key, |job| { job.state = State::Checking; job.error.clear(); });
@@ -602,6 +687,7 @@ impl Worker {
     async fn seed(&mut self, key: &str) -> Result<()> {
         let Some(job) = self.job(key) else { return Ok(()) };
         if job.state != State::Complete || self.handles.contains_key(key) || !self.policy.seed_after_download { return Ok(()); }
+        if self.vpn_route().is_err() { self.wait_for_vpn(key); return Ok(()); }
         use std::io::Read;
         let mut bytes = Vec::new();
         std::fs::File::open(self.store.join(format!("{key}.torrent"))).context("Torrent metadata is missing")?
@@ -703,14 +789,22 @@ impl Worker {
         let mut tick = tokio::time::interval(Duration::from_secs(1));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut dirty_ticks = 0;
+        let mut vpn_tick = tokio::time::interval(Duration::from_secs(2));
+        vpn_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 command = rx.recv() => {
                     let result = match command {
                         Some(Command::Prepare(job)) => { let key = job.key; Some((key.clone(), self.resolve(&key).await)) },
                         Some(Command::Start(key)) => Some((key.clone(), self.start(&key).await)),
-                        Some(Command::Pause(key)) => Some((key.clone(), self.stop_job(&key, State::Paused).await)),
-                        Some(Command::Cancel(key)) => Some((key.clone(), self.stop_job(&key, State::Cancelled).await)),
+                        Some(Command::Pause(key)) => {
+                            self.update(&key, |job| job.waiting_vpn = false);
+                            Some((key.clone(), self.stop_job(&key, State::Paused).await))
+                        },
+                        Some(Command::Cancel(key)) => {
+                            self.update(&key, |job| job.waiting_vpn = false);
+                            Some((key.clone(), self.stop_job(&key, State::Cancelled).await))
+                        },
                         Some(Command::Remove(key)) => Some((key.clone(), self.remove(&key).await)),
                         Some(Command::StopSeed(key)) => {
                             let result = if self.job(&key).is_some_and(|job| job.state == State::Complete) {
@@ -725,12 +819,22 @@ impl Worker {
                             }
                             None
                         },
+                        Some(Command::SetVpn(vpn)) => {
+                            // Reconnect everything under the new rule.
+                            self.policy.vpn = vpn;
+                            if self.session.is_some() { self.stop_all_for_vpn().await; }
+                            self.vpn_check().await;
+                            None
+                        },
                         Some(Command::Shutdown) | None => break,
                     };
                     if let Some((key, Err(error))) = result { self.fail(&key, error); }
                 },
                 result = self.tasks.join_next_with_id(), if !self.tasks.is_empty() => {
                     if let Some(result) = result { self.resolution_finished(result); }
+                },
+                _ = vpn_tick.tick(), if self.policy.vpn.is_some() || self.jobs.lock().unwrap().iter().any(|j| j.waiting_vpn) => {
+                    self.vpn_check().await;
                 },
                 _ = tick.tick(), if self.session.is_some() => {
                     self.tick().await;
@@ -776,7 +880,7 @@ mod tests {
             key: key.into(), topic: 0, name: "Generated public-domain fixture".into(),
             magnet: format!("magnet:?xt=urn:btih:{key}"), folder: base.join(format!("torrent-{key}")),
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false,
         }
     }
 
@@ -899,7 +1003,7 @@ mod tests {
         let (source, torrent, source_handle, expected) = seeder(root).await;
         let policy = Policy {
             local_only: true, initial_peers: vec![source.listen_addr().unwrap()], download_bps: None,
-            seed_after_download: enabled, loopback_listener: true,
+            seed_after_download: enabled, loopback_listener: true, ..Default::default()
         };
         let mut worker = Worker::new(root.join("state"), Arc::new(Mutex::new(vec![])), policy);
         assert!(worker.session.is_none(), "fixture has no engine before explicit Start");
@@ -1138,6 +1242,101 @@ mod tests {
                 assert!(load_manifest(&store).is_empty());
                 source.stop().await;
             }
+        });
+    }
+
+    static FAKE_VPN: Mutex<Option<String>> = Mutex::new(None);
+    fn fake_vpn(preferred: &str) -> Option<String> {
+        FAKE_VPN.lock().unwrap().clone().filter(|vpn| preferred.is_empty() || vpn == preferred)
+    }
+
+    #[test]
+    fn vpn_only_downloads_wait_run_bound_to_the_vpn_and_stop_when_it_drops() {
+        runtime().block_on(async {
+            let temp = tempfile::tempdir().unwrap();
+            let (source, torrent, _, expected) = seeder(temp.path()).await;
+            let mut policy = local_policy(&source);
+            policy.vpn = Some(String::new());
+            policy.vpn_probe = fake_vpn;
+            *FAKE_VPN.lock().unwrap() = None;
+            let mut worker = Worker::new(temp.path().join("state"), Arc::new(Mutex::new(vec![])), policy);
+            let key = ready_fixture(&mut worker, &temp.path().join("downloads"), &torrent);
+
+            // No VPN: nothing connects, the transfer waits.
+            worker.start(&key).await.unwrap();
+            let job = worker.job(&key).unwrap();
+            assert!(job.waiting_vpn && job.state == State::Paused, "{:?}", job.state);
+            assert_eq!(job.label(), "Paused · waiting for your VPN");
+            assert!(worker.session.is_none() && worker.handles.is_empty());
+
+            // The VPN connects (here: loopback, where the authored seed listens): the session is
+            // bound to that interface and the transfer resumes by itself.
+            *FAKE_VPN.lock().unwrap() = Some("lo".into());
+            worker.vpn_check().await;
+            assert_eq!(worker.bound.as_deref(), Some("lo"));
+            assert!(!worker.job(&key).unwrap().waiting_vpn);
+            assert!(worker.handles.contains_key(&key));
+            worker.tick().await;
+
+            // The VPN drops mid-transfer: everything stops, the session closes.
+            *FAKE_VPN.lock().unwrap() = None;
+            worker.vpn_check().await;
+            let job = worker.job(&key).unwrap();
+            assert!(job.waiting_vpn && job.state == State::Paused);
+            assert!(worker.session.is_none() && worker.handles.is_empty() && worker.bound.is_none());
+
+            // Back: it resumes and finishes intact.
+            *FAKE_VPN.lock().unwrap() = Some("lo".into());
+            worker.vpn_check().await;
+            let job = complete_worker(&mut worker, &key).await;
+            assert!(!job.waiting_vpn);
+            let payload = std::fs::read(owned_folder(&job).unwrap().join("public-domain-fixture.bin")).unwrap();
+            assert_eq!(payload, expected);
+
+            // Turning the setting off lets downloads run without a VPN again.
+            *FAKE_VPN.lock().unwrap() = None;
+            worker.policy.vpn = None;
+            assert_eq!(worker.vpn_route(), Ok(None));
+            worker.shutdown().await;
+        });
+    }
+
+    /// Proof that the binding, not our bookkeeping, keeps traffic on the VPN. Runs in a private
+    /// network namespace whose "VPN" (dummy0) can't reach the local seed:
+    ///   unshare -rn sh -c 'ip link set lo up; ip link add dummy0 type dummy;
+    ///     ip addr add 10.9.9.1/24 dev dummy0; ip link set dummy0 up;
+    ///     PS5_NETNS_TEST=1 target/release/deps/ps5_launcher-* --ignored vpn_binding'
+    #[test]
+    #[ignore]
+    fn vpn_binding_keeps_traffic_off_every_other_route() {
+        if std::env::var_os("PS5_NETNS_TEST").is_none() { return; }
+        fn dummy(_: &str) -> Option<String> { Some("dummy0".into()) }
+        fn loopback(_: &str) -> Option<String> { Some("lo".into()) }
+        runtime().block_on(async {
+            let temp = tempfile::tempdir().unwrap();
+            let (source, torrent, _, expected) = seeder(temp.path()).await;
+            let mut policy = local_policy(&source);
+            policy.download_bps = None;
+            policy.vpn = Some(String::new());
+            policy.vpn_probe = dummy;
+            let mut worker = Worker::new(temp.path().join("state"), Arc::new(Mutex::new(vec![])), policy);
+            let key = ready_fixture(&mut worker, &temp.path().join("downloads"), &torrent);
+            worker.start(&key).await.unwrap();
+            assert_eq!(worker.bound.as_deref(), Some("dummy0"));
+            // The seed is reachable over loopback, but every socket is bound to dummy0.
+            for _ in 0..16 {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                worker.tick().await;
+            }
+            let job = worker.job(&key).unwrap();
+            assert_eq!((job.done, job.peers), (0, 0), "no byte may arrive outside the VPN interface");
+            // Control: the same transfer bound to loopback completes.
+            worker.policy.vpn_probe = loopback;
+            worker.vpn_check().await;
+            let job = complete_worker(&mut worker, &key).await;
+            let payload = std::fs::read(owned_folder(&job).unwrap().join("public-domain-fixture.bin")).unwrap();
+            assert_eq!(payload, expected);
+            worker.shutdown().await;
         });
     }
 

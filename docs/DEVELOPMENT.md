@@ -159,7 +159,8 @@ Use this feature only for content you are authorized to obtain and share.
 
 1. Open a release's **Game Hub → Download** (also available in Options).
 2. Choose the destination and **Look up metadata**. This contacts trackers,
-  DHT and peers and reveals your IP address, but downloads no payload files.
+  DHT and peers and reveals your IP address (your VPN's, with **Download only through a
+  VPN** on), but downloads no payload files.
 3. Review the file count, names and total size, then choose **Start download**.
   All files are downloaded; the first 100 names are shown for large torrents.
 4. Keep browsing or minimize the window. Open **Downloads** with the top-bar
@@ -202,6 +203,39 @@ does not disable uploads during downloads. Magnet discovery happens before a
 private flag is known; once metadata is known, the engine honors that flag for
 payload discovery. A private tracker may require authorized tracker credentials.
 Catalog seeders/leechers remain dated website snapshots, not live swarm totals.
+
+### Downloading only through a VPN
+
+**Settings → Download only through a VPN** hides the player's address with their own VPN
+(any provider; WireGuard, OpenVPN or another tunnel). [src/vpn.rs](../src/vpn.rs) finds VPN
+interfaces in `/sys/class/net` (WireGuard by `DEVTYPE=wireguard`, OpenVPN/tun by `tun_flags`,
+other layer-3 tunnels by type 65534; Tailscale, ZeroTier, Docker, libvirt and container
+bridges don't count, because they don't hide the address). A VPN is connected when it is up
+and has an address.
+
+While the setting is on, the torrent session is created with librqbit's `bind_device_name`
+(`SO_BINDTODEVICE`), so every socket it opens (peers over TCP and uTP, the listener, HTTP and
+UDP trackers, DHT, UPnP) can only use the VPN interface. If the VPN drops, connections fail;
+they never fall back to the real connection. The worker also checks the VPN every 2 s: when it
+goes away or changes, it stops every transfer and seed, marks them **Paused · waiting for your
+VPN**, and closes the session; when the VPN is back, it starts them again on a new session
+bound to it. Metadata lookups wait the same way. Pausing or cancelling a waiting transfer
+leaves it paused.
+
+`vpn_interface` in the config pins one interface (empty: any connected VPN). Settings can also
+manage the VPN through NetworkManager: **Your VPN** connects or disconnects a saved WireGuard
+or VPN connection, and **Add a VPN from a file** imports a provider's `.conf` or `.ovpn`
+(`nmcli connection import`) and connects it. VPNs connected by another app are used as they
+are. Tests: `vpn_only_downloads_wait_run_bound_to_the_vpn_and_stop_when_it_drops` (the kill
+switch, with a fake VPN), and `vpn_binding_keeps_traffic_off_every_other_route` (ignored; run
+it in a network namespace to prove the binding):
+
+```bash
+cargo test --release --offline --no-run
+unshare -rn sh -c 'ip link set lo up; ip link add dummy0 type dummy;
+  ip addr add 10.9.9.1/24 dev dummy0; ip link set dummy0 up;
+  PS5_NETNS_TEST=1 target/release/deps/ps5_launcher-* --ignored vpn_binding'
+```
 
 The native backend is pinned to **librqbit 9.0.1** with rustls, on a dedicated
 Tokio worker. See the [backend notes](rust-torrent-options.md) for APIs,

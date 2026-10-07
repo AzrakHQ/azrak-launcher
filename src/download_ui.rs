@@ -18,6 +18,14 @@ impl App {
         ui.set_download_title(game.name.clone().into());
         ui.set_download_path(self.cfg.lock().unwrap().download_dir.clone().into());
         ui.set_download_error("".into());
+        let privacy = match self.cfg.lock().unwrap().download_vpn() {
+            None => String::new(),
+            Some(preferred) => match crate::vpn::active(&preferred) {
+                Some(iface) => format!("It goes only through your VPN ({iface}): trackers, DHT and peers see the VPN's address, not yours."),
+                None => "Your VPN isn't connected: the download waits and starts through it once it is. Trackers, DHT and peers will see the VPN's address, not yours.".into(),
+            },
+        };
+        ui.set_download_privacy(privacy.into());
         self.open_downloads(None);
         ui.set_download_consent(true);
     }
@@ -111,7 +119,15 @@ impl App {
         ui.set_download_progress(progress);
         ui.set_download_badge(if active.is_empty() { format!("{seeding} seeding") }
             else if total == 0 { "Resolving metadata".to_string() } else { format!("{} active · {:.0}%", active.len(), progress * 100.0) }.into());
-        ui.set_download_summary(format!("{} transfers · {} downloading · {seeding} seeding · original files are kept", jobs.len(), active.len()).into());
+        let vpn = {
+            let cfg = self.cfg.lock().unwrap();
+            match cfg.download_vpn().map(|preferred| crate::vpn::active(&preferred)) {
+                Some(Some(iface)) => format!("Protected by your VPN · {iface} · "),
+                Some(None) => "Waiting for your VPN · ".to_string(),
+                None => String::new(),
+            }
+        };
+        ui.set_download_summary(format!("{vpn}{} transfers · {} downloading · {seeding} seeding · original files are kept", jobs.len(), active.len()).into());
         if self.overlay != Overlay::Downloads { return; }
         let rows: Vec<_> = jobs.iter().map(|job| {
             let install = installs.iter().find(|record| record.key == job.key);

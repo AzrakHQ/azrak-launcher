@@ -167,6 +167,7 @@ export component AppWindow inherits Window {
     in property <string> install-badge;
     in property <string> download-title;
     in property <string> download-error;
+    in property <string> download-privacy;
     in-out property <string> download-path;
     in-out property <bool> download-editing;
     in-out property <length> downloads-y;
@@ -1284,7 +1285,7 @@ export component AppWindow inherits Window {
         if root.overlay == 7 && root.download-consent: DownloadConsent {
             focus-path: root.download-focus-path;
             install: root.download-is-install;
-            title: root.download-title; error: root.download-error;
+            title: root.download-title; error: root.download-error; privacy: root.download-privacy;
             destination <=> root.download-path;
             confirm => { root.download-confirm(); }
             close => { root.download-close(); }

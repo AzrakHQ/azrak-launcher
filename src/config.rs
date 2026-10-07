@@ -33,6 +33,10 @@ pub struct Config {
     pub app_auto_update: bool,
     /// Catalog game ids whose artwork comes from RAWG (chosen per game in the Options menu).
     pub rawg_art: Vec<i64>,
+    /// Download (and seed) only through a VPN; stop when it isn't connected.
+    pub vpn_only: bool,
+    /// The VPN's network interface to use ("" = any connected VPN).
+    pub vpn_interface: String,
 }
 
 impl Default for Config {
@@ -58,6 +62,8 @@ impl Default for Config {
             shad_auto_update: true,
             app_auto_update: true,
             rawg_art: Vec::new(),
+            vpn_only: false,
+            vpn_interface: String::new(),
         }
     }
 }
@@ -102,6 +108,11 @@ impl Config {
                 crate::log!("could not save config: {e}");
             }
         }
+    }
+
+    /// "Download only through a VPN": `Some(preferred interface)` ("" = any connected VPN).
+    pub fn download_vpn(&self) -> Option<String> {
+        self.vpn_only.then(|| self.vpn_interface.clone())
     }
 
     pub fn emulator_path(&self) -> PathBuf {
