@@ -17,13 +17,14 @@ function option(name, fallback) {
   return args[index + 1];
 }
 if (args.includes('--help')) {
-  console.log('Usage: node list.mjs [--platform ps5|ps4] [--output path] [--max-pages 200] [--verification-timeout 180] [--headless] [--include-magnets] [--enrich-existing path]\n'
+  console.log('Usage: node list.mjs [--platform ps5|ps4|linux|wine] [--output path] [--max-pages 200] [--verification-timeout 180] [--headless] [--include-magnets] [--enrich-existing path] [--concurrency 1-4]\n'
     + 'Reads listing/topic HTML only. Complete verification/login manually. Never opens magnet links or downloads torrents.');
   process.exit(0);
 }
 const platform = platformFrom(args);
 const output = resolve(option('--output', fileURLToPath(new URL(`../../dist/rutracker/${platform.key}-topics.json`, import.meta.url))));
 const maxPages = Number(option('--max-pages', '200'));
+const concurrency = Number(option('--concurrency', '1'));
 const headless = args.includes('--headless');
 const existingPath = option('--enrich-existing', null);
 const includeMagnets = args.includes('--include-magnets') || existingPath !== null;
@@ -103,7 +104,7 @@ try {
     if (existing) { pending.clear(); break; }
     pages.push(result);
     for (const next of result.pageUrls) if (!visited.has(next)) pending.add(next);
-    console.log(`Page ${visited.size}: ${result.topics.length} ${platform.tag} topics; ${pending.size} pages remaining`);
+    console.log(`Page ${visited.size}: ${result.topics.length} ${platform.label} topics; ${pending.size} pages remaining`);
     // Sequential, polite requests. This is rate limiting, not challenge solving.
     if (pending.size) await new Promise(done => setTimeout(done, 1500));
   }
@@ -112,7 +113,7 @@ try {
     const ids = base.topics.filter(topic => topic.magnet_status !== 'available' || topic.game_info_status !== 'available').map(topic => topic.id);
     const batches = [];
     for (let offset = 0; offset < ids.length && !interrupted; offset += 20) {
-      const batch = await page.evaluate(collectMagnetBatch, { topicIds: ids.slice(offset, offset + 20) });
+      const batch = await page.evaluate(collectMagnetBatch, { topicIds: ids.slice(offset, offset + 20), concurrency });
       batches.push(batch);
       enriched = applyMagnets(base, batches);
       console.log(`Magnets: ${enriched.magnet_collection.available}/${base.topics.length}; ${enriched.magnet_collection.remaining} remaining`);
@@ -135,7 +136,7 @@ let report = existing ? { ...existing } : {
   platform: platform.key,
   collected_at: new Date().toISOString(),
   complete,
-  scope: `${platform.tag}-tagged topic listings in forum ${platform.forumId}; not a count of distinct games or an atomic site-wide snapshot`,
+  scope: `${platform.label} release topic listings in forum ${platform.forumId}; not a count of distinct games or an atomic site-wide snapshot`,
   pages_visited: [...visited],
   pages_remaining: [...pending],
   failures,

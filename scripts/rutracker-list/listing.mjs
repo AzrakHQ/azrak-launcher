@@ -24,12 +24,14 @@ export function readListing({ forumId = '546', tag = 'PS5' } = {}) {
     const title = clean(anchor.textContent);
     const url = new URL(anchor.getAttribute('href'), base);
     const id = url.searchParams.get('t');
+    const row = anchor.closest('tr');
+    const released = tag ? title.toUpperCase().startsWith(`[${tag.toUpperCase()}]`)
+      : Boolean(row?.querySelector('.vf-col-tor a.dl-stub')); // untagged forums: topics with a torrent
     if (url.origin !== base.origin || url.pathname !== '/forum/viewtopic.php'
-        || !/^\d+$/.test(id || '') || !title.toUpperCase().startsWith(`[${tag.toUpperCase()}]`)) {
+        || !/^\d+$/.test(id || '') || !released) {
       skipped++;
       continue;
     }
-    const row = anchor.closest('tr');
     if (topics.has(id)) continue;
     topics.set(id, {
       id,

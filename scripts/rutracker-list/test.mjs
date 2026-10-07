@@ -146,3 +146,29 @@ test('magnet enrichment: official links, missing links, stopping and metadata pr
     assert.equal(complete.complete, true);
   } finally { await browser.close(); }
 });
+test('the public API fills magnets and peers without topic pages', async () => {
+  const { applyApi } = await import('./api.mjs');
+  const api = {
+    format: { topic_id: ['tor_status', 'seeders', 'reg_time', 'tor_size_bytes', 'keeping_priority', 'keepers', 'seeder_last_seen', 'info_hash', 'topic_poster', 'leechers'] },
+    update_time: 1791382052,
+    result: {
+      1: [2, 5, 1202587218, 628166656, 1, [], 0, '34892e6009191aa140adaf440ec88f0cbfb5d51d', 9, 2],
+      2: [2, 7, 1202587218, 10, 1, [], 0, 'ABCDEF', 9, 0],
+      3: [2, 1, 1202587218, 10, 1, [], 0, '6DFEE84456585BB461935A46FC0509D6EE35C7A9', 9, 0],
+      99: [2, 1, 1202587218, 10, 1, [], 0, '6DFEE84456585BB461935A46FC0509D6EE35C7A9', 9, 0],
+    },
+  };
+  const catalog = { topics: [
+    { id: '1', title: 'A', seeders: 0 },
+    { id: '2', title: 'B' },
+    { id: '3', title: 'C', magnet: 'magnet:?xt=urn:btih:FROMPAGE', magnet_status: 'available' },
+    { id: '4', title: 'D', magnet_status: 'not_checked' },
+  ] };
+  const { catalog: out, matched, unlisted } = applyApi(catalog, api);
+  assert.deepEqual([matched, unlisted], [3, 1]);
+  assert.equal(out.topics[0].magnet, 'magnet:?xt=urn:btih:34892E6009191AA140ADAF440EC88F0CBFB5D51D&tr=http%3A%2F%2Fbt3.t-ru.org%2Fann%3Fmagnet');
+  assert.deepEqual([out.topics[0].seeders, out.topics[0].leechers, out.topics[0].size_bytes], [5, 2, 628166656]);
+  assert.equal(out.topics[1].magnet, null, 'a malformed hash gives no magnet');
+  assert.equal(out.topics[2].magnet, 'magnet:?xt=urn:btih:FROMPAGE', "the page's own magnet wins");
+  assert.equal(out.topics[3].magnet_status, 'not_checked', 'topics missing from the API are untouched');
+});

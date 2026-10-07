@@ -1,8 +1,9 @@
 /** Runs in an ordinary browser page; reads HTML links without following magnets. */
-export async function collectMagnetBatch({ topicIds, delayMs = 1500 }) {
+export async function collectMagnetBatch({ topicIds, delayMs = 1500, concurrency = 1 }) {
   if (document.location.origin !== 'https://rutracker.net') throw new Error('Expected a RuTracker browser page');
   if (!Array.isArray(topicIds) || topicIds.some(id => !/^\d+$/.test(id))
-      || !Number.isFinite(delayMs) || delayMs < 0) throw new Error('Invalid magnet collection arguments');
+      || !Number.isFinite(delayMs) || delayMs < 0
+      || !Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 4) throw new Error('Invalid magnet collection arguments');
   const results = [];
   const ids = [...new Set(topicIds)];
   function extractInfo(doc, base) {
@@ -69,7 +70,19 @@ export async function collectMagnetBatch({ topicIds, delayMs = 1500 }) {
     info.release_summary = summary.filter(Boolean).join(' · ');
     return info;
   }
-  for (const id of ids) {
+  const ok = result => ['available', 'not_found'].includes(result.magnet_status);
+  // A few topics at a time (at most 4), in order; stop at the first failure.
+  for (let start = 0; start < ids.length; start += concurrency) {
+    const group = await Promise.all(ids.slice(start, start + concurrency).map(readTopic));
+    const failed = group.findIndex(result => !ok(result));
+    results.push(...(failed < 0 ? group : group.slice(0, failed + 1)));
+    if (failed >= 0) break;
+    if (results.length < ids.length && delayMs) await new Promise(done => setTimeout(done, delayMs));
+  }
+  return { results, complete: results.length === ids.length && results.every(ok),
+    collected_at: new Date().toISOString() };
+
+  async function readTopic(id) {
     let result = { id, magnet: null, magnet_status: 'not_found', game_info: null, game_info_status: 'not_found' };
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45_000);
@@ -110,14 +123,9 @@ export async function collectMagnetBatch({ topicIds, delayMs = 1500 }) {
     } finally {
       clearTimeout(timeout);
     }
-    if (!['available', 'not_found'].includes(result.magnet_status)) result.game_info_status = result.magnet_status;
-    results.push(result);
-    if (!['available', 'not_found'].includes(result.magnet_status)) break;
-    if (results.length < ids.length && delayMs) await new Promise(done => setTimeout(done, delayMs));
+    if (!ok(result)) result.game_info_status = result.magnet_status;
+    return result;
   }
-  return { results, complete: results.length === ids.length
-    && results.every(result => ['available', 'not_found'].includes(result.magnet_status)),
-  collected_at: new Date().toISOString() };
 }
 
 /** Normalize observed header variants and exclude prose mistaken for labels. */

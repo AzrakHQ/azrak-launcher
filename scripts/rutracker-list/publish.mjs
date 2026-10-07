@@ -15,7 +15,7 @@ if (!report.complete || report.translation?.language !== 'en'
     || report.topic_count !== report.topics.length
     || new Set(report.topics.map(topic => topic.id)).size !== report.topics.length
     || report.source !== platform.source) {
-  throw new Error(`Only a complete, English, deduplicated ${platform.tag} forum snapshot can be bundled`);
+  throw new Error(`Only a complete, English, deduplicated ${platform.label} forum snapshot can be bundled`);
 }
 await mkdir(dirname(output), { recursive: true });
 await writeFile(`${output}.tmp`, bytes);
