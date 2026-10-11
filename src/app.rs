@@ -132,6 +132,14 @@ pub struct Target {
     pub local: Option<usize>,
 }
 
+/// See App::catalog_anchor.
+pub struct CatalogAnchor {
+    hub: Option<(Option<i64>, Option<usize>)>,
+    menu: Option<(Option<i64>, Option<usize>)>,
+    grid: Option<i64>,
+    grid_index: Option<i32>,
+}
+
 #[derive(Clone, Debug)]
 pub struct ActionDef {
     pub id: &'static str,
@@ -449,7 +457,10 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
             app.start_enrich();
         }
         // New releases are published daily; a launcher left open for days still picks them up.
-        app.catalog_timer.start(slint::TimerMode::Repeated, Duration::from_secs_f64(crate::catalog::CATALOG_TTL),
+        // PS5_LAUNCHER_CATALOG_INTERVAL (seconds): for testing reloads while something is open.
+        let every = std::env::var("PS5_LAUNCHER_CATALOG_INTERVAL").ok().and_then(|s| s.parse::<f64>().ok()).filter(|s| *s >= 1.0)
+            .unwrap_or(crate::catalog::CATALOG_TTL);
+        app.catalog_timer.start(slint::TimerMode::Repeated, Duration::from_secs_f64(every),
             || with_app(|app| app.start_sync(false)));
     });
 
@@ -772,6 +783,60 @@ impl App {
 
     // ------------------------------------------------------------------ background jobs
 
+    /// What's open or focused, by topic ID, so a catalog reload can find it again.
+    fn catalog_anchor(&self) -> CatalogAnchor {
+        let id = |t: Option<Target>| t.map(|t| (t.game.and_then(|g| self.games.get(g)).map(|g| g.g.id), t.local));
+        // The Library card in focus: now, or saved under an overlay to return to.
+        let grid = if self.view == 1 && self.zone == Z_GRID && self.overlay == Overlay::None { Some(self.idx) }
+            else { self.stack.iter().find(|(_, zone, _)| *zone == Z_GRID).map(|(_, _, idx)| *idx) };
+        CatalogAnchor {
+            hub: id(self.hub),
+            menu: id(self.menu_target),
+            grid: grid.and_then(|i| self.filtered.get(i as usize)).and_then(|g| self.games.get(*g)).map(|g| g.g.id),
+            grid_index: grid,
+        }
+    }
+
+    /// After a reload: point the Hub and the Options menu at the same games again, or close them
+    /// if their game is gone (and isn't installed).
+    fn restore_targets(&mut self, anchor: &CatalogAnchor) {
+        let find = |app: &App, t: Option<(Option<i64>, Option<usize>)>| t.map(|(id, local)| Target {
+            game: id.and_then(|id| app.games.iter().position(|g| g.g.id == id)),
+            local: local.filter(|l| *l < app.locals.len()),
+        });
+        self.hub = find(self, anchor.hub);
+        self.menu_target = find(self, anchor.menu);
+        let gone = |t: Option<Target>| t.is_some_and(|t| t.game.is_none() && t.local.is_none());
+        if gone(self.hub) || gone(self.menu_target) {
+            self.hub = None;
+            self.menu_target = None;
+            while self.overlay != Overlay::None && self.overlay != Overlay::Settings && self.overlay != Overlay::Downloads {
+                self.back();
+            }
+        }
+    }
+
+    /// After a reload and push_all: keep the same Library card focused, or the nearest one if it's
+    /// gone (the list may now be shorter than where the focus was).
+    fn restore_grid_focus(&mut self, anchor: &CatalogAnchor) {
+        let Some(old) = anchor.grid_index else { return };
+        let found = anchor.grid.and_then(|id| self.filtered.iter().position(|g| self.games[*g].g.id == id)
+            .or_else(|| self.filtered.iter().position(|g| self.groups.releases(*g).iter().any(|m| self.games[*m].g.id == id))));
+        let pos = found.unwrap_or_else(|| (old.max(0) as usize).min(self.filtered.len().saturating_sub(1)));
+        // The scroll position belongs to the old list: keep the card in view (and within the list).
+        if self.view == 1 && self.zone == Z_GRID && self.overlay == Overlay::None {
+            self.set_focus(Z_GRID, pos as i32);
+            self.set_grid_scroll(self.grid_scroll, 0);
+            self.ensure_grid_visible();
+        } else if let Some(entry) = self.stack.iter_mut().find(|(_, zone, _)| *zone == Z_GRID) {
+            entry.2 = pos as i32;
+            let top = (pos / self.cols.max(1)) as f32 * self.row_h;
+            if top < self.grid_scroll || top > self.grid_scroll + self.row_h * 2.0 {
+                self.set_grid_scroll(top, 0);
+            }
+        }
+    }
+
     /// Fetch the published catalog and reload. `by_hand` (Settings) always reports back; the
     /// automatic checks only speak up when there are new releases.
     pub fn start_sync(&mut self, by_hand: bool) {
@@ -790,8 +855,13 @@ impl App {
                         let first = known.is_empty();
                         let new = file.games.iter().filter(|g| !known.contains(&g.id)).count();
                         app.catalog_updated = file.updated;
+                        // Games are held by position; a reload adds and removes some, so what's
+                        // open or focused is found again by topic ID.
+                        let anchor = app.catalog_anchor();
                         app.set_catalog(file.games);
+                        app.restore_targets(&anchor);
                         app.push_all();
+                        app.restore_grid_focus(&anchor);
                         if !first && new > 0 {
                             app.toast(&format!("{new} new release{} in the Library", if new == 1 { "" } else { "s" }),
                                 &format!("{} games · {} releases", app.groups.members.len(), app.games.len()), 1);

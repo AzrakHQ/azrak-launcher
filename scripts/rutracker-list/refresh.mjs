@@ -34,6 +34,14 @@ const sizeLabel = bytes => {
   return `${(bytes / scale).toFixed(2)} ${unit}`;
 };
 
+/** "11.88 GB" → bytes (RuTracker's GB is 2^30), or null. */
+export function labelBytes(label) {
+  const match = /([\d.,]+)\s*(TB|GB|MB|KB)/i.exec(String(label || '').replace(/\u00a0/g, ' '));
+  if (!match) return null;
+  const power = { KB: 10, MB: 20, GB: 30, TB: 40 }[match[2].toUpperCase()];
+  return Number(match[1].replace(',', '.')) * 2 ** power;
+}
+
 /**
  * Apply the feed and the API to a catalog. New topics need both (a title and a torrent); topics
  * the API no longer lists were deleted or moved, and leave — unless the API answered for less
@@ -58,7 +66,14 @@ export function refreshCatalog(catalog, feed, api, platform, now = new Date()) {
   const trusted = listed >= known.size * 0.8;
   const topics = [...known.values()].filter(topic => !trusted || api.result[topic.id]);
   const { catalog: updated } = applyApi({ ...catalog, topics }, api, { replaceChanged: true });
-  for (const topic of updated.topics) topic.size ??= sizeLabel(topic.size_bytes);
+  // The API's byte count is authoritative: a label that no longer matches it (a re-upload of a
+  // different size, or none yet) is replaced; one that matches keeps RuTracker's own wording.
+  for (const topic of updated.topics) {
+    const shown = labelBytes(topic.size);
+    if (topic.size_bytes > 0 && !(shown && Math.abs(shown - topic.size_bytes) <= topic.size_bytes * 0.01)) {
+      topic.size = sizeLabel(topic.size_bytes);
+    }
+  }
   return {
     catalog: { ...updated, topic_count: updated.topics.length, refreshed_at: now.toISOString() },
     added, renamed, removed: known.size - topics.length,

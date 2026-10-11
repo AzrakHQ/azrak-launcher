@@ -201,6 +201,14 @@ test('the daily refresh adds feed releases, follows re-uploads and drops deleted
   assert.equal(byId[3].magnet, `magnet:?xt=urn:btih:${'3'.repeat(40)}`, 'an unchanged page magnet is kept');
   assert.deepEqual([byId[7].size, byId[7].magnet_status, byId[7].game_info, byId[7].seeders], ['6.17 GB', 'available', null, 3]);
   assert.equal(catalog.topic_count, catalog.topics.length);
+  // Sizes: a re-upload of a different size gets a new label (the review's 1 GB → 8 GiB case);
+  // a label that already matches the bytes keeps RuTracker's wording.
+  const sized = refreshCatalog({ topics: [
+    { id: '1', title: '[PS5] A', size: '1.00 GB', magnet: null },
+    { id: '2', title: '[PS5] B', size: '6.2 GB', magnet: null },
+  ] }, [], { ...api, result: { 1: row('1'.repeat(40)).map((v, i) => i === 3 ? 8 * 2 ** 30 : v),
+    2: row('2'.repeat(40)).map((v, i) => i === 3 ? 6.2 * 2 ** 30 : v) } }, platform).catalog;
+  assert.deepEqual(sized.topics.map(t => t.size), ['8.00 GB', '6.2 GB']);
   // A broken API answer (most topics missing) never empties the catalog.
   const broken = { ...api, result: { 1: api.result[1] } };
   assert.equal(refreshCatalog({ topics, topic_count: 7 }, [], broken, platform).catalog.topics.length, 7);
