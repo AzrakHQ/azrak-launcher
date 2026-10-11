@@ -1,6 +1,17 @@
 //! Installation is explicit and separate from downloading. The worker never runs payload code.
 use crate::{app::*, downloads, installer, util};
 
+/// What a download can be installed from: archives on both consoles; PKG packages only for PS4,
+/// whose PKG extractor unpacks the game, its update and its DLC for shadPS4.
+fn install_note(platform: Option<crate::platform::Platform>) -> &'static str {
+    use crate::platform::Platform;
+    match platform {
+        Some(Platform::Ps4) => "Folders, exFAT images and RAR, ZIP, 7z or TAR archives (these depend on the system's libarchive; password-protected ones aren't supported). PS4 PKG packages are unpacked for shadPS4, with their update and DLC. Installing checks the game's structure, not that its content is authentic, and never runs the downloaded files.",
+        Some(Platform::Ps5) => "Folders, exFAT images and RAR, ZIP, 7z or TAR archives (these depend on the system's libarchive; password-protected ones aren't supported). PS5 PKG packages can't be installed: choose a release of this game that isn't a PKG. Installing checks the game's structure, not that its content is authentic, and never runs the downloaded files.",
+        None => "Folders, exFAT images, RAR, ZIP, 7z or TAR archives, and PS4 PKG packages (not PS5 PKG). Installing checks the game's structure, not that its content is authentic, and never runs the downloaded files.",
+    }
+}
+
 impl App {
     pub fn download_for_target(&self, target: Target) -> Option<downloads::Job> {
         let game = &self.games.get(target.game?)?.g;
@@ -20,6 +31,8 @@ impl App {
         ui.set_download_title(job.name.into());
         ui.set_download_path(self.cfg.lock().unwrap().install_dir.clone().into());
         ui.set_download_error("".into());
+        let platform = self.games.iter().find(|game| game.g.id == job.topic).map(|game| game.g.platform);
+        ui.set_download_install_note(install_note(platform).into());
         ui.set_download_consent(true);
     }
 

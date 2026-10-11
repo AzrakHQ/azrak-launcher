@@ -120,6 +120,8 @@ export component DownloadConsent inherits Rectangle {
     in property <string> error;
     /// Who sees your IP address: empty for no VPN.
     in property <string> privacy;
+    /// What this download can be installed from (it differs for PS4 and PS5).
+    in property <string> install-note;
     in-out property <string> destination;
     callback confirm();
     callback close();
@@ -138,25 +140,25 @@ export component DownloadConsent inherits Rectangle {
         VerticalLayout {
             padding: (40px * S.k); spacing: (20px * S.k);
             Text { text: root.install ? "Install game" : "Set up a download"; font-size: (38px * S.k); font-weight: 600; color: Theme.text; }
-            Text { text: root.title; font-size: (24px * S.k); color: Theme.text2; wrap: word-wrap; max-height: (76px * S.k); overflow: elide; }
+            Text { text: root.title; font-size: (24px * S.t); color: Theme.text2; wrap: word-wrap; max-height: (76px * S.t); overflow: elide; }
             Text {
                 text: root.install ? "Extract or copy this completed download into your game library. Installation runs in the background, checks free space and validates the game folder before publishing it. Existing games are never overwritten; original downloads are kept." : "Only download content you are authorized to obtain and share. " + (root.privacy != "" ? root.privacy : "Looking up this magnet contacts trackers, DHT and peers and reveals your IP address, even before its private flag is known.") + " Transfers upload pieces, capped at 128 KiB/s. After completion, seeding continues by default while the launcher is open; switch it off in Settings or stop an individual seed in Downloads.";
-                font-size: (19px * S.k); color: Theme.text2; wrap: word-wrap;
+                font-size: (19px * S.t); color: Theme.text2; wrap: word-wrap;
             }
-            Text { text: root.install ? "Game library destination · confirm where the game will be installed" : "Destination · an owned subfolder will be created here"; font-size: (18px * S.k); color: Theme.text3; }
+            Text { text: root.install ? "Game library destination · confirm where the game will be installed" : "Destination · an owned subfolder will be created here"; font-size: (18px * S.t); color: Theme.text3; }
             Rectangle {
-                height: (56px * S.k); background: #05091499; border-radius: (12px * S.k);
+                height: (56px * S.t); background: #05091499; border-radius: (12px * S.k);
                 border-width: 1px; border-color: Theme.line;
                 destination-input := TextInput {
                     x: (16px * S.k); width: parent.width - (32px * S.k); height: parent.height;
-                    text <=> root.destination; single-line: true; font-size: (20px * S.k); color: Theme.text;
+                    text <=> root.destination; single-line: true; font-size: (20px * S.t); color: Theme.text;
                     vertical-alignment: center;
                     changed has-focus => { root.editing(self.has-focus); }
                     accepted => { root.edit-done(); }
                 }
             }
-            Text { text: root.install ? "RAR, ZIP, 7z and TAR support depends on system libarchive. Password-protected archives and PKG packages are unsupported. Installation validates structure, not content authenticity, and never executes payload files." : "First: retrieve metadata only. Then: review the file list and size and choose Start download. Installation is a separate explicit step."; font-size: (18px * S.k); color: #8dbaff; wrap: word-wrap; }
-            if root.error != "": Text { text: root.error; font-size: (17px * S.k); color: Theme.danger; wrap: word-wrap; }
+            Text { text: root.install ? root.install-note : "First: retrieve metadata only. Then: review the file list and size and choose Start download. Installation is a separate explicit step."; font-size: (18px * S.t); color: #8dbaff; wrap: word-wrap; }
+            if root.error != "": Text { text: root.error; font-size: (17px * S.t); color: Theme.danger; wrap: word-wrap; }
             Rectangle { vertical-stretch: 1; }
             HorizontalLayout {
                 spacing: (18px * S.k);

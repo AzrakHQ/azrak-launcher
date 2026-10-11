@@ -168,6 +168,7 @@ export component AppWindow inherits Window {
     in property <string> download-title;
     in property <string> download-error;
     in property <string> download-privacy;
+    in property <string> download-install-note;
     in-out property <string> download-path;
     in-out property <bool> download-editing;
     in-out property <length> downloads-y;
@@ -1104,11 +1105,14 @@ export component AppWindow inherits Window {
             animate background { duration: 260ms; }
             TouchArea { clicked => { root.click(Zone.settings, -1); } }
             Rectangle {
-                x: root.width - (760px * S.k) + (entered ? 0 : (120px * S.k));
+                // Sized by the text scale, so on a small window the panel grows with its text
+                // (and wraps it as at full size) instead of squeezing it.
+                property <length> panel-width: min(root.width, (760px * S.t));
+                x: root.width - self.panel-width + (entered ? 0 : (120px * S.k));
                 opacity: entered ? 1 : 0;
                 animate x { duration: 420ms; easing: ease-out-expo; }
                 animate opacity { duration: 220ms; easing: ease-out-quad; }
-                width: (760px * S.k);
+                width: self.panel-width;
                 background: @linear-gradient(180deg, #111a33 0%, #0a1024 100%);
                 border-width: 1px;
                 border-color: Theme.line;
@@ -1119,7 +1123,7 @@ export component AppWindow inherits Window {
                     sheet := VerticalLayout {
                         x: 0;
                         y: 0;
-                        width: (760px * S.k);
+                        width: parent.width;
                         height: self.preferred-height;
                         padding-left: (56px * S.k);
                         padding-right: (56px * S.k);
@@ -1132,13 +1136,13 @@ export component AppWindow inherits Window {
                             BackButton { pad: root.pad-hints; clicked => { root.click(Zone.settings, -1); } }
                         }
                         Text { text: "Settings"; font-size: (44px * S.k); font-weight: 600; color: Theme.text; }
-                        Text { text: "Changes are saved automatically"; font-size: (18px * S.k); color: Theme.text3; }
+                        Text { text: "Changes are saved automatically"; font-size: (18px * S.t); color: Theme.text3; }
                         for s[i] in root.settings: VerticalLayout {
                             property <bool> f: root.zone == Zone.settings && root.idx == i;
                             property <length> r: (14px * S.k);
                             padding-top: s.kind == 0 ? (s.label == "" ? (20px * S.k) : (36px * S.k)) : 0;
                             padding-bottom: s.kind == 0 ? (12px * S.k) : 0;
-                            if s.kind == 0 && s.label != "": Text { text: s.label; font-size: (16px * S.k); font-weight: 600; letter-spacing: (2px * S.k); color: Theme.text3; }
+                            if s.kind == 0 && s.label != "": Text { text: s.label; font-size: (16px * S.t); font-weight: 600; letter-spacing: (2px * S.k); color: Theme.text3; }
                             // One row of a section card: rows between two headers share a card.
                             if s.kind != 0: Rectangle {
                                 background: f ? (s.danger ? #ff5a6a33 : #ffffff1f) : (s.danger ? #ff5a6a0d : #ffffff0b);
@@ -1167,15 +1171,17 @@ export component AppWindow inherits Window {
                                         min-height: (36px * S.k);
                                         Text {
                                             text: s.label;
-                                            font-size: (19px * S.k);
+                                            font-size: (19px * S.t);
                                             font-weight: s.kind == 4 ? 600 : 500;
                                             color: s.danger ? #ffb3bb : Theme.text;
                                             vertical-alignment: center;
                                             horizontal-stretch: s.kind == 1 ? 0 : 1;
+                                            // Never push the switch or value off the card.
+                                            overflow: elide;
                                         }
                                         if s.kind == 1 && root.edit-index != i: Text {
                                             text: s.value != "" ? s.value : (s.secret ? "Not set" : "—");
-                                            font-size: (17px * S.k);
+                                            font-size: (17px * S.t);
                                             font-family: "DejaVu Sans Mono";
                                             color: s.value != "" ? Theme.text2 : Theme.text3;
                                             horizontal-alignment: right;
@@ -1189,19 +1195,19 @@ export component AppWindow inherits Window {
                                             spacing: (8px * S.k);
                                             alignment: end;
                                             Image { source: Icons.chevl; colorize: f ? Theme.text : Theme.text3; width: (22px * S.k); height: (22px * S.k); y: (7px * S.k); }
-                                            Text { text: s.value; font-size: (19px * S.k); color: Theme.text; vertical-alignment: center; }
+                                            Text { text: s.value; font-size: (19px * S.t); color: Theme.text; vertical-alignment: center; }
                                             Image { source: Icons.chevr; colorize: f ? Theme.text : Theme.text3; width: (22px * S.k); height: (22px * S.k); y: (7px * S.k); }
                                         }
                                         if s.kind == 4 && s.value != "": Text {
                                             text: s.value;
-                                            font-size: (17px * S.k);
+                                            font-size: (17px * S.t);
                                             font-weight: s.value-kind == 3 ? 600 : 400;
                                             color: s.value-kind == 1 ? Theme.ok : s.value-kind == 2 ? Theme.danger : s.value-kind == 3 ? #7ab4ff : Theme.text3;
                                             vertical-alignment: center;
                                         }
                                     }
                                     if s.kind == 1 && root.edit-index == i: Rectangle {
-                                        height: (50px * S.k);
+                                        height: (50px * S.t);
                                         border-radius: (10px * S.k);
                                         background: #00000040;
                                         border-width: 1px;
@@ -1213,7 +1219,7 @@ export component AppWindow inherits Window {
                                             text <=> root.edit-text;
                                             single-line: true;
                                             input-type: s.secret ? InputType.password : InputType.text;
-                                            font-size: (18px * S.k);
+                                            font-size: (18px * S.t);
                                             color: Theme.text;
                                             vertical-alignment: center;
                                             font-family: "DejaVu Sans Mono";
@@ -1223,8 +1229,7 @@ export component AppWindow inherits Window {
                                     }
                                     if s.hint != "": Text {
                                         text: s.hint;
-                                        width: (612px * S.k);
-                                        font-size: (15px * S.k);
+                                        font-size: (15px * S.t);
                                         wrap: word-wrap;
                                         color: s.hint-kind == 1 ? Theme.ok : s.hint-kind == 2 ? Theme.danger : Theme.text3;
                                     }
@@ -1235,7 +1240,7 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             padding-top: (36px * S.k);
                             spacing: (12px * S.k);
-                            Text { text: "ABOUT"; font-size: (16px * S.k); font-weight: 600; letter-spacing: (2px * S.k); color: Theme.text3; }
+                            Text { text: "ABOUT"; font-size: (16px * S.t); font-weight: 600; letter-spacing: (2px * S.k); color: Theme.text3; }
                             Rectangle {
                                 border-radius: (14px * S.k);
                                 background: #ffffff0b;
@@ -1253,9 +1258,9 @@ export component AppWindow inherits Window {
                                         alignment: center;
                                         spacing: (4px * S.k);
                                         horizontal-stretch: 1;
-                                        Text { text: "PS5 Launcher"; font-size: (19px * S.k); font-weight: 600; color: Theme.text; }
-                                        Text { text: "Version " + root.app-version + " · Linux"; font-size: (15px * S.k); color: Theme.text3; }
-                                        Text { text: "PS5 games on KytyPS5 · PS4 games on shadPS4"; font-size: (15px * S.k); color: Theme.text3; }
+                                        Text { text: "PS5 Launcher"; font-size: (19px * S.t); font-weight: 600; color: Theme.text; }
+                                        Text { text: "Version " + root.app-version + " · Linux"; font-size: (15px * S.t); color: Theme.text3; }
+                                        Text { text: "PS5 games on KytyPS5 · PS4 games on shadPS4"; font-size: (15px * S.t); color: Theme.text3; }
                                     }
                                     VerticalLayout {
                                         alignment: center;
@@ -1285,7 +1290,7 @@ export component AppWindow inherits Window {
         if root.overlay == 7 && root.download-consent: DownloadConsent {
             focus-path: root.download-focus-path;
             install: root.download-is-install;
-            title: root.download-title; error: root.download-error; privacy: root.download-privacy;
+            title: root.download-title; error: root.download-error; privacy: root.download-privacy; install-note: root.download-install-note;
             destination <=> root.download-path;
             confirm => { root.download-confirm(); }
             close => { root.download-close(); }

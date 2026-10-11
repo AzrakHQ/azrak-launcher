@@ -350,22 +350,24 @@ impl App {
     }
 
     pub fn scroll_settings(&mut self) {
-        // Estimated row heights matching app.slint.
-        let mut y = 64.0 + 54.0 + 24.0;
+        // Estimated row heights matching app.slint. Text (and the panel's width) follows the text
+        // scale, which on small windows is larger than the layout scale.
+        let r = (self.scale.max(crate::present::TEXT_SCALE_MIN) / self.scale).max(1.0);
+        let mut y = 64.0 + (54.0 + 24.0) * r;
         let mut target = 0.0;
-        for (i, r) in self.settings_rows.iter().enumerate() {
+        for (i, row) in self.settings_rows.iter().enumerate() {
             if i as i32 == self.idx {
                 target = y;
             }
-            // Hints wrap at about 76 characters (612 px at 15 px).
-            let hint_lines = r.hint.chars().count().div_ceil(76) as f32;
-            y += match r.kind {
-                0 if r.label.is_empty() => 20.0 + 12.0,
-                0 => 36.0 + 20.0 + 12.0,
-                _ => 64.0 + if hint_lines > 0.0 { 4.0 + hint_lines * 19.0 } else { 0.0 } + if self.edit_index == i as i32 { 54.0 } else { 0.0 },
+            // Hints wrap at about 76 characters (the panel's width at 15 px, at any scale).
+            let hint_lines = row.hint.chars().count().div_ceil(76) as f32;
+            y += match row.kind {
+                0 if row.label.is_empty() => 20.0 + 12.0,
+                0 => 36.0 + 20.0 * r + 12.0,
+                _ => 28.0 + 36.0 * r + if hint_lines > 0.0 { 4.0 + hint_lines * 19.0 * r } else { 0.0 } + if self.edit_index == i as i32 { 54.0 * r } else { 0.0 },
             };
         }
-        y += 36.0 + 20.0 + 12.0 + 180.0; // About card under the last row
+        y += 36.0 + (20.0 + 180.0) * r + 12.0; // About card under the last row
         let (_, h) = self.logical_size();
         let max = (y + 120.0 - h).max(0.0);
         // The last row reveals the About block, which is not focusable itself.

@@ -10,6 +10,9 @@ import "../assets/fonts/Inter-Bold.ttf";
 // (set from Rust on every resize, so any screen size or monitor works).
 export global S {
     in property <float> k: 1.0;
+    // Text that must stay readable (Settings, dialogs) uses t: k, but never below 0.75, like the
+    // Library's type scale. On a small window the layout shrinks further than the words.
+    in property <float> t: 1.0;
 }
 
 export global Theme {

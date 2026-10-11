@@ -55,6 +55,9 @@ fn logo_size(img: &Image, max_w: f32, max_h: f32) -> (f32, f32) {
     (s.width as f32 * k, s.height as f32 * k)
 }
 
+/// Smallest text scale for Settings and dialogs (the Library uses the same floor).
+pub const TEXT_SCALE_MIN: f32 = 0.75;
+
 impl App {
     fn get_img(&mut self, r: &Option<ImgReq>, p: u8) -> Option<Image> {
         let r = r.as_ref()?;
@@ -571,6 +574,7 @@ impl App {
         }
         self.scale = k;
         ui.global::<crate::S>().set_k(k);
+        ui.global::<crate::S>().set_t(k.max(TEXT_SCALE_MIN));
         true
     }
 
