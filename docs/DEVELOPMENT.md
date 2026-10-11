@@ -254,8 +254,14 @@ What the verdicts check, for the strongest non-software GPU:
 
 | | PS5 games (KytyPS5) | PS4 games (shadPS4) |
 |---|---|---|
-| **Won't start** | no GPU, no Vulkan 1.3, or missing what KytyPS5 checks for: 8 extensions and features such as fragment-shader barycentrics, image-view minLod, depth-clip control/enable, color-write enable and depth clamp | no GPU, no Vulkan 1.3, a CPU without x86-64-v3 (AVX2, BMI2, FMA…), which shadPS4 is compiled for, or missing push descriptors, vertex-attribute divisors or robustness2 (with null descriptors) |
+| **Won't start** | no GPU, no Vulkan 1.3, or anything KytyPS5 rejects a device for (`VulkanFindPhysicalDevice`): 8 extensions, 16 core and 12 Vulkan 1.1–1.3 features (depthBounds, shaderCullDistance, shaderBufferInt64Atomics, dynamicRendering…), 5 extension features, a graphics+compute queue, its depth/texture/storage formats and 16× anisotropy; only its window-surface checks are left out | no GPU, no Vulkan 1.3, a CPU without x86-64-v3 (AVX2, BMI2, FMA…), which shadPS4 is compiled for, or missing push descriptors, vertex-attribute divisors or robustness2 (with null descriptors) |
 | **May run slowly** | integrated GPU, under 8 GB VRAM, under 6 cores / 12 threads, or under 16 GB RAM | integrated GPU, under 4 GB VRAM, under 4 cores / 8 threads, or under 8 GB RAM |
+
+Each verdict judges the card that emulator would use, chosen its way: KytyPS5 picks among
+devices that pass its checks (a discrete one first); shadPS4 sorts all devices by Vulkan 1.3,
+discrete, not software and memory, takes the first and checks it afterwards, so an unusable
+discrete card beats a usable integrated one. The probe's feature reads were compared with
+`vulkaninfo` on an RTX 3090 and llvmpipe (137 and 135 values, all equal).
 
 These are the README's requirements, not measurements: there's no per-game performance data, so
 a verdict covers the console, and the Game Hub adds **Not enough space** when the download
