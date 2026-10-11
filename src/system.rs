@@ -14,12 +14,6 @@ pub fn on_os() -> bool {
     std::env::var_os("PS5_LAUNCHER_OS").is_some_and(|v| v == "1") || Path::new(MARKER).exists()
 }
 
-/// Started from the USB stick (a live session), so "Install to this PC" makes sense.
-pub fn live() -> bool {
-    std::env::var_os("PS5_LAUNCHER_OS_LIVE").is_some_and(|v| v == "1")
-        || std::fs::read_to_string("/proc/cmdline").is_ok_and(|c| c.split_whitespace().any(|a| a == "rd.live.image"))
-}
-
 /// Run a system tool and wait at most `seconds` (some wait forever for missing hardware, e.g.
 /// bluetoothctl without a Bluetooth adapter).
 fn run_for(seconds: u64, program: &str, args: &[&str]) -> Result<String, String> {
