@@ -13,6 +13,8 @@ pub fn explain(v: &Verdict, platform: Platform) -> String {
         Verdict::Good => format!("{console} games should run well"),
         Verdict::No(why) if why == "no AVX2" => "PS4 games need a processor from 2013 or later (with AVX2)".into(),
         Verdict::No(why) if why == "no Vulkan 1.3" => "Games need a graphics card with Vulkan 1.3: update the graphics driver, or the card is too old".into(),
+        Verdict::No(why) if why == "missing features" => format!(
+            "Your graphics card lacks Vulkan features {} needs: update its driver, or the card is too old", platform.emulator()),
         Verdict::No(_) => "No graphics driver found: install the driver for your graphics card".into(),
         Verdict::Slow(why) if why == "integrated GPU" => format!("{console} games run best on a graphics card; built-in graphics may be slow"),
         Verdict::Slow(why) if why.ends_with("GPU") => format!("{console} games run best with {} GB of graphics memory", if ps5 { 8 } else { 4 }),

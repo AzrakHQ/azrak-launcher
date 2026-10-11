@@ -245,7 +245,8 @@ network behavior and validation limits.
 
 [src/pc.rs](../src/pc.rs) reads the processor and memory from `/proc`, and the graphics cards from
 Vulkan: `ps5-launcher --probe-gpu` loads `libvulkan.so.1`, lists each device's name, Vulkan
-version, type and device-local memory, and exits. It runs as a child process (10 s limit), so a
+version, type, device-local memory and whether it has the extensions and features each
+emulator refuses to start without, and exits. When that can't be checked, there's no verdict. It runs as a child process (10 s limit), so a
 broken driver can't crash or hang the launcher; if it fails, verdicts are left out rather than
 guessed. [src/pc_ui.rs](../src/pc_ui.rs) shows the result.
 
@@ -253,15 +254,15 @@ What the verdicts check, for the strongest non-software GPU:
 
 | | PS5 games (KytyPS5) | PS4 games (shadPS4) |
 |---|---|---|
-| **Won't start** | no GPU, or no Vulkan 1.3 | no GPU, no Vulkan 1.3, or a CPU without x86-64-v3 (AVX2, BMI2, FMA…), which shadPS4 is compiled for |
+| **Won't start** | no GPU, no Vulkan 1.3, or missing what KytyPS5 checks for: 8 extensions and features such as fragment-shader barycentrics, image-view minLod, depth-clip control/enable, color-write enable and depth clamp | no GPU, no Vulkan 1.3, a CPU without x86-64-v3 (AVX2, BMI2, FMA…), which shadPS4 is compiled for, or missing push descriptors, vertex-attribute divisors or robustness2 (with null descriptors) |
 | **May run slowly** | integrated GPU, under 8 GB VRAM, under 6 cores / 12 threads, or under 16 GB RAM | integrated GPU, under 4 GB VRAM, under 4 cores / 8 threads, or under 8 GB RAM |
 
 These are the README's requirements, not measurements: there's no per-game performance data, so
 a verdict covers the console, and the Game Hub adds **Not enough space** when the download
 folder can't hold the game. A console whose games won't start gets a one-time notice (per PC).
 To see other PCs' screens, set `PS5_LAUNCHER_PRETEND_PC`, e.g.
-`"Intel Core i7-3770;4;8;0;8;NVIDIA GeForce GTX 680,1.2,discrete,2"` (CPU; cores; threads;
-AVX2 0/1; RAM GB; GPUs as `name,vulkan,type,VRAM GB` separated by `|`).
+`"Intel Core i7-3770;4;8;0;8;NVIDIA GeForce GTX 680,1.2,discrete,2,0,0"` (CPU; cores; threads;
+AVX2 0/1; RAM GB; GPUs as `name,vulkan,type,VRAM GB,PS5 ok,PS4 ok` separated by `|`).
 
 ## Download → Install → Play (details)
 
