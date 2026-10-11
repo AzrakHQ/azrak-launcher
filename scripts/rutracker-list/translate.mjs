@@ -27,7 +27,16 @@ async function translateLines(lines) {
   const protectedLines = lines.map(protectTechnical);
   const url = new URL('https://translate.googleapis.com/translate_a/single');
   url.search = new URLSearchParams({ client: 'gtx', sl: 'ru', tl: 'en', dt: 't', q: protectedLines.map(line => line.value).join('\n') });
-  const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+  // The public endpoint rate-limits (429) and has bad moments (5xx): wait and try again.
+  let response;
+  for (const wait of [0, 20_000, 60_000, 180_000]) {
+    if (wait) {
+      console.log(`Translation endpoint returned HTTP ${response.status}; retrying in ${wait / 1000} s`);
+      await new Promise(done => setTimeout(done, wait));
+    }
+    response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+    if (response.ok || !(response.status === 429 || response.status >= 500)) break;
+  }
   if (!response.ok) throw new Error(`Translation endpoint returned HTTP ${response.status}; source catalog unchanged`);
   const data = await response.json();
   const text = data[0].map(segment => segment[0] || '').join('');
