@@ -813,6 +813,10 @@ impl App {
             while self.overlay != Overlay::None && self.overlay != Overlay::Settings && self.overlay != Overlay::Downloads {
                 self.back();
             }
+            // Settings and Downloads stay open, but a Hub or menu waiting under them would come
+            // back pointing at nothing (a Download button that does nothing): drop them, so Back
+            // returns to what was under them.
+            self.stack.retain(|(overlay, _, _)| !matches!(overlay, Overlay::Hub | Overlay::Menu));
         }
     }
 
