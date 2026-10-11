@@ -222,6 +222,8 @@ fn load_manifest(store: &Path) -> Vec<Job> {
     }).take(MAX_JOBS).map(|mut job| {
         if job.state.active() { job.state = State::Paused; }
         job.clear_runtime();
+        // Reopening never resumes a transfer by itself, VPN or not.
+        job.waiting_vpn = false;
         job
     }).collect()
 }
@@ -503,16 +505,16 @@ impl Worker {
         if self.session.is_some() && route.as_ref().map_or(true, |iface| *iface != self.bound) {
             self.stop_all_for_vpn().await;
         }
-        if route.is_ok() && self.session.is_none() {
-            let waiting: Vec<String> = self.jobs.lock().unwrap().iter().filter(|j| j.waiting_vpn).map(|j| j.key.clone()).collect();
+        // Only what the VPN stopped comes back: a seed the player stopped stays stopped, and
+        // transfers from before a restart wait for Resume.
+        let waiting: Vec<String> = self.jobs.lock().unwrap().iter().filter(|j| j.waiting_vpn).map(|j| j.key.clone()).collect();
+        if route.is_ok() && !waiting.is_empty() {
             for key in waiting {
                 self.update(&key, |job| job.waiting_vpn = false);
                 let complete = self.job(&key).is_some_and(|job| job.state == State::Complete);
-                if !complete {
-                    if let Err(error) = self.start(&key).await { self.fail(&key, error); }
-                }
+                let result = if complete { self.seed(&key).await } else { self.start(&key).await };
+                if let Err(error) = result { self.fail(&key, error); }
             }
-            if self.policy.seed_after_download { self.seed_all().await; }
             self.persist();
         }
     }
@@ -1292,6 +1294,26 @@ mod tests {
             assert!(!job.waiting_vpn);
             let payload = std::fs::read(owned_folder(&job).unwrap().join("public-domain-fixture.bin")).unwrap();
             assert_eq!(payload, expected);
+
+            // Stop seeding (the Downloads action): it stays stopped, although closing the last
+            // seed closes the session and the VPN is still there.
+            worker.policy.seed_after_download = true;
+            worker.seed(&key).await.unwrap();
+            assert!(worker.handles.contains_key(&key));
+            worker.stop_job(&key, State::Complete).await.unwrap();
+            worker.stop_idle_session().await;
+            for _ in 0..2 { worker.vpn_check().await; }
+            assert!(!worker.handles.contains_key(&key) && worker.session.is_none(), "a stopped seed must not restart");
+
+            // A transfer that was waiting for the VPN when the launcher closed: reopening loads it
+            // paused, and the VPN coming back doesn't start it (only Resume does).
+            worker.update(&key, |job| { job.state = State::Paused; job.waiting_vpn = true; });
+            worker.persist();
+            let restored = load_manifest(&worker.store);
+            assert!(restored.iter().all(|job| !job.waiting_vpn && job.state == State::Paused));
+            *worker.jobs.lock().unwrap() = restored;
+            worker.vpn_check().await;
+            assert!(worker.handles.is_empty() && worker.session.is_none(), "reopening never resumes by itself");
 
             // Turning the setting off lets downloads run without a VPN again.
             *FAKE_VPN.lock().unwrap() = None;
