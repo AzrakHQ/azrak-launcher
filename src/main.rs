@@ -57,6 +57,13 @@ OPTIONS:
 ";
 
 fn main() {
+    // `--supports gamescope`: exit 0 when this launcher can run in PS5 Launcher OS's Gamescope
+    // session (it tags its window so Gamescope shows it). Older releases reject the option, so the
+    // OS session and the image build can tell.
+    if std::env::args().nth(1).as_deref() == Some("--supports") {
+        let known = ["gamescope", "system-settings"];
+        std::process::exit(if std::env::args().nth(2).is_some_and(|f| known.contains(&f.as_str())) { 0 } else { 1 });
+    }
     if std::env::args().nth(1).as_deref() == Some("--probe-gpu") {
         pc::print_gpus();
         return;

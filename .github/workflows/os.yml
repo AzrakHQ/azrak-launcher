@@ -65,7 +65,18 @@ jobs:
           mv /tmp/release/ps5-launcher-linux-x86_64 os/launcher
           os/launcher/ps5-launcher --version
 
+      # The minimal edition runs the launcher in Gamescope, where a launcher that doesn't tag its
+      # window shows nothing: publish it only with a release that does.
+      - name: Does the released launcher run in Gamescope?
+        if: matrix.tag == 'minimal'
+        run: |
+          if ! os/launcher/ps5-launcher --supports gamescope; then
+            echo "::notice:::minimal not published: the latest launcher release predates Gamescope support"
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Build
+        if: env.SKIP != '1'
         run: |
           owner=$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
           echo "IMAGE=ghcr.io/$owner/ps5-launcher-os" >> "$GITHUB_ENV"
@@ -96,7 +107,7 @@ jobs:
             test -x /usr/libexec/bazzite-autologin'
 
       - name: Check the minimal image
-        if: matrix.tag == 'minimal'
+        if: matrix.tag == 'minimal' && env.SKIP != '1'
         run: |
           sudo podman run --rm --entrypoint /usr/bin/bash "$IMAGE:minimal" -c '
             set -e
@@ -111,9 +122,11 @@ jobs:
             for lib in libmpv.so.2 libarchive.so.13 libxkbcommon-x11.so.0 libvulkan.so.1 libpulse.so.0 libXss.so.1; do
               ldconfig -p | grep -q "$lib " || { echo "missing $lib"; exit 1; }
             done
-            /usr/share/ps5-launcher-os/release/ps5-launcher --version'
+            /usr/share/ps5-launcher-os/release/ps5-launcher --version
+            /usr/share/ps5-launcher-os/release/ps5-launcher --supports gamescope'
 
       - name: Push
+        if: env.SKIP != '1'
         run: |
           echo "${{ github.token }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
           img="$IMAGE:${{ matrix.tag }}"
