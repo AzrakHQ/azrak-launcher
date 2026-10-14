@@ -756,7 +756,10 @@ impl App {
             }
             self.grid_window = (first, last);
             let (lo_k, hi_k) = (first * self.cols, last * self.cols);
-            self.grid_keys.retain(|_, k| *k >= lo_k && *k < hi_k);
+            self.grid_keys.retain(|_, cards| {
+                cards.retain(|k| *k >= lo_k && *k < hi_k);
+                !cards.is_empty()
+            });
             let keep: HashSet<String> = self.grid_keys.keys().cloned().collect();
             self.images.cancel_unless(move |j| j.prio != prio::CARD || keep.contains(&j.key));
         }
@@ -777,7 +780,11 @@ impl App {
             let req = self.card_req(gi);
             let img = self.get_img(&req, prio::CARD);
             if let Some(r) = &req {
-                self.grid_keys.insert(r.key.clone(), k);
+                // Several cards can show the same cover (releases sharing Steam's art).
+                let cards = self.grid_keys.entry(r.key.clone()).or_default();
+                if !cards.contains(&k) {
+                    cards.push(k);
+                }
             }
             let g = &self.games[gi];
             let ce = self.game_compat(g);
@@ -815,26 +822,28 @@ impl App {
         self.grid_model.set_vec(rows);
     }
 
-    /// A cover finished loading: update just that card, not the whole grid.
+    /// A cover finished loading: update just the cards showing it, not the whole grid.
     fn grid_image_loaded(&mut self, key: &str) {
-        let Some(&k) = self.grid_keys.get(key) else { return };
+        let Some(cards) = self.grid_keys.get(key).cloned() else { return };
         let img = self.images.get(key);
         // Neither loaded nor failed (yet): nothing to show.
         if img.is_none() && !self.images.has_failed(key) {
             return;
         }
         let (first, _) = self.grid_window;
-        let (r, c) = (k / self.cols.max(1), k % self.cols.max(1));
-        if r < first {
-            return;
-        }
-        if let Some(row) = self.grid_model.row_data(r - first) {
-            if let Some(mut card) = row.cards.row_data(c) {
-                // A cover that couldn't be downloaded: the game's name instead.
-                card.no_art = img.is_none();
-                card.loaded = img.is_some();
-                card.image = img.unwrap_or_default();
-                row.cards.set_row_data(c, card);
+        for k in cards {
+            let (r, c) = (k / self.cols.max(1), k % self.cols.max(1));
+            if r < first {
+                continue;
+            }
+            if let Some(row) = self.grid_model.row_data(r - first) {
+                if let Some(mut card) = row.cards.row_data(c) {
+                    // A cover that couldn't be downloaded: the game's name instead.
+                    card.no_art = img.is_none();
+                    card.loaded = img.is_some();
+                    card.image = img.clone().unwrap_or_default();
+                    row.cards.set_row_data(c, card);
+                }
             }
         }
     }

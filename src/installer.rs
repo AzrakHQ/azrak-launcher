@@ -888,11 +888,14 @@ fn pc_archives(source: &Source, plan: &Plan) -> Result<Vec<Vec<String>>> {
     for e in top.iter().filter(|e| e.path.to_ascii_lowercase().ends_with(".sh")) {
         if gog_installer(source, &e.path)? { gog.insert(e.path.clone()); }
     }
-    // Nor are archives next to the game's own files (its program, scripts, data): `data.tar`
-    // beside `game.x86_64` is read by the game. Readmes, covers and checksums don't count.
+    // Nor are archives next to the game's program: `data.tar` beside `game.x86_64` is read by
+    // the game. A start script doesn't count: it often starts what's in the archive beside it.
     let mut game_folders = HashSet::new();
     for e in &top {
-        if !gog.contains(&e.path) && volume_of(&e.path)?.is_none() && !release_extra(&e.path) {
+        if gog.contains(&e.path) || volume_of(&e.path)?.is_some() { continue; }
+        let mut head = Vec::with_capacity(4096);
+        source.file(&e.path)?.take(4096).read_to_end(&mut head)?;
+        if matches!(crate::pcgame::probe(&head), crate::pcgame::Probe::Elf { .. } | crate::pcgame::Probe::Exe | crate::pcgame::Probe::AppImage) {
             game_folders.insert(folder(&e.path));
         }
     }
@@ -915,15 +918,6 @@ fn pc_archives(source: &Source, plan: &Plan) -> Result<Vec<Vec<String>>> {
         if let Some(volumes) = volumes(one)? { groups.push(volumes); }
     }
     Ok(groups)
-}
-
-/// What a release has besides the game: readmes, covers, checksums, links.
-fn release_extra(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
-    let ext = name.rsplit_once('.').map_or("", |(_, ext)| ext);
-    ["readme", "license", "changelog"].iter().any(|n| name.starts_with(n))
-        || ["txt", "nfo", "diz", "url", "html", "htm", "pdf", "md", "rtf", "jpg", "jpeg", "png", "gif", "bmp", "webp", "ico",
-            "sfv", "md5", "sha1", "sha256", "torrent"].contains(&ext)
 }
 
 /// A GOG Linux installer: a shell script followed by a zip (its end-of-directory record is in the
@@ -1610,6 +1604,20 @@ mod tests {
         assert_eq!(fs::read(p.join("data.tar")).unwrap(), data);
         assert!(!p.join("level.dat").exists());
         assert_eq!(manifest(&p).launch, "game.x86_64");
+        clean(&req);
+    }
+
+    #[test]
+    fn pc_archive_beside_its_start_script_is_unpacked() {
+        let (_t, mut req) = fixture();
+        pc(&mut req, "Some Game");
+        // The script starts what's in the archive: the archive is the release's packaging.
+        fs::write(req.source.join("start.sh"), b"#!/bin/sh\ncd Game && ./game\n").unwrap();
+        fs::write(req.source.join("Game.tar"), tar(&[("Game/game", &elf_program(), b'0', "")])).unwrap();
+        let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
+        assert!(executable(&p.join("Game/game")), "the game was unpacked");
+        assert!(!p.join("Game.tar").exists());
+        assert_eq!(manifest(&p).launch, "start.sh");
         clean(&req);
     }
 

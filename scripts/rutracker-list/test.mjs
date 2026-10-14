@@ -297,3 +297,13 @@ test('Steam matches whose artwork or rating could not be checked are looked up a
   assert.equal(due({ steam: older }, now), true);
   assert.equal(due({ steam: { appid: null, checked_at: now.toISOString() } }, now), false);
 });
+
+test('releases never looked up come before lookups that keep failing', async () => {
+  const { lookupOrder, due } = await import('./steam.mjs');
+  const now = new Date('2026-10-14T00:00:00Z');
+  // 1000 matches whose artwork check keeps failing, ahead of a new release in the catalog.
+  const stuck = Array.from({ length: 1000 }, (_, i) => ({ id: i, steam: { appid: i, partial: true, protondb: null, checked_at: '2026-10-13T00:00:00Z' } }));
+  const topics = [...stuck, { id: 'new' }];
+  const todo = lookupOrder(topics.filter(t => due(t, now))).slice(0, 900);
+  assert.equal(todo[0].id, 'new');
+});

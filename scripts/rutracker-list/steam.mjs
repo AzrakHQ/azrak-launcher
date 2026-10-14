@@ -192,6 +192,13 @@ export function due(topic, now, retry = false) {
     || (retry && Object.values(steam.assets || {}).some(url => url == null));
 }
 
+/** Releases never looked up first, then the oldest checks: lookups that keep failing (a
+ * `partial` match whose artwork server keeps erroring) must not take every day's slots. */
+export function lookupOrder(topics) {
+  const checked = t => t.steam ? new Date(t.steam.checked_at || 0).getTime() : -Infinity;
+  return [...topics].sort((a, b) => checked(a) - checked(b));
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   const platform = platformFrom(args);
@@ -203,7 +210,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const now = new Date();
   // --retry: look up unmatched releases again now (after the matching improved).
   const retry = args.includes('--retry');
-  const todo = catalog.topics.filter(t => due(t, now, retry) && (!console_ || needsSteamArt(t))).slice(0, limit);
+  const todo = lookupOrder(catalog.topics.filter(t => due(t, now, retry) && (!console_ || needsSteamArt(t)))).slice(0, limit);
   console.log(`${platform.label}: ${todo.length} topics to look up`);
   let found = 0, done = 0;
   const save = async () => {

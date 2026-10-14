@@ -347,7 +347,8 @@ Collections (anthologies, trilogies, "A + B") and near-misses (another game in t
 match rather than wrong art. The daily workflow looks up at most 900 releases a run, and retries
 unmatched ones after 30 days. A match whose artwork or ProtonDB rating couldn't be checked
 (network, rate limit) is marked `partial` and looked up again the next run; `--retry` also
-re-checks matches missing artwork. The launcher turns the block into the same artwork record PSN
+re-checks matches missing artwork. Releases never looked up go first, so retries can't take a
+run's slots from them. The launcher turns the block into the same artwork record PSN
 games use (`Steam::info`). Steam data skips translation (names can be in any script).
 
 **Artwork order** (`pick_art` in [app.rs](../src/app.rs)): PC games show Steam's artwork.
@@ -361,9 +362,9 @@ dropped; players need no account for any artwork.
 
 **Installing** ([installer.rs](../src/installer.rs) `install_pc`) unpacks the release's archives,
 or copies the folder. Those are the archives at its top or in a folder at its top (each volume
-set, `game.rar` + `game.r00`… or `game.part1.rar`…, as one), unless the game's own files sit
-beside them (`data.tar` next to `game.x86_64` is the game's data, copied as it is; readmes,
-covers and checksums don't count). GOG Linux installers (a shell script with a zip appended) are read
+set, `game.rar` + `game.r00`… or `game.part1.rar`…, as one), unless the game's program sits
+beside them (`data.tar` next to `game.x86_64` is the game's data, copied as it is). A start
+script beside an archive doesn't count: it usually starts what's in the archive. GOG Linux installers (a shell script with a zip appended) are read
 as that zip by libarchive; the script never runs. Symlinks in archives are kept only when they
 stay inside the game (relative, not climbing above its folder); others fail the install.
 Torrents drop the executable flag, so every ELF program, `#!` script and AppImage is made

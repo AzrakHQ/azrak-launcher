@@ -224,8 +224,8 @@ pub struct App {
 
     // Keys of images currently on screen, so a finished load updates only what shows it.
     pub tile_keys: Vec<String>,
-    /// Cover key → card index, for the rows currently in the grid model.
-    pub grid_keys: std::collections::HashMap<String, usize>,
+    /// Cover key → the cards (by index) showing it, for the rows currently in the grid model.
+    pub grid_keys: std::collections::HashMap<String, Vec<usize>>,
     pub grid_scroll: f32,
     pub grid_trim: slint::Timer,
     pub hero_logo_key: String,
@@ -251,10 +251,7 @@ pub struct App {
     pub net_down: bool,
     net_checking: bool,
     net_watch: slint::Timer,
-    /// Retries since the network was last seen down, and when the next may run: a network that
-    /// answers GitHub's name but not its downloads mustn't be retried every 20 s.
-    net_retries: u32,
-    net_next: f64,
+    net_retry: NetRetry,
     /// Settings → SYSTEM on PS5 Launcher OS.
     pub sys: crate::system_ui::SysUi,
     /// This PC's processor, memory and graphics (read in the background at start).
@@ -420,8 +417,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         net_down: false,
         net_checking: false,
         net_watch: slint::Timer::default(),
-        net_retries: 0,
-        net_next: 0.0,
+        net_retry: NetRetry::default(),
         sys: Default::default(),
         pc: None,
         pc_checking: false,
@@ -792,7 +788,7 @@ impl App {
     pub fn net_watch_start(&mut self) {
         self.net_watch.start(slint::TimerMode::Repeated, Duration::from_secs(20), || {
             with_app(|app| {
-                if !app.net_down || app.net_checking || crate::util::now_secs() < app.net_next {
+                if !app.net_retry.due(crate::util::now_secs(), app.net_down) || app.net_checking {
                     return;
                 }
                 app.net_checking = true;
@@ -801,12 +797,10 @@ impl App {
                     post(move |app| {
                         app.net_checking = false;
                         if !up {
-                            app.net_retries = 0; // really offline: retry as soon as it's back
+                            app.net_retry.offline();
                         } else if app.net_down {
                             app.net_down = false;
-                            // 20 s, 40 s, 80 s … up to 30 min while downloads keep failing.
-                            app.net_next = crate::util::now_secs() + (20.0 * 2f64.powi(app.net_retries.min(7) as i32)).min(1800.0);
-                            app.net_retries += 1;
+                            app.net_retry.retrying(crate::util::now_secs());
                             app.network_back();
                         }
                     });
@@ -2838,6 +2832,37 @@ fn emulator_version(platform: crate::platform::Platform, kyty: &std::path::Path)
     }
 }
 
+/// When to retry downloads that failed for lack of network. A network that answers GitHub's name
+/// but not its downloads mustn't be retried every 20 s: 20 s, 40 s, 80 s … up to 30 min while
+/// retries keep failing. Once the network is seen down, or downloads have worked for 5 minutes
+/// since the last retry, the next outage is a new one, retried after 20 s again.
+#[derive(Default)]
+pub struct NetRetry {
+    retries: u32,
+    next: f64,
+    last: f64,
+}
+
+impl NetRetry {
+    /// Called every 20 s: whether to check the network now (`down`: a download failed for lack of it).
+    pub fn due(&mut self, now: f64, down: bool) -> bool {
+        if !down && self.retries > 0 && now - self.last >= 300.0 {
+            *self = Self::default();
+        }
+        down && now >= self.next
+    }
+    /// The network is down (not just the downloads failing).
+    pub fn offline(&mut self) {
+        *self = Self::default();
+    }
+    /// It's up: the failed downloads are being retried now.
+    pub fn retrying(&mut self, now: f64) {
+        self.next = now + (20.0 * 2f64.powi(self.retries.min(7) as i32)).min(1800.0);
+        self.retries += 1;
+        self.last = now;
+    }
+}
+
 /// Which artwork a game shows. PC games: Steam's (from the catalog). PlayStation games: Sony's, by
 /// title ID; a release without one (new releases from the daily refresh) or one Sony has no art
 /// for gets Steam's, when the daily update found the game there, keeping whatever Sony does know
@@ -2861,6 +2886,34 @@ pub fn pick_art(platform: crate::platform::Platform, steam: Option<&crate::catal
         }
         (Some(steam), None) => Some(steam.info()),
         (None, sony) => sony.cloned(),
+    }
+}
+
+#[cfg(test)]
+mod net_retry_tests {
+    use super::NetRetry;
+
+    #[test]
+    fn retries_back_off_while_failing_and_start_over_after_working() {
+        let mut n = NetRetry::default();
+        assert!(!n.due(0.0, false));
+        assert!(n.due(0.0, true));
+        // Up, but the retried downloads keep failing: 20 s, 40 s, 80 s.
+        n.retrying(0.0);
+        assert!(!n.due(19.0, true) && n.due(20.0, true));
+        n.retrying(20.0);
+        assert!(!n.due(59.0, true) && n.due(60.0, true));
+        n.retrying(60.0);
+        assert!(!n.due(139.0, true));
+        // The last retry worked; ten minutes later the network drops: retried in 20 s, not 160.
+        for t in (160..=660).step_by(20) {
+            assert!(!n.due(t as f64, false));
+        }
+        assert!(n.due(680.0, true));
+        // Seen down: back to the start too.
+        n.retrying(680.0);
+        n.offline();
+        assert!(n.due(700.0, true));
     }
 }
 
