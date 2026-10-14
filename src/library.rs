@@ -88,7 +88,8 @@ fn read_sfo(dir: &Path) -> Option<LocalGame> {
     })
 }
 
-/// Scan each folder, its children, and grandchildren (for "Games/<Title>/<PPSAxxxxx-app0>").
+/// Scan each folder, its children, and grandchildren (for "Games/<Title>/<PPSAxxxxx-app0>", or a
+/// PC game a folder deeper).
 pub fn scan(dirs: &[PathBuf]) -> Vec<LocalGame> {
     let mut found: Vec<LocalGame> = Vec::new();
     let mut push = |g: LocalGame| {
@@ -112,7 +113,8 @@ pub fn scan(dirs: &[PathBuf]) -> Vec<LocalGame> {
                 continue;
             }
             if let Ok(rd) = std::fs::read_dir(&c) {
-                for gc in rd.flatten().map(|e| e.path()).filter(|p| p.join("sce_sys").is_dir()) {
+                let game = |p: &Path| p.join("sce_sys").is_dir() || p.join(crate::pcgame::MANIFEST).is_file();
+                for gc in rd.flatten().map(|e| e.path()).filter(|p| game(p)) {
                     if let Some(g) = read_param(&gc) {
                         push(g);
                     }
@@ -136,6 +138,17 @@ mod tests {
             ("TITLE_ID", Value::Text("CUSA04118".into())), ("APP_VER", Value::Text("01.08".into())),
         ])).unwrap();
         std::fs::write(dir.join("eboot.bin"), b"x").unwrap();
+    }
+
+    #[test]
+    fn finds_pc_games_a_folder_deeper() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = t.path().join("Celeste/Celeste-0123456789ab");
+        std::fs::create_dir_all(&dir).unwrap();
+        let m = crate::pcgame::Manifest { version: 1, name: "Celeste".into(), topic: 5, launch: "start.sh".into(), kind: crate::pcgame::Kind::Script, alternatives: vec![] };
+        std::fs::write(dir.join(crate::pcgame::MANIFEST), serde_json::to_vec(&m).unwrap()).unwrap();
+        let found = scan(&[t.path().to_path_buf()]);
+        assert_eq!(found.iter().map(|g| (g.name.as_str(), g.platform)).collect::<Vec<_>>(), vec![("Celeste", Platform::Pc)]);
     }
 
     #[test]

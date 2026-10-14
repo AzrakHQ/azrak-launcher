@@ -273,3 +273,27 @@ test('console releases without a title ID get Steam art, by exact name only', as
   assert.equal(bestMatch('Super Meat Boy Forever Plus', near)?.id, 4);
   assert.equal(bestMatch('Super Meat Boy Forever Plus', near, { exact: true }), null);
 });
+
+test('Steam matches whose artwork or rating could not be checked are looked up again', async () => {
+  const { lookup, due } = await import('./steam.mjs');
+  const now = new Date('2026-10-14T00:00:00Z');
+  const realFetch = globalThis.fetch;
+  // Steam's store answers; its artwork server and ProtonDB are unreachable.
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('storesearch')) return Response.json({ items: [{ type: 'app', id: 504230, name: 'Celeste' }] });
+    if (u.includes('appdetails')) return Response.json({ 504230: { success: true, data: { name: 'Celeste' } } });
+    throw new TypeError('fetch failed');
+  };
+  let block;
+  try { block = await lookup('Celeste [GOG]', now); } finally { globalThis.fetch = realFetch; }
+  assert.equal(block.appid, 504230);
+  assert.equal(block.partial, true);
+  assert.equal(due({ steam: block }, now), true, 'retried on the next run');
+  const complete = { appid: 1, assets: { portrait: 'p', hero: null, logo: 'l' }, protondb: 'gold', checked_at: now.toISOString() };
+  assert.equal(due({ steam: complete }, now), false);
+  assert.equal(due({ steam: complete }, now, true), true, '--retry re-checks missing artwork');
+  const { protondb, ...older } = complete; // no ProtonDB answer, from before `partial`
+  assert.equal(due({ steam: older }, now), true);
+  assert.equal(due({ steam: { appid: null, checked_at: now.toISOString() } }, now), false);
+});

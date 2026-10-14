@@ -818,7 +818,11 @@ impl App {
     /// A cover finished loading: update just that card, not the whole grid.
     fn grid_image_loaded(&mut self, key: &str) {
         let Some(&k) = self.grid_keys.get(key) else { return };
-        let Some(img) = self.images.get(key) else { return };
+        let img = self.images.get(key);
+        // Neither loaded nor failed (yet): nothing to show.
+        if img.is_none() && !self.images.has_failed(key) {
+            return;
+        }
         let (first, _) = self.grid_window;
         let (r, c) = (k / self.cols.max(1), k % self.cols.max(1));
         if r < first {
@@ -826,8 +830,10 @@ impl App {
         }
         if let Some(row) = self.grid_model.row_data(r - first) {
             if let Some(mut card) = row.cards.row_data(c) {
-                card.image = img;
-                card.loaded = true;
+                // A cover that couldn't be downloaded: the game's name instead.
+                card.no_art = img.is_none();
+                card.loaded = img.is_some();
+                card.image = img.unwrap_or_default();
                 row.cards.set_row_data(c, card);
             }
         }

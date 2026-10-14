@@ -415,11 +415,11 @@ impl Sessions {
     }
 
     pub fn stop(&self, pid: u32) {
-        let own = {
+        let (own, group) = {
             let mut inner = self.inner.lock().unwrap();
             let Some(s) = inner.live.iter_mut().find(|s| s.pid == pid) else { return };
             s.stopping = true;
-            s.own
+            (s.own, s.group)
         };
         std::thread::spawn(move || {
             // 1) Close the window like Alt+F4 so the emulator shuts down cleanly (saves caches).
@@ -429,23 +429,11 @@ impl Sessions {
                 xdotool(&["windowactivate", w]);
                 std::thread::sleep(Duration::from_millis(250));
                 xdotool(&["key", "--clearmodifiers", "alt+F4"]);
-                if wait_gone(pid, 4.0) {
+                if wait_gone(pid, group, 4.0) {
                     return;
                 }
             }
-            // 2) Terminate, then 3) kill.
-            for (sig, wait) in [(libc::SIGTERM, 4.0), (libc::SIGKILL, 2.0)] {
-                unsafe {
-                    if own {
-                        libc::killpg(pid as i32, sig);
-                    } else {
-                        libc::kill(pid as i32, sig);
-                    }
-                }
-                if wait_gone(pid, wait) {
-                    return;
-                }
-            }
+            terminate(pid, own, group);
         });
     }
 
@@ -555,10 +543,28 @@ impl Sessions {
     }
 }
 
-fn wait_gone(pid: u32, secs: f64) -> bool {
+/// Terminate, then kill, a game's process (and its process group, if the launcher started it).
+fn terminate(pid: u32, own: bool, group: bool) {
+    for (sig, wait) in [(libc::SIGTERM, 4.0), (libc::SIGKILL, 2.0)] {
+        unsafe {
+            if own {
+                libc::killpg(pid as i32, sig);
+            } else {
+                libc::kill(pid as i32, sig);
+            }
+        }
+        if wait_gone(pid, group, wait) {
+            return;
+        }
+    }
+}
+
+/// Wait for the process to end; for a `group` session (a PC game, whose start script may already
+/// have exited), for every process in its group.
+fn wait_gone(pid: u32, group: bool, secs: f64) -> bool {
     let end = now_secs() + secs;
     loop {
-        if !is_alive(pid) {
+        if !is_alive(pid) && (!group || group_members(pid).is_empty()) {
             return true;
         }
         if now_secs() >= end {
@@ -608,6 +614,20 @@ pub fn shell_split(s: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stop_kills_what_a_start_script_left_behind() {
+        use std::os::unix::process::CommandExt;
+        // The start script exits at once; the "game" it started ignores SIGTERM.
+        let mut script = std::process::Command::new("sh")
+            .args(["-c", "sh -c 'trap \"\" TERM; exec sleep 60' & sleep 0.3; exit 0"])
+            .process_group(0).spawn().unwrap();
+        let pid = script.id();
+        script.wait().unwrap();
+        assert!(!super::group_members(pid).is_empty(), "the game outlives its start script");
+        super::terminate(pid, true, true);
+        assert!(super::group_members(pid).is_empty(), "the game was killed");
+    }
+
     #[test]
     fn split() {
         assert_eq!(super::shell_split(r#"--a "b c" 'd' e\ f"#), vec!["--a", "b c", "d", "e f"]);

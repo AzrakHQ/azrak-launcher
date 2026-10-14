@@ -15,6 +15,8 @@ pub struct ShadUi {
     /// An update found while a game was running, and whether you asked for it. Installed when
     /// the game closes, if still wanted.
     pub pending: Option<(Release, bool)>,
+    /// A download failed for lack of network: check again when it's back, not hours later.
+    pub retry: bool,
 }
 
 fn post(f: impl FnOnce(&mut App) + Send + 'static) {
@@ -36,7 +38,7 @@ impl App {
         if !auto || self.boot.active || self.kyty.busy || self.shad.busy {
             return;
         }
-        if !shad::installed() || crate::util::now_secs() - shad::load_state().last_check > shad::CHECK_INTERVAL {
+        if self.shad.retry || !shad::installed() || crate::util::now_secs() - shad::load_state().last_check > shad::CHECK_INTERVAL {
             self.shad_check(false);
         }
     }
@@ -50,6 +52,7 @@ impl App {
             let res = shad::latest_release();
             post(move |app| match res {
                 Ok(rel) => {
+                    app.shad.retry = false;
                     shad::mark_checked(&rel.tag);
                     let st = shad::load_state();
                     // Automatic updates may have been switched off while this check ran.
@@ -95,6 +98,9 @@ impl App {
                     }
                     Err(e) => {
                         app.shad.launch_after = None;
+                        if crate::util::is_network_error(&e) {
+                            app.net_down = true;
+                        }
                         app.toast("Couldn't get shadPS4", &format!("{e}. Check your connection and try again."), 2);
                     }
                 }
@@ -147,6 +153,10 @@ impl App {
                     }
                     Err(e) => {
                         crate::log!("shadPS4 install failed: {e}");
+                        if crate::util::is_network_error(&e) {
+                            app.net_down = true;
+                            app.shad.retry = true;
+                        }
                         app.shad.error = e.clone();
                         app.shad.launch_after = None;
                         if !quiet {

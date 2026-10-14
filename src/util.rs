@@ -101,7 +101,8 @@ pub fn iri_to_uri(url: &str) -> String {
 /// An HTTP error that means "no network" (the name didn't resolve, the connection failed),
 /// rather than an answer from the server.
 pub fn is_network_error(error: &str) -> bool {
-    ["Dns Failed", "Connection Failed", "Connect error", "timed out", "Network is unreachable"].iter().any(|m| error.contains(m))
+    ["Dns Failed", "Connection Failed", "Connect error", "timed out", "Network is unreachable", "Connection reset", "download interrupted"]
+        .iter().any(|m| error.contains(m))
 }
 
 /// The network is up: GitHub's API name resolves.

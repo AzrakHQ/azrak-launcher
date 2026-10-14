@@ -251,6 +251,10 @@ pub struct App {
     pub net_down: bool,
     net_checking: bool,
     net_watch: slint::Timer,
+    /// Retries since the network was last seen down, and when the next may run: a network that
+    /// answers GitHub's name but not its downloads mustn't be retried every 20 s.
+    net_retries: u32,
+    net_next: f64,
     /// Settings → SYSTEM on PS5 Launcher OS.
     pub sys: crate::system_ui::SysUi,
     /// This PC's processor, memory and graphics (read in the background at start).
@@ -416,6 +420,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         net_down: false,
         net_checking: false,
         net_watch: slint::Timer::default(),
+        net_retries: 0,
+        net_next: 0.0,
         sys: Default::default(),
         pc: None,
         pc_checking: false,
@@ -786,7 +792,7 @@ impl App {
     pub fn net_watch_start(&mut self) {
         self.net_watch.start(slint::TimerMode::Repeated, Duration::from_secs(20), || {
             with_app(|app| {
-                if !app.net_down || app.net_checking {
+                if !app.net_down || app.net_checking || crate::util::now_secs() < app.net_next {
                     return;
                 }
                 app.net_checking = true;
@@ -794,8 +800,13 @@ impl App {
                     let up = crate::util::network_up();
                     post(move |app| {
                         app.net_checking = false;
-                        if up && app.net_down {
+                        if !up {
+                            app.net_retries = 0; // really offline: retry as soon as it's back
+                        } else if app.net_down {
                             app.net_down = false;
+                            // 20 s, 40 s, 80 s … up to 30 min while downloads keep failing.
+                            app.net_next = crate::util::now_secs() + (20.0 * 2f64.powi(app.net_retries.min(7) as i32)).min(1800.0);
+                            app.net_retries += 1;
                             app.network_back();
                         }
                     });
@@ -806,6 +817,8 @@ impl App {
 
     fn network_back(&mut self) {
         crate::log!("network is up: retrying the downloads that failed");
+        // Covers that failed offline load again when the catalog reload below redraws the Library.
+        self.images.clear_failures();
         let (auto, missing) = { let c = self.cfg.lock().unwrap(); (c.kyty_auto_update, !c.emulator_ok()) };
         if auto && missing {
             // Back on the welcome screen's list, if it's still up.
@@ -893,7 +906,10 @@ impl App {
             post(move |app| {
                 app.syncing = false;
                 match res {
-                    Ok(file) => {
+                    Ok((file, offline)) => {
+                        if offline {
+                            app.net_down = true;
+                        }
                         let first = known.is_empty();
                         let new = file.games.iter().filter(|g| !known.contains(&g.id)).count();
                         app.catalog_updated = file.updated;

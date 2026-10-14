@@ -347,12 +347,12 @@ impl Store {
         None
     }
 
-    /// True if the image will show within a few ms (downloaded, and decodes fine).
     /// This image couldn't be downloaded (it won't be shown).
     pub fn has_failed(&self, key: &str) -> bool {
         self.failed.contains(key)
     }
 
+    /// True if the image will show within a few ms (downloaded, and decodes fine).
     pub fn on_disk(&self, key: &str, src: &Src) -> bool {
         !*NO_ART && !self.failed.contains(key) && on_disk(key, src)
     }

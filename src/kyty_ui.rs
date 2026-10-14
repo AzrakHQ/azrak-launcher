@@ -216,6 +216,9 @@ impl App {
                     }
                     Err(e) => {
                         crate::log!("KytyPS5 install failed: {e}");
+                        if crate::util::is_network_error(&e) {
+                            app.net_down = true;
+                        }
                         app.kyty.error = format!("Update failed: {e}");
                         app.toast("KytyPS5 update failed", &e, 2);
                         let note = if app.cfg.lock().unwrap().emulator_ok() { "KytyPS5 emulator found" } else { "Could not download KytyPS5 · retry from Settings" };

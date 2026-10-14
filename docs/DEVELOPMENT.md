@@ -345,7 +345,9 @@ block in the catalog: description, genres, release date, screenshots, trailer, w
 artwork exists (portrait, hero, logo), whether Steam sells a Linux version, and ProtonDB's tier.
 Collections (anthologies, trilogies, "A + B") and near-misses (another game in the series) get no
 match rather than wrong art. The daily workflow looks up at most 900 releases a run, and retries
-unmatched ones after 30 days. The launcher turns the block into the same artwork record PSN
+unmatched ones after 30 days. A match whose artwork or ProtonDB rating couldn't be checked
+(network, rate limit) is marked `partial` and looked up again the next run; `--retry` also
+re-checks matches missing artwork. The launcher turns the block into the same artwork record PSN
 games use (`Steam::info`). Steam data skips translation (names can be in any script).
 
 **Artwork order** (`pick_art` in [app.rs](../src/app.rs)): PC games show Steam's artwork.
@@ -357,8 +359,11 @@ nothing to show (no art found, or its download failed) shows the game's name on 
 colours instead of an endless loading shimmer. There's no per-player artwork key: RAWG was
 dropped; players need no account for any artwork.
 
-**Installing** ([installer.rs](../src/installer.rs) `install_pc`) unpacks every archive in the
-release, or copies the folder. GOG Linux installers (a shell script with a zip appended) are read
+**Installing** ([installer.rs](../src/installer.rs) `install_pc`) unpacks the release's archives,
+or copies the folder. Those are the archives at its top or in a folder at its top (each volume
+set, `game.rar` + `game.r00`… or `game.part1.rar`…, as one), unless the game's own files sit
+beside them (`data.tar` next to `game.x86_64` is the game's data, copied as it is; readmes,
+covers and checksums don't count). GOG Linux installers (a shell script with a zip appended) are read
 as that zip by libarchive; the script never runs. Symlinks in archives are kept only when they
 stay inside the game (relative, not climbing above its folder); others fail the install.
 Torrents drop the executable flag, so every ELF program, `#!` script and AppImage is made
@@ -367,11 +372,13 @@ in it (GOG's `data/noarch`). [pcgame.rs](../src/pcgame.rs) then chooses what sta
 first: a start script (`start`, `start.sh`…), an AppImage, a native program (64-bit preferred,
 named after the game, not crash handlers or bundled Wine/runtimes), a Windows `.exe` (not
 installers or redistributables). It writes `.ps5-launcher-game.json` (name, topic, launch target,
-alternatives); the Library finds PC games by it and links them to their catalog entry by topic.
+alternatives); the Library finds PC games by it (in a games folder, a folder in it, or one level
+deeper) and links them to their catalog entry by topic.
 
 **Playing** runs the target in its folder, in its own process group. Start scripts often hand
 over to the game and exit, so a PC game counts as running while any process of its group is
-alive, and its windows are searched across the group. AppImages run without FUSE when there is
+alive, its windows are searched across the group, and Stop waits for (then kills) the whole
+group. AppImages run without FUSE when there is
 none (`APPIMAGE_EXTRACT_AND_RUN`). A Windows `.exe` runs through `umu-run` (GE-Proton, kept up
 to date by umu) or `wine`, with a prefix per game under the data folder. PC games aren't rated
 for the emulator lists; their This PC verdict is left out (the catalog has no requirements).

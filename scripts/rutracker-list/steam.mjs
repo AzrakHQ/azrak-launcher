@@ -3,7 +3,8 @@
 // and ProtonDB. Adds a `steam` block to each topic of a PC catalog: the matching Steam app, its
 // description, genres, release date, screenshots, trailer, which artwork exists, whether it has a
 // Linux version, and ProtonDB's tier (how well the Windows version runs through Proton). Topics
-// without a match get `{ appid: null }` and are tried again after 30 days.
+// without a match get `{ appid: null }` and are tried again after 30 days; a match whose artwork or
+// rating couldn't be checked (network, rate limit) is marked `partial` and looked up again next run.
 //
 // For the console catalogs (ps5, ps4) it only fills a gap: releases without a title ID, which
 // the launcher can't find PlayStation artwork for (new releases from the daily refresh, whose
@@ -65,7 +66,7 @@ export function bestMatch(name, items, { exact = false } = {}) {
 }
 
 /** The compact block kept in the catalog, from appdetails and the asset checks. */
-export function steamBlock(appid, data, assets, protondb, now = new Date()) {
+export function steamBlock(appid, data, assets, protondb, now = new Date(), partial = false) {
   const movie = (data.movies || []).find(m => m.highlight) || (data.movies || [])[0];
   const video = movie && (movie.mp4?.max || movie.webm?.max || movie.hls_h264 || movie.dash_h264) || null;
   return {
@@ -84,6 +85,7 @@ export function steamBlock(appid, data, assets, protondb, now = new Date()) {
     assets,
     protondb,
     checked_at: now.toISOString(),
+    ...(partial ? { partial: true } : {}),
   };
 }
 
@@ -101,11 +103,14 @@ async function get(url, as = 'json') {
   throw new Error(`${url}: rate-limited or unavailable`);
 }
 
+/** Whether the file is there: true, false, or undefined when that couldn't be told (network,
+ * rate limit, server error). */
 async function exists(url) {
   try {
     const response = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(20_000) });
+    if (response.status === 429 || response.status >= 500) return undefined;
     return response.ok;
-  } catch { return false; }
+  } catch { return undefined; }
 }
 
 /** ProtonDB's tier for an app ("platinum", "gold", …), null if unrated, undefined if unreachable. */
@@ -165,14 +170,27 @@ export async function lookup(title, now = new Date(), { exact = false, ratings =
   if (!data) return { appid: null, checked_at: now.toISOString() };
   const base = `${ASSETS}/${item.id}`;
   const assets = {};
+  let partial = false;
   for (const [key, file] of [['portrait', 'library_600x900_2x.jpg'], ['hero', 'library_hero.jpg'], ['logo', 'logo.png']]) {
-    assets[key] = await exists(`${base}/${file}`) ? `${base}/${file}` : null;
+    const there = await exists(`${base}/${file}`);
+    if (there === undefined) partial = true;
+    assets[key] = there ? `${base}/${file}` : null;
   }
-  return steamBlock(item.id, data, assets, ratings ? await protondb(item.id) : null, now);
+  const rating = ratings ? await protondb(item.id) : null;
+  if (rating === undefined) partial = true;
+  return steamBlock(item.id, data, assets, rating ?? null, now, partial);
 }
 
-const due = (topic, now, retry = false) => !topic.steam || (topic.steam.appid == null
-  && (retry || now - new Date(topic.steam.checked_at || 0) > RETRY_DAYS * 86400_000));
+/** Whether a topic needs (another) lookup: never looked up; a match whose artwork or rating
+ * couldn't be checked (`partial`, or no ProtonDB answer from before that flag); no match for 30
+ * days. With `retry`: every miss, and matches missing artwork. */
+export function due(topic, now, retry = false) {
+  const steam = topic.steam;
+  if (!steam) return true;
+  if (steam.appid == null) return retry || now - new Date(steam.checked_at || 0) > RETRY_DAYS * 86400_000;
+  return Boolean(steam.partial) || !('protondb' in steam)
+    || (retry && Object.values(steam.assets || {}).some(url => url == null));
+}
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);

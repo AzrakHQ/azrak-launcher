@@ -418,13 +418,17 @@ fn save(src: &Source, file: CatalogFile) -> Result<CatalogFile, String> {
 
 /// Download the published catalog when it changed, then import the local catalogs. Never contacts
 /// RuTracker. The PS5 catalog must import; a PS4 catalog is optional until it has been collected.
-pub fn sync(progress: &dyn Fn(String)) -> Result<CatalogFile, String> {
+/// Also says whether the published catalog couldn't be reached (to try again once the network is).
+pub fn sync(progress: &dyn Fn(String)) -> Result<(CatalogFile, bool), String> {
     progress("Checking for new releases".into());
     // Offline or not published yet: the local catalogs still load.
-    match fetch_remote(progress) {
-        Ok(changed) => crate::log!("Published catalog: {changed} updated"),
-        Err(error) => crate::log!("Published catalog not downloaded: {error}"),
-    }
+    let offline = match fetch_remote(progress) {
+        Ok(changed) => { crate::log!("Published catalog: {changed} updated"); false }
+        Err(error) => {
+            crate::log!("Published catalog not downloaded: {error}");
+            crate::util::is_network_error(&error)
+        }
+    };
     progress("Loading RuTracker snapshots".into());
     let mut files = Vec::new();
     for (i, src) in SOURCES.iter().enumerate() {
@@ -445,7 +449,7 @@ pub fn sync(progress: &dyn Fn(String)) -> Result<CatalogFile, String> {
     let file = merge(files);
     progress(format!("Loaded {} RuTracker releases", file.games.len()));
     crate::log!("RuTracker catalog loaded: {} release topics", file.games.len());
-    Ok(file)
+    Ok((file, offline))
 }
 
 #[cfg(test)]

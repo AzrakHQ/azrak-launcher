@@ -422,27 +422,32 @@ impl Source {
 
 // Identify exactly one archive family. The ordered paths are passed as pinned fds
 // to libarchive's multi-volume reader (also concatenates split .7z.001 streams).
+/// Which archive `path` is a volume of, and its volume number: `game.part2.rar` and `game.r00`
+/// are volumes 2 of "game"'s RAR set, `game.7z.001` volume 1 of a split 7z. None if not an archive.
+fn volume_of(path: &str) -> Result<Option<(String, u32)>> {
+    static PART: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?i)^(.*)\.part(\d+)\.rar$").unwrap());
+    static SPLIT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?i)^(.*\.7z)\.(\d{3})$").unwrap());
+    static OLD: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?i)^(.*)\.r(\d{2})$").unwrap());
+    let lower = path.to_ascii_lowercase();
+    Ok(Some(if let Some(c) = PART.captures(path) {
+        (format!("part:{}", c[1].to_ascii_lowercase()), c[2].parse::<u32>().context("Invalid RAR volume number")?)
+    } else if let Some(c) = SPLIT.captures(path) {
+        (format!("split:{}", c[1].to_ascii_lowercase()), c[2].parse::<u32>()?)
+    } else if let Some(c) = OLD.captures(path) {
+        (format!("rar:{}", c[1].to_ascii_lowercase()), c[2].parse::<u32>()? + 2)
+    } else if lower.ends_with(".rar") {
+        (format!("rar:{}", lower.trim_end_matches(".rar")), 1)
+    } else if [".zip", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar.zst"].iter().any(|ext| lower.ends_with(ext)) {
+        (format!("single:{lower}"), 1)
+    } else { return Ok(None); }))
+}
+
 fn volumes(plan: &Plan) -> Result<Option<Vec<String>>> {
-    let part = regex::Regex::new(r"(?i)^(.*)\.part(\d+)\.rar$").unwrap();
-    let split = regex::Regex::new(r"(?i)^(.*\.7z)\.(\d{3})$").unwrap();
-    let old = regex::Regex::new(r"(?i)^(.*)\.r(\d{2})$").unwrap();
     let mut groups: BTreeMap<String, BTreeMap<u32, String>> = BTreeMap::new();
     for entry in plan.entries.iter().filter(|e| !e.directory) {
-        let p = &entry.path;
-        let lower = p.to_ascii_lowercase();
-        let (family, n) = if let Some(c) = part.captures(p) {
-            (format!("part:{}", c[1].to_ascii_lowercase()), c[2].parse::<u32>().context("Invalid RAR volume number")?)
-        } else if let Some(c) = split.captures(p) {
-            (format!("split:{}", c[1].to_ascii_lowercase()), c[2].parse::<u32>()?)
-        } else if let Some(c) = old.captures(p) {
-            (format!("rar:{}", c[1].to_ascii_lowercase()), c[2].parse::<u32>()? + 2)
-        } else if lower.ends_with(".rar") {
-            (format!("rar:{}", lower.trim_end_matches(".rar")), 1)
-        } else if [".zip", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar.zst"].iter().any(|ext| lower.ends_with(ext)) {
-            (format!("single:{lower}"), 1)
-        } else { continue; };
+        let Some((family, n)) = volume_of(&entry.path)? else { continue };
         ensure!(n > 0 && n <= MAX_ENTRIES as u32, "Invalid multipart volume number");
-        ensure!(groups.entry(family).or_default().insert(n, p.clone()).is_none(), "Duplicate multipart volume number");
+        ensure!(groups.entry(family).or_default().insert(n, entry.path.clone()).is_none(), "Duplicate multipart volume number");
     }
     ensure!(groups.len() <= 1, "Multiple independent archives found; choose a single release folder");
     let Some((_, group)) = groups.into_iter().next() else { return Ok(None); };
@@ -875,33 +880,50 @@ fn install(req: &Request, cancel: &AtomicBool, progress: Progress<'_>, commit: &
 /// Every archive in a PC release, each a list of volumes: ordinary archives, and GOG Linux
 /// installers (`.sh` with a zip appended, read as that zip; the script never runs).
 fn pc_archives(source: &Source, plan: &Plan) -> Result<Vec<Vec<String>>> {
-    let mut groups: Vec<Vec<String>> = Vec::new();
-    // Only archives at the top of the release (or in its single folder) are the release's: a
+    // Only archives at the top of the release (or in a folder at its top) are the release's: a
     // game's own data archives deeper inside stay as they are.
-    let archive = regex::Regex::new(r"(?i)\.(zip|7z|rar|tar|tgz|tar\.(gz|bz2|xz|zst)|r\d{2}|7z\.\d{3}|sh)$").unwrap();
-    let candidates: Vec<&Entry> = plan.entries.iter()
-        .filter(|e| !e.directory && e.path.matches('/').count() <= 1 && archive.is_match(&e.path)).collect();
-    // volumes() takes one archive family at a time: offer it one file (or volume set) at a time.
-    let mut seen = HashSet::new();
-    for entry in candidates.iter().copied() {
-        if seen.contains(&entry.path) { continue; }
-        let lower = entry.path.to_ascii_lowercase();
-        if lower.ends_with(".sh") && gog_installer(source, &entry.path)? {
-            seen.insert(entry.path.clone());
-            groups.push(vec![entry.path.clone()]);
-            continue;
-        }
-        let mut one = Plan::default();
-        let stem = |p: &str| p.to_ascii_lowercase().split(".part").next().unwrap_or("").split(".7z.").next().unwrap_or("").trim_end_matches(".rar").to_string();
-        for e in candidates.iter().filter(|e| stem(&e.path) == stem(&entry.path)) {
-            one.add(Entry::file(e.path.clone(), false, e.size))?;
-        }
-        if let Some(volumes) = volumes(&one)? {
-            seen.extend(volumes.iter().cloned());
-            groups.push(volumes);
+    let top: Vec<&Entry> = plan.entries.iter().filter(|e| !e.directory && e.path.matches('/').count() <= 1).collect();
+    let folder = |path: &str| path.rsplit_once('/').map_or("", |(dir, _)| dir).to_string();
+    let mut gog = HashSet::new();
+    for e in top.iter().filter(|e| e.path.to_ascii_lowercase().ends_with(".sh")) {
+        if gog_installer(source, &e.path)? { gog.insert(e.path.clone()); }
+    }
+    // Nor are archives next to the game's own files (its program, scripts, data): `data.tar`
+    // beside `game.x86_64` is read by the game. Readmes, covers and checksums don't count.
+    let mut game_folders = HashSet::new();
+    for e in &top {
+        if !gog.contains(&e.path) && volume_of(&e.path)?.is_none() && !release_extra(&e.path) {
+            game_folders.insert(folder(&e.path));
         }
     }
+    // volumes() takes one archive family at a time (game.rar, game.r00, … is one).
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    let mut families: Vec<(String, Plan)> = Vec::new();
+    for e in top.iter().filter(|e| !game_folders.contains(&folder(&e.path))) {
+        if gog.contains(&e.path) {
+            groups.push(vec![e.path.clone()]);
+            continue;
+        }
+        let Some((family, _)) = volume_of(&e.path)? else { continue };
+        let i = match families.iter().position(|(f, _)| *f == family) {
+            Some(i) => i,
+            None => { families.push((family, Plan::default())); families.len() - 1 }
+        };
+        families[i].1.add(Entry::file(e.path.clone(), false, e.size))?;
+    }
+    for (_, one) in &families {
+        if let Some(volumes) = volumes(one)? { groups.push(volumes); }
+    }
     Ok(groups)
+}
+
+/// What a release has besides the game: readmes, covers, checksums, links.
+fn release_extra(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    let ext = name.rsplit_once('.').map_or("", |(_, ext)| ext);
+    ["readme", "license", "changelog"].iter().any(|n| name.starts_with(n))
+        || ["txt", "nfo", "diz", "url", "html", "htm", "pdf", "md", "rtf", "jpg", "jpeg", "png", "gif", "bmp", "webp", "ico",
+            "sfv", "md5", "sha1", "sha256", "torrent"].contains(&ext)
 }
 
 /// A GOG Linux installer: a shell script followed by a zip (its end-of-directory record is in the
@@ -1572,6 +1594,36 @@ mod tests {
         assert!(!p.join("data/level.dat").exists() && !p.join("Patch.zip").exists());
         assert_eq!(manifest(&p).launch, "game.x86_64");
         clean(&req);
+    }
+
+    #[test]
+    fn pc_data_archive_beside_the_game_is_copied_not_unpacked() {
+        let (_t, mut req) = fixture();
+        pc(&mut req, "Some Game");
+        fs::create_dir_all(req.source.join("Game")).unwrap();
+        fs::write(req.source.join("Game/game.x86_64"), elf_program()).unwrap();
+        fs::write(req.source.join("Game/readme.txt"), b"read me").unwrap();
+        // Read by the game at run time: it must arrive as it is.
+        let data = tar(&[("level.dat", b"level", b'0', "")]);
+        fs::write(req.source.join("Game/data.tar"), &data).unwrap();
+        let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
+        assert_eq!(fs::read(p.join("data.tar")).unwrap(), data);
+        assert!(!p.join("level.dat").exists());
+        assert_eq!(manifest(&p).launch, "game.x86_64");
+        clean(&req);
+    }
+
+    #[test]
+    fn pc_classic_multipart_rar_is_one_archive() {
+        let (_t, mut req) = fixture();
+        pc(&mut req, "Some Game");
+        for name in ["game.rar", "game.r00", "game.r01", "readme.txt", "other.zip"] {
+            fs::write(req.source.join(name), b"x").unwrap();
+        }
+        let source = Source::inspect(&req, &AtomicBool::new(false)).unwrap();
+        let mut groups = pc_archives(&source, &source.plan).unwrap();
+        groups.sort();
+        assert_eq!(groups, vec![vec!["game.rar".to_string(), "game.r00".into(), "game.r01".into()], vec!["other.zip".to_string()]]);
     }
 
     #[test]
