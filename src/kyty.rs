@@ -90,22 +90,32 @@ pub fn tag_commit(tag: &str) -> &str {
     tag.rsplit('-').next().unwrap_or("")
 }
 
-/// Latest Linux x86_64 build on GitHub.
+/// Latest Linux x86_64 build on GitHub: the newest release that has one. A release is published
+/// before its builds finish uploading, and one platform's build can fail, so the newest release
+/// may have no Linux build yet (on 2026-10-14 it had only macOS's).
 pub fn latest_release() -> Result<Release, String> {
-    let v = http_json(&format!("https://api.github.com/repos/{REPO}/releases/latest"))?;
-    let tag = v["tag_name"].as_str().ok_or("no releases found")?.to_string();
-    let asset = v["assets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|a| a["name"].as_str().is_some_and(|n| n.contains("Linux") && n.contains("x86_64") && n.ends_with(".tar.gz")))
-        .ok_or("this release has no Linux build yet")?;
-    Ok(Release {
-        tag,
-        url: asset["browser_download_url"].as_str().unwrap_or("").to_string(),
-        size: asset["size"].as_u64().unwrap_or(0),
-        sha256: asset["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).unwrap_or("").to_string(),
-    })
+    let v = http_json(&format!("https://api.github.com/repos/{REPO}/releases?per_page=10"))?;
+    pick_release(&v)
+}
+
+fn pick_release(releases: &serde_json::Value) -> Result<Release, String> {
+    let mut list: Vec<&serde_json::Value> = releases.as_array().ok_or("no releases found")?.iter()
+        .filter(|r| r["draft"].as_bool() != Some(true) && r["prerelease"].as_bool() != Some(true))
+        .collect();
+    if list.is_empty() {
+        return Err("no releases found".into());
+    }
+    list.sort_by(|a, b| b["published_at"].as_str().unwrap_or("").cmp(a["published_at"].as_str().unwrap_or("")));
+    list.into_iter().find_map(|r| {
+        let asset = r["assets"].as_array()?.iter()
+            .find(|a| a["name"].as_str().is_some_and(|n| n.contains("Linux") && n.contains("x86_64") && n.ends_with(".tar.gz")))?;
+        Some(Release {
+            tag: r["tag_name"].as_str()?.to_string(),
+            url: asset["browser_download_url"].as_str().unwrap_or("").to_string(),
+            size: asset["size"].as_u64().unwrap_or(0),
+            sha256: asset["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).unwrap_or("").to_string(),
+        })
+    }).ok_or_else(|| "no recent release has a Linux build yet".to_string())
 }
 
 /// The KytyPS5 build a game runs on: the managed build's tag, or a custom build's
@@ -328,6 +338,24 @@ fn cleanup(st: &State) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn takes_the_newest_release_with_a_linux_build() {
+        let asset = |n: &str| serde_json::json!({ "name": n, "browser_download_url": format!("https://x/{n}"), "size": 1, "digest": "sha256:ab" });
+        let rel = |tag: &str, at: &str, assets: Vec<serde_json::Value>| serde_json::json!({ "tag_name": tag, "published_at": at, "assets": assets });
+        let mut beta = rel("KytyPS5-2026-10-14-beta", "2026-10-14T00:00:00Z", vec![asset("KytyPS5-beta-Linux-x86_64.tar.gz")]);
+        beta["prerelease"] = true.into();
+        let list = serde_json::Value::Array(vec![
+            rel("KytyPS5-2026-10-13-9e41d83", "2026-10-13T21:52:01Z", vec![asset("KytyPS5-2026-10-13-9e41d83-macOS-x86_64.zip")]),
+            rel("KytyPS5-2026-10-12-dad900c", "2026-10-12T03:14:05Z", vec![asset("KytyPS5-2026-10-12-dad900c-Linux-x86_64.tar.gz")]),
+            rel("KytyPS5-2026-10-12-df5b9b9", "2026-10-12T13:17:34Z", vec![asset("KytyPS5-2026-10-12-df5b9b9-Linux-x86_64.tar.gz")]),
+            beta,
+        ]);
+        let r = pick_release(&list).unwrap();
+        assert_eq!(r.tag, "KytyPS5-2026-10-12-df5b9b9", "newest by date with a Linux build, never a pre-release");
+        assert_eq!(r.sha256, "ab");
+        assert!(pick_release(&serde_json::Value::Array(vec![rel("only-mac", "2026-10-13T00:00:00Z", vec![asset("x-macOS.zip")])])).is_err());
+    }
+
     use super::*;
     #[test]
     fn tags() {
