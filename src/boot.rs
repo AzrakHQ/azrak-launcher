@@ -117,7 +117,7 @@ impl App {
         parts.iter().map(|(w, f)| w * f).sum::<f32>() / total.max(0.001)
     }
 
-    fn boot_render(&mut self) {
+    pub fn boot_render(&mut self) {
         if !self.boot.active {
             return;
         }

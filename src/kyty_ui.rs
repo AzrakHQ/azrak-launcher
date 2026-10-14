@@ -99,6 +99,9 @@ impl App {
                     }
                     Err(e) => {
                         crate::log!("KytyPS5 update check failed: {e}");
+                        if crate::util::is_network_error(&e) {
+                            app.net_down = true;
+                        }
                         // Like the launcher's: only a check you asked for shows an error.
                         if manual {
                             app.kyty.error = format!("Update check failed: {e}");

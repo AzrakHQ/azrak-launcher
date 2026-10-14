@@ -98,6 +98,18 @@ pub fn iri_to_uri(url: &str) -> String {
     percent_encoding::utf8_percent_encode(url, KEEP).to_string()
 }
 
+/// An HTTP error that means "no network" (the name didn't resolve, the connection failed),
+/// rather than an answer from the server.
+pub fn is_network_error(error: &str) -> bool {
+    ["Dns Failed", "Connection Failed", "Connect error", "timed out", "Network is unreachable"].iter().any(|m| error.contains(m))
+}
+
+/// The network is up: GitHub's API name resolves.
+pub fn network_up() -> bool {
+    use std::net::ToSocketAddrs;
+    ("api.github.com", 443).to_socket_addrs().is_ok_and(|mut a| a.next().is_some())
+}
+
 pub fn http_get(url: &str) -> Result<Vec<u8>, String> {
     let resp = AGENT.get(&iri_to_uri(url)).call().map_err(|e| match e {
         ureq::Error::Status(code, _) => format!("HTTP {code}"),

@@ -249,6 +249,10 @@ pub struct App {
     /// The VPNs last shown in Settings, to refresh it when one connects or drops.
     pub vpn_seen: String,
     pub catalog_timer: slint::Timer,
+    /// A download failed for lack of network; retried once it's back (see net_watch_start).
+    pub net_down: bool,
+    net_checking: bool,
+    net_watch: slint::Timer,
     /// Settings → SYSTEM on PS5 Launcher OS.
     pub sys: crate::system_ui::SysUi,
     /// This PC's processor, memory and graphics (read in the background at start).
@@ -410,6 +414,9 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         vpn_busy: String::new(),
         vpn_seen: String::new(),
         catalog_timer: slint::Timer::default(),
+        net_down: false,
+        net_checking: false,
+        net_watch: slint::Timer::default(),
         sys: Default::default(),
         pc: None,
         pc_checking: false,
@@ -443,6 +450,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
     with_app(|app| app.shad_start());
     with_app(|app| app.app_update_start());
     with_app(|app| app.compat_start());
+    with_app(|app| app.net_watch_start());
     with_app(|app| app.pc_check());
 
     wire_callbacks(&ui);
@@ -789,6 +797,47 @@ impl App {
     }
 
     // ------------------------------------------------------------------ background jobs
+
+    /// Downloads that failed because the network wasn't up yet (on PS5 Launcher OS the launcher
+    /// starts with the PC, often before the network) are retried as soon as it is, instead of
+    /// waiting hours for the next scheduled check.
+    pub fn net_watch_start(&mut self) {
+        self.net_watch.start(slint::TimerMode::Repeated, Duration::from_secs(20), || {
+            with_app(|app| {
+                if !app.net_down || app.net_checking {
+                    return;
+                }
+                app.net_checking = true;
+                std::thread::spawn(|| {
+                    let up = crate::util::network_up();
+                    post(move |app| {
+                        app.net_checking = false;
+                        if up && app.net_down {
+                            app.net_down = false;
+                            app.network_back();
+                        }
+                    });
+                });
+            })
+        });
+    }
+
+    fn network_back(&mut self) {
+        crate::log!("network is up: retrying the downloads that failed");
+        let (auto, missing) = { let c = self.cfg.lock().unwrap(); (c.kyty_auto_update, !c.emulator_ok()) };
+        if auto && missing {
+            // Back on the welcome screen's list, if it's still up.
+            if self.boot.active && self.boot.kyty_needed {
+                self.boot.waiting_kyty = true;
+                self.boot.f_kyty = 0.0;
+                self.boot_render();
+            }
+            self.kyty.force_install = true;
+        }
+        self.kyty_check(false);
+        self.shad_tick();
+        self.start_sync(false);
+    }
 
     /// What's open or focused, by topic ID, so a catalog reload can find it again.
     fn catalog_anchor(&self) -> CatalogAnchor {

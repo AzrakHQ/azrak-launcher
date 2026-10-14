@@ -65,6 +65,9 @@ impl App {
                 }
                 Err(e) => {
                     crate::log!("shadPS4 update check failed: {e}");
+                    if crate::util::is_network_error(&e) {
+                        app.net_down = true;
+                    }
                     if manual {
                         app.toast("Couldn't check for shadPS4 updates", &e, 2);
                     }
