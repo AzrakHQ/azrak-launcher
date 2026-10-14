@@ -1,10 +1,11 @@
-//! Official PlayStation artwork and metadata by title ID, with RAWG as a name-based fallback.
+//! Official PlayStation artwork and metadata by title ID. (Games Sony has none for get Steam's,
+//! which the daily catalog update looks up: see App::art_for_game.)
 //!
 //! Sony's public PlayStation App catalog API returns the same assets the PS5 shows: square
 //! tile icon (MASTER), game hub background, transparent title logo, portrait cover,
 //! screenshots, trailer, star rating. Cached in ~/.cache/ps5-launcher/psn.json (v1 format).
 
-use crate::util::{atomic_write, cache_dir, clean_multiline, http_json, now_secs, query_escape};
+use crate::util::{atomic_write, cache_dir, clean_multiline, http_json, now_secs};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -164,87 +165,6 @@ fn fetch_sony(tid: &str, region: &str) -> Option<Info> {
     None
 }
 
-// ------------------------------------------------------------------ RAWG
-
-pub fn rawg_norm(s: &str) -> String {
-    static JUNK: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r"(?i)\b(ps5|ps4|playstation 5|remastered edition|digital edition)\b|[™®©]").unwrap());
-    crate::util::norm(&JUNK.replace_all(s, " "))
-}
-
-pub fn rawg_cache_key(name: &str) -> String {
-    format!("rawg:{}", rawg_norm(name))
-}
-
-fn fetch_rawg(name: &str, key: &str) -> Option<Info> {
-    let k = query_escape(key);
-    let want = rawg_norm(name);
-    // PS5 listings first; many ports are only tagged for PC/Switch on RAWG, so then any platform.
-    let mut best: Option<Value> = None;
-    for platform in ["&platforms=187", ""] {
-        let Ok(res) = http_json(&format!(
-            "https://api.rawg.io/api/games?key={k}&search={}{platform}&page_size=6&search_precise=true",
-            query_escape(name)
-        )) else { continue };
-        let results = res["results"].as_array().cloned().unwrap_or_default();
-        let hit = results.iter().find(|r| rawg_norm(r["name"].as_str().unwrap_or("")) == want).or_else(|| {
-            results.iter().find(|r| {
-                let n = rawg_norm(r["name"].as_str().unwrap_or(""));
-                // Partial matches only when the names are nearly the same ("Let's Build" is a
-                // different game from "Let's Build a Zoo").
-                let (short, long) = if n.len() < want.len() { (&n, &want) } else { (&want, &n) };
-                !short.is_empty() && long.contains(short.as_str()) && short.len() * 10 >= long.len() * 8
-            })
-        });
-        if let Some(h) = hit {
-            best = Some(h.clone());
-            break;
-        }
-    }
-    let best = &best?;
-    let full = http_json(&format!("https://api.rawg.io/api/games/{}?key={k}", best["id"])).unwrap_or_else(|_| best.clone());
-    let rating = match (full["rating"].as_f64(), full["ratings_count"].as_i64()) {
-        (Some(s), Some(t)) if s > 0.0 && t > 0 => Some(Rating { score: (s * 100.0).round() / 100.0, total: t }),
-        _ => None,
-    };
-    let list = |v: &Value| -> Vec<String> { v.as_array().into_iter().flatten().filter_map(|x| x["name"].as_str().map(String::from)).collect() };
-    Some(Info {
-        source: Some("rawg".into()),
-        name: full["name"].as_str().unwrap_or(name).to_string(),
-        publisher: list(&full["publishers"]).join(", "),
-        genres: list(&full["genres"]),
-        release: full["released"].as_str().unwrap_or("").to_string(),
-        rating,
-        age: full["esrb_rating"]["name"].as_str().map(|n| AgeRating { name: format!("ESRB {n}"), icon: String::new() }),
-        long: full["description_raw"].as_str().unwrap_or("").trim().to_string(),
-        hub: full["background_image"].as_str().unwrap_or("").to_string(),
-        bg: full["background_image_additional"].as_str().unwrap_or("").to_string(),
-        shots: best["short_screenshots"].as_array().into_iter().flatten().skip(1).take(12).filter_map(|s| s["image"].as_str().map(String::from)).collect(),
-        ..Default::default()
-    })
-}
-
-/// Look one game up on RAWG now (uses the cache if it already has a result).
-pub fn rawg_lookup(store: &Shared, name: &str, key: &str) -> Option<Info> {
-    let k = rawg_cache_key(name);
-    if let Some(i) = store.lock().unwrap().get(&k) {
-        return Some(i.clone());
-    }
-    let info = fetch_rawg(name, key);
-    store.lock().unwrap().put(k, info.clone());
-    info
-}
-
-/// Returns "" if RAWG accepts the key, otherwise a message.
-pub fn check_rawg_key(key: &str) -> String {
-    match crate::util::http_get(&format!("https://api.rawg.io/api/platforms?page_size=1&key={}", query_escape(key))) {
-        Ok(_) => String::new(),
-        Err(e) if e == "HTTP 401" || e == "HTTP 403" => "RAWG rejected this key".into(),
-        Err(e) if e.starts_with("HTTP") => format!("RAWG returned {e}"),
-        Err(e) => format!("Could not reach RAWG: {e}"),
-    }
-}
-
 // ------------------------------------------------------------------ cache
 
 #[derive(Default)]
@@ -261,7 +181,9 @@ impl Store {
     }
 
     pub fn load() -> Shared {
-        let data = std::fs::read(Self::path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        let mut data: HashMap<String, Entry> = std::fs::read(Self::path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        // RAWG results from before it was dropped: nothing reads them any more.
+        data.retain(|key, _| !key.starts_with("rawg:"));
         Arc::new(Mutex::new(Store { data, dirty: 0 }))
     }
 
@@ -295,9 +217,9 @@ pub fn valid_title_id(tid: &str) -> bool {
     TID_RE.is_match(tid)
 }
 
-/// Fetch missing/stale Sony entries in parallel, then RAWG for names still lacking art.
+/// Fetch missing/stale Sony entries in parallel.
 /// `progress` receives status text; returns true if anything changed.
-pub fn enrich(store: &Shared, titles: Vec<(String, &'static str)>, rawg: Option<(String, Vec<String>)>, progress: &(dyn Fn(String) + Sync)) -> bool {
+pub fn enrich(store: &Shared, titles: Vec<(String, &'static str)>, progress: &(dyn Fn(String) + Sync)) -> bool {
     let todo: Vec<(String, &str)> = {
         let s = store.lock().unwrap();
         let mut seen = std::collections::HashSet::new();
@@ -320,18 +242,6 @@ pub fn enrich(store: &Shared, titles: Vec<(String, &'static str)>, rawg: Option<
             }
         });
         changed = true;
-    }
-    if let Some((key, names)) = rawg {
-        let names: Vec<String> = {
-            let s = store.lock().unwrap();
-            names.into_iter().filter(|n| !s.fresh(&rawg_cache_key(n))).collect()
-        };
-        for (i, name) in names.iter().enumerate() {
-            progress(format!("Downloading artwork (RAWG) {}/{}", i + 1, names.len()));
-            let info = fetch_rawg(name, &key);
-            store.lock().unwrap().put(rawg_cache_key(name), info);
-            changed = true;
-        }
     }
     if changed {
         store.lock().unwrap().save();

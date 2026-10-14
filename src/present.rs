@@ -799,6 +799,7 @@ impl App {
                 compat: compat.into(),
                 compat_level,
                 loaded: img.is_some(),
+                no_art: img.is_none() && req.as_ref().is_none_or(|r| self.images.has_failed(&r.key)),
                 image: img.unwrap_or_default(),
             });
         }
@@ -926,6 +927,8 @@ impl App {
             h.cover = img;
             h.cover_loaded = true;
         }
+        h.no_art = !h.cover_loaded && cover.as_ref().is_none_or(|r| self.images.has_failed(&r.key));
+        h.console = t.game.map(|g| self.games[g].g.platform.label()).unwrap_or_default().into();
 
         // KytyPS5 status is in the facts grid below, so it isn't repeated as a chip here.
         let mut chips: Vec<ChipData> = Vec::new();

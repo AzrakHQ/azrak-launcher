@@ -348,6 +348,15 @@ match rather than wrong art. The daily workflow looks up at most 900 releases a 
 unmatched ones after 30 days. The launcher turns the block into the same artwork record PSN
 games use (`Steam::info`). Steam data skips translation (names can be in any script).
 
+**Artwork order** (`pick_art` in [app.rs](../src/app.rs)): PC games show Steam's artwork.
+PlayStation games show Sony's, by title ID; a release without a title ID (new releases from the
+daily refresh, whose topic pages aren't read) or one Sony has no art for shows Steam's, which
+the daily workflow looks up for those releases only (`steam.mjs --platform ps5|ps4`, an exact
+name match, no ProtonDB), keeping Sony's rating and store page when it has them. A card with
+nothing to show (no art found, or its download failed) shows the game's name on the console's
+colours instead of an endless loading shimmer. There's no per-player artwork key: RAWG was
+dropped; players need no account for any artwork.
+
 **Installing** ([installer.rs](../src/installer.rs) `install_pc`) unpacks every archive in the
 release, or copies the folder. GOG Linux installers (a shell script with a zip appended) are read
 as that zip by libarchive; the script never runs. Symlinks in archives are kept only when they

@@ -207,8 +207,6 @@ pub struct App {
 
     pub settings_rows: Vec<crate::SettingData>,
     pub edit_index: i32,
-    pub rawg_status: String,
-    pub rawg_status_kind: i32,
 
     pub toasts: Vec<ToastData>,
     pub toast_seq: i32,
@@ -383,8 +381,6 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         menu_actions: Vec::new(),
         settings_rows: Vec::new(),
         edit_index: -1,
-        rawg_status: String::new(),
-        rawg_status_kind: 0,
         toasts: Vec::new(),
         toast_seq: 0,
         status: String::new(),
@@ -543,40 +539,11 @@ impl App {
     }
 
     pub fn art_for_game(&self, g: &Game) -> Option<Info> {
-        // PC games: Steam's artwork, carried in the catalog.
-        if let Some(steam) = g.steam.as_ref() {
-            return Some(steam.info());
-        }
         let store = self.art.lock().unwrap();
         let sony = std::iter::once(&g.title_id).chain(g.title_ids.iter())
             .filter_map(|id| store.get(id)).find(|info| !info.master.is_empty())
             .or_else(|| store.get(&g.title_id));
-        // Chosen per game: RAWG's background, screenshots and description, the website's box art
-        // as the cover, and Sony's logo and ratings.
-        if self.cfg.lock().unwrap().rawg_art.contains(&g.id) {
-            if let Some(r) = store.get(&psn::rawg_cache_key(&g.name)) {
-                let mut m = r.clone();
-                m.source = Some("rawg-chosen".into());
-                m.portrait.clear();
-                m.master.clear();
-                if let Some(s) = sony {
-                    m.logo = s.logo.clone();
-                    m.rating = s.rating.clone().or(m.rating);
-                    m.age = s.age.clone().or(m.age);
-                    m.store = s.store.clone();
-                    m.video = s.video.clone();
-                    if m.long.is_empty() { m.long = s.long.clone(); }
-                    if m.shots.is_empty() { m.shots = s.shots.clone(); }
-                    if m.genres.is_empty() { m.genres = s.genres.clone(); }
-                    if m.publisher.is_empty() { m.publisher = s.publisher.clone(); }
-                }
-                return Some(m);
-            }
-        }
-        if sony.is_some_and(|i| !i.master.is_empty()) {
-            return sony.cloned();
-        }
-        store.get(&psn::rawg_cache_key(&g.name)).or(sony).cloned()
+        pick_art(g.platform, g.steam.as_ref(), sony)
     }
 
     fn display_name(site: &str, info: Option<&Info>) -> String {
@@ -777,14 +744,13 @@ impl App {
                     && self.matches_status(i)
                     && words.iter().all(|w| g.norm.contains(w.as_str()))
             };
-        let cfg = self.cfg.lock().unwrap().clone();
         let rank = |i: usize| {
             let g = &self.games[i];
             let installed_version = g.local.is_some_and(|l| {
                 let a = crate::game_groups::version_key(&g.g.version);
                 !a.is_empty() && a == crate::game_groups::version_key(&self.locals[l].l.version)
             });
-            (installed_version, cfg.rawg_art.contains(&g.g.id), g.local.is_some(), !g.g.magnet.is_empty(),
+            (installed_version, g.local.is_some(), !g.g.magnet.is_empty(),
                 g.info.as_ref().is_some_and(|info| !info.master.is_empty()), crate::game_groups::version_key(&g.g.version),
                 g.g.seeders.unwrap_or(0), g.g.id)
         };
@@ -980,39 +946,22 @@ impl App {
             })
             .chain(self.locals.iter().map(|l| (l.l.title_id.clone(), psn::region_from_content_id(&l.l.content_id))))
             .collect();
-        let key = self.cfg.lock().unwrap().rawg_key.trim().to_string();
         let store = self.art.clone();
-        let needs_art: Vec<String> = {
-            let s = store.lock().unwrap();
-            self.games
-                .iter()
-                .filter(|g| !(psn::valid_title_id(&g.g.title_id) && s.get(&g.g.title_id).is_some_and(|i| !i.master.is_empty())))
-                .map(|g| g.g.name.clone())
-                .collect()
-        };
         self.enriching = true;
         std::thread::spawn(move || {
             let last = Mutex::new(std::time::Instant::now() - Duration::from_secs(1));
-            // RAWG only for games Sony has no data for; Sony first, so compute after.
-            let changed = psn::enrich(&store, titles, None, &|p| {
+            // Games Sony has no art for get Steam's from the catalog (the daily update looks it up).
+            let changed = psn::enrich(&store, titles, &|p| {
                 let mut l = last.lock().unwrap();
                 if l.elapsed() > Duration::from_millis(120) {
                     *l = std::time::Instant::now();
                     post(move |app| app.set_status(&p, true));
                 }
             });
-            let mut changed_rawg = false;
-            if !key.is_empty() {
-                let names: Vec<String> = {
-                    let s = store.lock().unwrap();
-                    needs_art.into_iter().filter(|n| s.get(&psn::rawg_cache_key(n)).is_none() || !s.fresh(&psn::rawg_cache_key(n))).collect()
-                };
-                changed_rawg = psn::enrich(&store, Vec::new(), Some((key, names)), &|p| post(move |app| app.set_status(&p, true)));
-            }
             post(move |app| {
                 app.enriching = false;
                 app.set_status("", false);
-                if changed || changed_rawg {
+                if changed {
                     let games: Vec<Game> = app.games.iter().map(|g| g.g.clone()).collect();
                     app.set_catalog(games);
                     app.images.clear_failures();
@@ -1305,69 +1254,6 @@ impl App {
                 Err(e) => crate::log!("compatibility list refresh failed: {e}"),
             });
         });
-    }
-
-    /// Switch one game's artwork between PlayStation and RAWG (fetching from RAWG if needed).
-    pub fn toggle_rawg_art(&mut self, gi: usize) {
-        let id = self.games[gi].g.id;
-        let name = self.games[gi].g.name.clone();
-        let on = self.cfg.lock().unwrap().rawg_art.contains(&id);
-        if on {
-            {
-                let mut c = self.cfg.lock().unwrap();
-                c.rawg_art.retain(|x| *x != id);
-                c.save();
-            }
-            self.refresh_art_for(gi);
-            self.toast("Using PlayStation artwork", &name, 1);
-            return;
-        }
-        let key = self.cfg.lock().unwrap().rawg_key.trim().to_string();
-        if key.is_empty() {
-            self.toast("RAWG key needed", "Add your free RAWG API key in Settings, then try again.", 0);
-            return;
-        }
-        self.toast("Getting artwork from RAWG…", &name, 0);
-        let store = self.art.clone();
-        std::thread::spawn(move || {
-            let found = psn::rawg_lookup(&store, &name, &key).is_some();
-            store.lock().unwrap().save();
-            post(move |app| {
-                if !found {
-                    app.toast("Not found on RAWG", &format!("RAWG has no artwork for {name}."), 2);
-                    return;
-                }
-                {
-                    let mut c = app.cfg.lock().unwrap();
-                    if !c.rawg_art.contains(&id) {
-                        c.rawg_art.push(id);
-                    }
-                    c.save();
-                }
-                if let Some(gi) = app.games.iter().position(|g| g.g.id == id) {
-                    app.refresh_art_for(gi);
-                }
-                app.toast("Using RAWG artwork", &name, 1);
-            });
-        });
-    }
-
-    /// Re-read one game's artwork and redraw whatever shows it.
-    fn refresh_art_for(&mut self, gi: usize) {
-        let info = self.art_for_game(&self.games[gi].g);
-        self.games[gi].info = info;
-        if let Some(l) = self.games[gi].local {
-            self.locals[l].info = self.games[gi].info.clone();
-        }
-        self.push_all();
-        if let Some(t) = self.hub {
-            if t.game == Some(gi) {
-                self.hub_shots = self.target_info(t).map(|i| i.shots.clone()).unwrap_or_default();
-                let (bg, cover) = (self.target_bg_url(t), self.cover_req(t));
-                self.want_background_or(bg, true, cover);
-                self.push_hub();
-            }
-        }
     }
 
     pub fn rescan_library(&mut self) {
@@ -2420,11 +2306,6 @@ impl App {
             }
             "settings" => self.open_settings(),
             "library" => self.switch_view(1, true),
-            "rawg_art" => {
-                if let Some(g) = t.game {
-                    self.toggle_rawg_art(g);
-                }
-            }
             "rate" => {
                 if let Some(l) = t.local {
                     self.open_rating(l, false);
@@ -2696,10 +2577,6 @@ impl App {
                 items.push(mk("rate", "Rate how it runs", "star"));
             }
         }
-        if let Some(g) = t.game.filter(|g| self.games[*g].g.steam.is_none()) {
-            let on = self.cfg.lock().unwrap().rawg_art.contains(&self.games[g].g.id);
-            items.push(mk("rawg_art", if on { "Use PlayStation artwork" } else { "Use RAWG artwork" }, "star"));
-        }
         let compat = match self.target_platform(t) {
             crate::platform::Platform::Ps4 => "shadPS4 compatibility list",
             crate::platform::Platform::Ps5 => "KytyPS5 compatibility list",
@@ -2942,5 +2819,58 @@ fn emulator_version(platform: crate::platform::Platform, kyty: &std::path::Path)
         crate::platform::Platform::Ps4 => crate::shad::pretty(&crate::shad::load_state().installed),
         crate::platform::Platform::Ps5 => crate::kyty::version_for(kyty),
         crate::platform::Platform::Pc => String::new(),
+    }
+}
+
+/// Which artwork a game shows. PC games: Steam's (from the catalog). PlayStation games: Sony's, by
+/// title ID; a release without one (new releases from the daily refresh) or one Sony has no art
+/// for gets Steam's, when the daily update found the game there, keeping whatever Sony does know
+/// (rating, store page). Nothing at all: the Library shows a placeholder with the game's name.
+pub fn pick_art(platform: crate::platform::Platform, steam: Option<&crate::catalog::Steam>, sony: Option<&Info>) -> Option<Info> {
+    if platform == crate::platform::Platform::Pc {
+        return steam.map(|steam| steam.info());
+    }
+    if sony.is_some_and(|i| !i.master.is_empty()) {
+        return sony.cloned();
+    }
+    match (steam, sony) {
+        (Some(steam), Some(s)) => {
+            let mut m = steam.info();
+            m.rating = s.rating.clone();
+            m.age = s.age.clone();
+            if !s.store.is_empty() {
+                m.store = s.store.clone();
+            }
+            Some(m)
+        }
+        (Some(steam), None) => Some(steam.info()),
+        (None, sony) => sony.cloned(),
+    }
+}
+
+#[cfg(test)]
+mod art_tests {
+    use super::*;
+    use crate::platform::Platform;
+
+    #[test]
+    fn playstation_art_comes_from_sony_then_steam_pc_art_from_steam() {
+        let steam = crate::catalog::Steam { appid: 686060, name: "Mewgenics".into(), assets: crate::catalog::SteamAssets {
+            portrait: Some("https://steam/686060/library_600x900_2x.jpg".into()), ..Default::default() }, ..Default::default() };
+        let sony = Info { name: "Stray".into(), master: "https://sony/master.png".into(), portrait: "https://sony/portrait.png".into(), ..Default::default() };
+        let sony_bare = Info { name: "Mewgenics".into(), store: "https://store.playstation.com/x".into(),
+            rating: Some(crate::psn::Rating { score: 4.5, total: 10 }), ..Default::default() };
+        // Sony's art wins for PlayStation games.
+        assert_eq!(pick_art(Platform::Ps5, Some(&steam), Some(&sony)).unwrap().portrait, "https://sony/portrait.png");
+        // No Sony art: Steam's, with Sony's rating and store page kept.
+        let mixed = pick_art(Platform::Ps5, Some(&steam), Some(&sony_bare)).unwrap();
+        assert_eq!((mixed.portrait.as_str(), mixed.store.as_str()), ("https://steam/686060/library_600x900_2x.jpg", "https://store.playstation.com/x"));
+        assert!(mixed.rating.is_some());
+        assert_eq!(pick_art(Platform::Ps4, Some(&steam), None).unwrap().source.as_deref(), Some("steam"));
+        // Neither: nothing (the Library shows the name instead).
+        assert!(pick_art(Platform::Ps5, None, None).is_none());
+        // PC games: Steam only, even if a title ID happened to match something.
+        assert_eq!(pick_art(Platform::Pc, Some(&steam), Some(&sony)).unwrap().source.as_deref(), Some("steam"));
+        assert!(pick_art(Platform::Pc, None, Some(&sony)).is_none());
     }
 }

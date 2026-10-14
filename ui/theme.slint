@@ -145,6 +145,8 @@ export struct CardData {
     console: string,
     image: image,
     loaded: bool,
+    // Nothing to load (no artwork found, or its download failed): a placeholder with the name.
+    no-art: bool,
 }
 
 export struct CardRow { index: int, cards: [CardData] }
@@ -164,6 +166,9 @@ export struct HubData {
     logo-h: length,
     cover: image,
     cover-loaded: bool,
+    // No artwork at all: the console's colours and name instead.
+    no-art: bool,
+    console: string,
     chips: [ChipData],
     age-icon: image,
     actions: [ActionData],

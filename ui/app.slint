@@ -479,8 +479,25 @@ export component AppWindow inherits Window {
                                 border-radius: (14px * S.k);
                                 clip: true;
                                 background: Theme.panel;
-                                Shimmer { active: !c.loaded; }
+                                Shimmer { active: !c.loaded && !c.no-art; }
                                 Cover { source: c.image; loaded: c.loaded; }
+                                // No artwork for this game: its name, on the console's colours.
+                                if c.no-art: Rectangle {
+                                    background: c.console == "PC" ? @linear-gradient(160deg, #1d3a2f 0%, #0d1714 100%)
+                                        : c.console == "PS4" ? @linear-gradient(160deg, #1b2d52 0%, #0b1224 100%)
+                                        : @linear-gradient(160deg, #26304f 0%, #0e1222 100%);
+                                    Text {
+                                        x: parent.width * 0.1;
+                                        width: parent.width * 0.8;
+                                        text: c.title;
+                                        font-size: max((15px * S.k), parent.width * 0.11);
+                                        font-weight: 700;
+                                        color: #e8ecf6;
+                                        wrap: word-wrap;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
                                 Badge { x: (10px * S.k); y: (10px * S.k); text: c.badge; size: (12px * S.k); }
                                 if c.console != "": Rectangle {
                                     x: parent.width - self.width - (10px * S.k);
@@ -912,6 +929,18 @@ export component AppWindow inherits Window {
                 background: Theme.panel;
                 drop-shadow-blur: 0;
                 Cover { source: root.hub.cover; loaded: root.hub.cover-loaded; }
+                // No artwork: the console's colours, as on the Library card (the name is beside it).
+                if root.hub.no-art: Rectangle {
+                    background: root.hub.console == "PC" ? @linear-gradient(160deg, #1d3a2f 0%, #0d1714 100%)
+                        : root.hub.console == "PS4" ? @linear-gradient(160deg, #1b2d52 0%, #0b1224 100%)
+                        : @linear-gradient(160deg, #26304f 0%, #0e1222 100%);
+                    Text {
+                        text: root.hub.console;
+                        font-size: (64px * S.k);
+                        font-weight: 800;
+                        color: #ffffff2e;
+                    }
+                }
             }
             // Scroll areas crop their content, so they start `gutter` before the content: a selected
             // button's grow + glow must never be cut off at the edge.

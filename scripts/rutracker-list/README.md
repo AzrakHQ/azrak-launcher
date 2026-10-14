@@ -146,6 +146,10 @@ with every script. Those forums have no title tag: every topic with a torrent is
 [steam.mjs](steam.mjs) adds Steam artwork and ProtonDB ratings to their Russian sources before
 translation; the daily workflow runs it on up to 900 releases a day.
 
+On `--platform ps5|ps4` it only looks up releases without a title ID, for which the launcher
+can't find PlayStation artwork (mostly new releases from the daily refresh), and only accepts an
+exact name match (edition words aside); ProtonDB isn't asked.
+
 ### Publishing the offline launcher snapshot
 
 After collection and translation, `npm run publish` validates the complete English

@@ -43,6 +43,9 @@ jobs:
           npm ci
           for p in ps5 ps4; do
             node refresh.mjs --platform $p
+            # Releases without a title ID (new ones: their details aren't read) get Steam's
+            # artwork, by exact name; a failure only leaves them for tomorrow.
+            node steam.mjs --platform $p --limit 300 || echo "::warning::$p Steam artwork lookup failed"
             node translate.mjs --platform $p --from-original
           done
           # PC games: also Steam artwork and ProtonDB ratings (at most 900 lookups a day; the

@@ -53,8 +53,6 @@ pub enum SId {
     Present,
     Amd,
     Extra,
-    Rawg,
-    RawgRemove,
     Refresh,
     Quit,
 }
@@ -280,7 +278,7 @@ impl App {
         header(&mut rows, "ADVANCED");
         let advanced = self.settings_advanced;
         let mut r = row(4, if advanced { "Hide advanced settings" } else { "Show advanced settings" });
-        r.hint = "KytyPS5 location and video options, artwork key, game catalog".into();
+        r.hint = "KytyPS5 location and video options, game catalog".into();
         rows.push((SId::Advanced, r));
         if advanced {
             let mut r = row(1, "KytyPS5 location");
@@ -302,23 +300,6 @@ impl App {
             r.value = cfg.extra_args.clone().into();
             r.hint = "For example --vblank-frequency 60 --tessellation".into();
             rows.push((SId::Extra, r));
-
-            let mut r = row(1, "RAWG API key");
-            r.secret = true;
-            let key = cfg.rawg_key.trim();
-            r.value = if key.is_empty() { "".into() } else if key.len() >= 8 { format!("••••••••{}", &key[key.len() - 4..]).into() } else { "••••".into() };
-            let rawg_games = self.games.iter().filter(|g| g.info.as_ref().and_then(|i| i.source.as_deref()) == Some("rawg")).count();
-            if !self.rawg_status.is_empty() {
-                (r.hint, r.hint_kind) = (self.rawg_status.clone().into(), self.rawg_status_kind);
-            } else if key.is_empty() {
-                r.hint = "Optional · fills in artwork for games missing from the PlayStation Store".into();
-            } else {
-                (r.hint, r.hint_kind) = (format!("Key saved · artwork for {}", plural(rawg_games, "game")).into(), 1);
-            }
-            rows.push((SId::Rawg, r));
-            if !key.is_empty() {
-                rows.push((SId::RawgRemove, row(4, "Remove RAWG key")));
-            }
 
             let mut r = row(4, "Check for new releases");
             r.value = if self.syncing {
@@ -494,7 +475,7 @@ impl App {
             return;
         }
         match id {
-            SId::Emulator | SId::Dirs | SId::Extra | SId::Rawg | SId::DownloadDir | SId::InstallDir => {
+            SId::Emulator | SId::Dirs | SId::Extra | SId::DownloadDir | SId::InstallDir => {
                 let cfg = self.cfg.lock().unwrap().clone();
                 let text = match id {
                     SId::Emulator => cfg.emulator,
@@ -515,14 +496,6 @@ impl App {
                 self.settings_change(i, if on { -1 } else { 1 });
             }
             SId::Resolution | SId::Present | SId::Display => self.settings_change(i, 1),
-            SId::RawgRemove => {
-                self.save_cfg(|c| c.rawg_key.clear());
-                self.rawg_status.clear();
-                self.toast("RAWG key removed", "Artwork from RAWG stays until the next refresh.", 1);
-                self.refresh_settings();
-                let first = self.settings_ids.iter().position(|s| *s == SId::Rawg).unwrap_or(0);
-                self.set_focus(Z_SETTINGS, first as i32);
-            }
             SId::KytyUpdate => {
                 audio::play(Sound::Select);
                 if self.kyty.busy || self.kyty.checking {
@@ -660,35 +633,6 @@ impl App {
                 if t.is_empty() || !util::expand_home(&t).is_absolute() {
                     self.toast("Invalid installation folder", "Use an absolute path or ~/Games/PS5.", 2);
                 } else { self.save_cfg(|c| c.install_dir = t); }
-            }
-            SId::Rawg => {
-                if t.is_empty() {
-                    return; // empty keeps the saved key
-                }
-                self.rawg_status = "Checking key with RAWG…".into();
-                self.rawg_status_kind = 0;
-                std::thread::spawn(move || {
-                    let err = crate::psn::check_rawg_key(&t);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        with_app(move |app| {
-                            if err.is_empty() {
-                                app.save_cfg(|c| c.rawg_key = t);
-                                app.rawg_status.clear();
-                                app.toast("RAWG key saved", "Missing artwork is downloading in the background.", 1);
-                                app.start_enrich();
-                            } else {
-                                app.rawg_status = err.clone();
-                                app.rawg_status_kind = 2;
-                                app.toast("RAWG key not saved", &format!("{err}."), 2);
-                                audio::play(Sound::Error);
-                            }
-                            if app.overlay == Overlay::Settings {
-                                app.build_settings();
-                                app.push_settings();
-                            }
-                        })
-                    });
-                });
             }
             _ => {}
         }

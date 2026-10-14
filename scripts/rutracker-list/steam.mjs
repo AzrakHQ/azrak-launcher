@@ -5,7 +5,11 @@
 // Linux version, and ProtonDB's tier (how well the Windows version runs through Proton). Topics
 // without a match get `{ appid: null }` and are tried again after 30 days.
 //
-//   node steam.mjs --platform linux|wine [--catalog path] [--limit 300]
+// For the console catalogs (ps5, ps4) it only fills a gap: releases without a title ID, which
+// the launcher can't find PlayStation artwork for (new releases from the daily refresh, whose
+// details aren't read). There only an exact name match counts, and ProtonDB isn't asked.
+//
+//   node steam.mjs --platform linux|wine|ps5|ps4 [--catalog path] [--limit 300] [--retry]
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,15 +35,16 @@ export function cleanName(title) {
 /** Comparable form of a name: lower case, letters and digits, roman numerals as digits. */
 export function normalize(name) {
   const roman = { ii: '2', iii: '3', iv: '4', v: '5', vi: '6', vii: '7', viii: '8', ix: '9', x: '10' };
-  return String(name).toLowerCase().replace(/[™®©]/g, '').replace(/&/g, ' and ')
+  // Apostrophes join their word ("Director's" is one word, not "director" + "s").
+  return String(name).toLowerCase().replace(/[™®©]/g, '').replace(/['’]/g, '').replace(/&/g, ' and ')
     .split(/[^\p{L}\p{N}]+/u).filter(Boolean).map(w => roman[w] || w)
     .filter(w => !['the', 'a', 'an', 'edition', 'definitive', 'deluxe', 'complete', 'goty', 'remastered', 'enhanced', 'collection', 'directors', 'cut', 'game', 'of', 'year'].includes(w))
     .join(' ');
 }
 
 /** The search result that is this game, or null: same name, or almost (the release's edition
- * words aside). Soundtracks, DLC and demos never match. */
-export function bestMatch(name, items) {
+ * words aside); with `exact`, the same name only. Soundtracks, DLC and demos never match. */
+export function bestMatch(name, items, { exact = false } = {}) {
   const want = normalize(name);
   if (!want) return null;
   const words = new Set(want.split(' '));
@@ -54,7 +59,7 @@ export function bestMatch(name, items) {
       const common = [...words].filter(w => other.has(w)).length;
       score = common / Math.max(words.size, other.size);
     }
-    if (score >= 0.8 && (!best || score > best.score)) best = { score, item };
+    if (score >= (exact ? 1 : 0.8) && (!best || score > best.score)) best = { score, item };
   }
   return best?.item ?? null;
 }
@@ -125,12 +130,34 @@ export function collection(title) {
     || cleanName(title).includes(' + ');
 }
 
+/** The name without an edition suffix: "SILENT HILL: Townfall - Deluxe Edition" → "SILENT HILL:
+ * Townfall", "Atomic Heart (Ultimate Edition)" → "Atomic Heart". Steam's search finds nothing for
+ * many such release names, and its app is the base game. */
+export function baseName(name) {
+  return String(name)
+    .replace(/\s*\([^()]*\b(?:edition|cut|version)\)\s*$/i, '')
+    .replace(/\s*[-–—:]\s*(?:[\p{L}\p{N}'’™®]+\s+){0,3}(?:edition|cut)\s*$/iu, '')
+    .replace(/\s+(?:digital\s+)?(?:deluxe|ultimate|definitive|complete|gold|special|standard|premium)\s+edition\s*$/i, '')
+    .trim();
+}
+
+/** A console release the launcher has no title ID for, so no PlayStation artwork. */
+export function needsSteamArt(topic) {
+  return !(topic.game_info?.title_id || /(?:PPSA|CUSA)\d{5}/i.test(topic.title));
+}
+
 /** Look up one release. Returns the steam block (appid null when Steam doesn't have it). */
-export async function lookup(title, now = new Date()) {
+export async function lookup(title, now = new Date(), { exact = false, ratings = true } = {}) {
   if (collection(title)) return { appid: null, reason: 'collection', checked_at: now.toISOString() };
   const name = cleanName(title);
-  const search = await get(`https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(name)}&l=english&cc=US`);
-  const item = bestMatch(name, search?.items);
+  const search = async term => (await get(`https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(term)}&l=english&cc=US`))?.items;
+  let item = bestMatch(name, await search(name), { exact });
+  // Nothing for "Game: Deluxe Edition": the base game's name, matched just as strictly.
+  const shorter = baseName(name);
+  if (!item && shorter && shorter !== name) {
+    await sleep(1600);
+    item = bestMatch(shorter, await search(shorter), { exact });
+  }
   if (!item) return { appid: null, checked_at: now.toISOString() };
   await sleep(1600); // appdetails allows about 200 requests per 5 minutes
   const details = await get(`https://store.steampowered.com/api/appdetails?appids=${item.id}&l=english&cc=US`);
@@ -141,22 +168,24 @@ export async function lookup(title, now = new Date()) {
   for (const [key, file] of [['portrait', 'library_600x900_2x.jpg'], ['hero', 'library_hero.jpg'], ['logo', 'logo.png']]) {
     assets[key] = await exists(`${base}/${file}`) ? `${base}/${file}` : null;
   }
-  return steamBlock(item.id, data, assets, await protondb(item.id), now);
+  return steamBlock(item.id, data, assets, ratings ? await protondb(item.id) : null, now);
 }
 
-const due = (topic, now) => !topic.steam || (topic.steam.appid == null
-  && now - new Date(topic.steam.checked_at || 0) > RETRY_DAYS * 86400_000);
+const due = (topic, now, retry = false) => !topic.steam || (topic.steam.appid == null
+  && (retry || now - new Date(topic.steam.checked_at || 0) > RETRY_DAYS * 86400_000));
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   const platform = platformFrom(args);
-  if (platform.tag) throw new Error('Steam data is for the PC forums (--platform linux or wine)');
+  const console_ = Boolean(platform.tag);
   const option = (flag, fallback) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : fallback; };
   const path = resolve(option('--catalog', fileURLToPath(new URL(`../../dist/rutracker/${platform.key}-topics.json.ru-backup.json`, import.meta.url))));
   const limit = Number(option('--limit', '100000'));
   const catalog = JSON.parse(await readFile(path, 'utf8'));
   const now = new Date();
-  const todo = catalog.topics.filter(t => due(t, now)).slice(0, limit);
+  // --retry: look up unmatched releases again now (after the matching improved).
+  const retry = args.includes('--retry');
+  const todo = catalog.topics.filter(t => due(t, now, retry) && (!console_ || needsSteamArt(t))).slice(0, limit);
   console.log(`${platform.label}: ${todo.length} topics to look up`);
   let found = 0, done = 0;
   const save = async () => {
@@ -166,7 +195,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   };
   for (const topic of todo) {
     try {
-      topic.steam = await lookup(topic.title, now);
+      topic.steam = await lookup(topic.title, now, console_ ? { exact: true, ratings: false } : {});
     } catch (error) {
       console.log(`Stopping: ${error.message}`);
       break;

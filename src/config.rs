@@ -22,7 +22,6 @@ pub struct Config {
     pub extra_args: String,
     pub sounds: bool,
     pub return_on_exit: bool,
-    pub rawg_key: String,
     /// Output name (e.g. "DP-2"); empty = primary display.
     pub monitor: String,
     /// Keep the launcher-managed KytyPS5 on the latest official build.
@@ -31,8 +30,6 @@ pub struct Config {
     pub shad_auto_update: bool,
     /// Install new PS5 Launcher releases automatically (applied on the next start).
     pub app_auto_update: bool,
-    /// Catalog game ids whose artwork comes from RAWG (chosen per game in the Options menu).
-    pub rawg_art: Vec<i64>,
     /// Download (and seed) only through a VPN; stop when it isn't connected.
     pub vpn_only: bool,
     /// The VPN's network interface to use ("" = any connected VPN).
@@ -58,12 +55,10 @@ impl Default for Config {
             extra_args: String::new(),
             sounds: true,
             return_on_exit: true,
-            rawg_key: String::new(),
             monitor: String::new(),
             kyty_auto_update: true,
             shad_auto_update: true,
             app_auto_update: true,
-            rawg_art: Vec::new(),
             vpn_only: false,
             vpn_interface: String::new(),
             pc_noticed: String::new(),

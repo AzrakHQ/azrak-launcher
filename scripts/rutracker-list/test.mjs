@@ -242,3 +242,34 @@ test('PC releases are matched to their Steam app by name, never to soundtracks o
   }, { portrait: 'https://x/p.jpg', hero: null, logo: null }, 'platinum', new Date('2026-10-14T00:00:00Z'));
   assert.deepEqual([block.short, block.linux, block.video, block.protondb, block.metacritic], ['Help Madeline survive.', true, 'https://x/m.m3u8', 'platinum', 88]);
 });
+
+test('console releases without a title ID get Steam art, by exact name only', async () => {
+  const { bestMatch, needsSteamArt, cleanName } = await import('./steam.mjs');
+  // Only releases the launcher can't find PlayStation art for.
+  assert.equal(needsSteamArt({ title: '[PS5] Mewgenics [USA / RUS / v01.121.220 / Retail / ffpfsc] [4.37 GB]', game_info: null }), true);
+  assert.equal(needsSteamArt({ title: '[PS5] Stray [EUR] [PPSA02100]', game_info: null }), false);
+  assert.equal(needsSteamArt({ title: '[PS4] Stray [EUR]', game_info: { title_id: 'CUSA24899' } }), false);
+  assert.equal(cleanName("[PS5] Darwin's Paradox! [Region Free / ENG / v01.000.003 / Retail / folder]"), "Darwin's Paradox!");
+  const items = [
+    { type: 'app', id: 1, name: "Darwin's Paradox" },          // an older, different game with a near name
+    { type: 'app', id: 2, name: 'Ghost of Tsushima DIRECTOR\'S CUT' },
+    { type: 'app', id: 3, name: 'Superliminal Soundtrack' },
+  ];
+  // Exact: punctuation and edition words aside, the same name; near names don't count.
+  assert.equal(bestMatch('Ghost of Tsushima', items, { exact: true })?.id, 2);
+  assert.equal(bestMatch('Superliminal', items, { exact: true }), null, 'a soundtrack is not the game');
+  assert.equal(bestMatch("Darwin's Paradox! 2", items, { exact: true }), null, 'a near name is not the game');
+  // Edition suffixes Steam's search doesn't find: the base game's name.
+  const { baseName } = await import('./steam.mjs');
+  assert.equal(baseName('SILENT HILL: Townfall - Deluxe Edition'), 'SILENT HILL: Townfall');
+  assert.equal(baseName('007 First Light: Deluxe Edition'), '007 First Light');
+  assert.equal(baseName('Atomic Heart (Ultimate Edition)'), 'Atomic Heart');
+  assert.equal(baseName("Assassin's Creed™ Black Flag Resynced: Deluxe Edition"), "Assassin's Creed™ Black Flag Resynced");
+  assert.equal(baseName('Mortal Kombat 1: Definitive Edition'), 'Mortal Kombat 1');
+  assert.equal(baseName('Hades II'), 'Hades II', 'no suffix, no change');
+  assert.equal(baseName('The Last of Us Part II'), 'The Last of Us Part II');
+  // PC matching stays as lenient as before (four of five words); console matching doesn't.
+  const near = [{ type: 'app', id: 4, name: 'Super Meat Boy Forever' }];
+  assert.equal(bestMatch('Super Meat Boy Forever Plus', near)?.id, 4);
+  assert.equal(bestMatch('Super Meat Boy Forever Plus', near, { exact: true }), null);
+});
