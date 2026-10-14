@@ -46,6 +46,10 @@ pub fn emulator() -> PathBuf {
     root().join("current").join("squashfs-root").join("AppRun")
 }
 
+pub fn is_managed(emulator: &Path) -> bool {
+    emulator.starts_with(root())
+}
+
 pub fn installed() -> bool {
     emulator().is_file() && !load_state().installed.is_empty()
 }

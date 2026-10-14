@@ -8,6 +8,8 @@ use std::path::PathBuf;
 #[serde(default)]
 pub struct Config {
     pub emulator: String,
+    /// The shadPS4 that PS4 games start with: the launcher's copy, or your own build.
+    pub shad_emulator: String,
     pub game_dirs: Vec<String>,
     pub download_dir: String,
     pub install_dir: String,
@@ -42,6 +44,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             emulator: String::new(),
+            shad_emulator: String::new(),
             game_dirs: vec!["~/Games/PS5".into()],
             download_dir: "~/Downloads/PS5".into(),
             install_dir: "~/Games/PS5".into(),
@@ -89,6 +92,7 @@ impl Config {
                 cfg.emulator = found.to_string_lossy().into_owned();
             }
         }
+        cfg.fill_shad(&crate::shad::emulator());
         cfg
     }
 
@@ -118,13 +122,37 @@ impl Config {
     }
 
     pub fn emulator_ok(&self) -> bool {
-        let p = self.emulator_path();
-        std::fs::metadata(&p).map(|m| m.is_file() && is_executable(&m)).unwrap_or(false)
+        runnable(&self.emulator_path())
+    }
+
+    pub fn shad_path(&self) -> PathBuf {
+        expand_home(self.shad_emulator.trim())
+    }
+
+    pub fn shad_ok(&self) -> bool {
+        runnable(&self.shad_path())
+    }
+
+    /// Whether PS4 games use your own shadPS4: a path you set outside the launcher's folder.
+    /// The launcher then doesn't install or update shadPS4.
+    pub fn shad_own(&self) -> bool {
+        !self.shad_emulator.trim().is_empty() && !crate::shad::is_managed(&self.shad_path())
+    }
+
+    /// Nothing set: use the launcher's shadPS4 once it is installed. A path you set is kept.
+    pub fn fill_shad(&mut self, managed: &std::path::Path) {
+        if self.shad_emulator.trim().is_empty() && managed.is_file() {
+            self.shad_emulator = managed.to_string_lossy().into_owned();
+        }
     }
 
     pub fn game_dir_paths(&self) -> Vec<PathBuf> {
         self.game_dirs.iter().filter(|d| !d.trim().is_empty()).map(|d| expand_home(d.trim())).collect()
     }
+}
+
+fn runnable(path: &std::path::Path) -> bool {
+    std::fs::metadata(path).map(|m| m.is_file() && is_executable(&m)).unwrap_or(false)
 }
 
 fn is_executable(m: &std::fs::Metadata) -> bool {
@@ -158,6 +186,41 @@ mod tests {
         assert!(!opted_out.seed_after_download);
         let restored: Config = serde_json::from_slice(&serde_json::to_vec(&opted_out).unwrap()).unwrap();
         assert!(!restored.seed_after_download);
+    }
+
+    #[test]
+    fn shad_is_your_own_only_outside_the_launchers_folder() {
+        let mut c = Config::default();
+        assert!(!c.shad_own(), "nothing set yet: the launcher installs its own");
+        c.shad_emulator = "  ".into();
+        assert!(!c.shad_own(), "blank text is not a path");
+        c.shad_emulator = crate::shad::emulator().to_string_lossy().into_owned();
+        assert!(!c.shad_own(), "the launcher's copy");
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("shadps4");
+        c.shad_emulator = exe.to_string_lossy().into_owned();
+        assert!(c.shad_own() && !c.shad_ok(), "a missing file is not runnable");
+        std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+        assert!(!c.shad_ok(), "not executable yet");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(c.shad_ok());
+        assert_eq!(c.shad_path(), exe);
+    }
+
+    #[test]
+    fn an_empty_shad_path_takes_the_launchers_copy_once_installed() {
+        let dir = tempfile::tempdir().unwrap();
+        let managed = dir.path().join("AppRun");
+        let mut c = Config::default();
+        c.fill_shad(&managed);
+        assert!(c.shad_emulator.is_empty(), "not installed yet");
+        std::fs::write(&managed, "").unwrap();
+        c.fill_shad(&managed);
+        assert_eq!(c.shad_path(), managed);
+        c.shad_emulator = "/somewhere/else/shadps4".into();
+        c.fill_shad(&managed);
+        assert_eq!(c.shad_emulator, "/somewhere/else/shadps4", "a path you set is never replaced");
     }
 }
 

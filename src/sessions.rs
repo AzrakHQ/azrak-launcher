@@ -476,13 +476,17 @@ impl Sessions {
             return self.spawn(&mut inner, game, command, true);
         }
         let ps4 = game.platform == crate::platform::Platform::Ps4;
-        if ps4 && !crate::shad::emulator().is_file() {
-            return Err("shadPS4 isn't installed yet".into());
+        if ps4 && !cfg.shad_ok() {
+            return Err(if cfg.shad_own() {
+                format!("shadPS4 not found or not executable:\n{}", cfg.shad_path().display())
+            } else {
+                "shadPS4 isn't installed yet".into()
+            });
         }
         if !ps4 && !cfg.emulator_ok() {
             return Err(format!("Emulator not found or not executable:\n{}", cfg.emulator_path().display()));
         }
-        let emu = if ps4 { crate::shad::emulator() } else { cfg.emulator_path() };
+        let emu = if ps4 { cfg.shad_path() } else { cfg.emulator_path() };
         let mut args: Vec<String> = vec![
             "--game".into(),
             game.path.to_string_lossy().into_owned(),

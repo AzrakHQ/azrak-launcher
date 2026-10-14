@@ -49,6 +49,7 @@ pub enum SId {
     // Advanced
     Advanced,
     Emulator,
+    ShadEmulator,
     Resolution,
     Present,
     Amd,
@@ -212,7 +213,10 @@ impl App {
         let shad_state = crate::shad::load_state();
         let shad_installed = crate::shad::installed();
         let mut r = row(4, "shadPS4");
-        r.hint = if shad_installed {
+        let shad_own = cfg.shad_own();
+        r.hint = if shad_own {
+            "Runs PS4 games · you use your own build"
+        } else if shad_installed {
             "Runs PS4 games"
         } else if cfg.shad_auto_update {
             "Runs PS4 games · installs by itself in the background"
@@ -222,6 +226,8 @@ impl App {
         .into();
         let (value, kind) = if self.shad.busy {
             (self.shad.progress.clone(), 0)
+        } else if shad_own {
+            ("Switch to official builds".to_string(), 3)
         } else if !shad_installed {
             ("Install".to_string(), 3)
         } else if shad_state.latest == shad_state.installed {
@@ -247,7 +253,7 @@ impl App {
             r.hint = std::mem::take(&mut rollback_hint).into();
             rows.push((SId::KytyRollback, r));
         }
-        if !shad_state.previous.is_empty() && crate::shad::root().join("versions").join(&shad_state.previous).is_dir() {
+        if !shad_own && !shad_state.previous.is_empty() && crate::shad::root().join("versions").join(&shad_state.previous).is_dir() {
             let mut r = row(4, "Go back to the previous shadPS4");
             r.value = crate::shad::pretty(&shad_state.previous).into();
             r.hint = rollback_hint.into();
@@ -278,13 +284,17 @@ impl App {
         header(&mut rows, "ADVANCED");
         let advanced = self.settings_advanced;
         let mut r = row(4, if advanced { "Hide advanced settings" } else { "Show advanced settings" });
-        r.hint = "KytyPS5 location and video options, game catalog".into();
+        r.hint = "KytyPS5 and shadPS4 locations, video options, game catalog".into();
         rows.push((SId::Advanced, r));
         if advanced {
             let mut r = row(1, "KytyPS5 location");
             r.value = util::display_path(&cfg.emulator).into();
             (r.hint, r.hint_kind) = if ok { ("Found".into(), 1) } else { ("Nothing runnable at this path".into(), 2) };
             rows.push((SId::Emulator, r));
+            let mut r = row(1, "shadPS4 location");
+            r.value = util::display_path(&cfg.shad_emulator).into();
+            (r.hint, r.hint_kind) = if cfg.shad_ok() { ("Found".into(), 1) } else { ("Nothing runnable at this path".into(), 2) };
+            rows.push((SId::ShadEmulator, r));
             let mut r = row(3, "Resolution (PS5 games)");
             r.value = format!("{} × {}", cfg.width, cfg.height).into();
             rows.push((SId::Resolution, r));
@@ -475,10 +485,11 @@ impl App {
             return;
         }
         match id {
-            SId::Emulator | SId::Dirs | SId::Extra | SId::DownloadDir | SId::InstallDir => {
+            SId::Emulator | SId::ShadEmulator | SId::Dirs | SId::Extra | SId::DownloadDir | SId::InstallDir => {
                 let cfg = self.cfg.lock().unwrap().clone();
                 let text = match id {
                     SId::Emulator => cfg.emulator,
+                    SId::ShadEmulator => cfg.shad_emulator,
                     SId::Dirs => cfg.game_dirs.join("; "),
                     SId::Extra => cfg.extra_args,
                     SId::DownloadDir => cfg.download_dir,
@@ -535,6 +546,13 @@ impl App {
             }
             SId::ShadUpdate => {
                 audio::play(Sound::Select);
+                if self.shad.busy {
+                    return;
+                }
+                if self.cfg.lock().unwrap().shad_own() {
+                    self.shad_switch_to_managed();
+                    return;
+                }
                 // Installs when shadPS4 isn't there yet, otherwise updates it if there's a newer release.
                 self.shad_check(true);
             }
@@ -609,6 +627,15 @@ impl App {
                 self.kyty_refresh_version();
                 let ok = self.cfg.lock().unwrap().emulator_ok();
                 if ok { self.toast("Emulator path saved", "Games will start with this KytyPS5.", 1) } else { self.toast("Emulator not found", "There's no runnable kyty_emulator at that path.", 2) }
+            }
+            SId::ShadEmulator => {
+                // An empty path goes back to the launcher's copy.
+                self.save_cfg(|c| {
+                    c.shad_emulator = t;
+                    c.fill_shad(&crate::shad::emulator());
+                });
+                let ok = self.cfg.lock().unwrap().shad_ok();
+                if ok { self.toast("shadPS4 path saved", "PS4 games will start with this shadPS4.", 1) } else { self.toast("shadPS4 not found", "There's no runnable shadPS4 at that path.", 2) }
             }
             SId::Dirs => {
                 let dirs: Vec<String> = t.split([';', '\n']).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();

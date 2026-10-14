@@ -34,8 +34,11 @@ impl App {
     /// With automatic updates on, install shadPS4 when it's missing and update it every few
     /// hours. Waits for the start-up screen and for KytyPS5's own download to finish.
     pub fn shad_tick(&mut self) {
-        let auto = self.cfg.lock().unwrap().shad_auto_update;
-        if !auto || self.boot.active || self.kyty.busy || self.shad.busy {
+        let (auto, own) = {
+            let c = self.cfg.lock().unwrap();
+            (c.shad_auto_update, c.shad_own())
+        };
+        if !auto || own || self.boot.active || self.kyty.busy || self.shad.busy {
             return;
         }
         if self.shad.retry || !shad::installed() || crate::util::now_secs() - shad::load_state().last_check > shad::CHECK_INTERVAL {
@@ -55,8 +58,11 @@ impl App {
                     app.shad.retry = false;
                     shad::mark_checked(&rel.tag);
                     let st = shad::load_state();
-                    // Automatic updates may have been switched off while this check ran.
-                    let wanted = manual || app.cfg.lock().unwrap().shad_auto_update;
+                    // Automatic updates may have been switched off, or your own shadPS4 set, while this check ran.
+                    let wanted = {
+                        let c = app.cfg.lock().unwrap();
+                        !c.shad_own() && (manual || c.shad_auto_update)
+                    };
                     if wanted && rel.tag != st.installed && (manual || rel.tag != st.skip) {
                         // A background first install that fails (offline) retries quietly later.
                         let quiet = !manual && !shad::installed();
@@ -74,6 +80,34 @@ impl App {
                     if manual {
                         app.toast("Couldn't check for shadPS4 updates", &e, 2);
                     }
+                }
+            });
+        });
+    }
+
+    /// Switch from your own shadPS4 to the launcher's copy. Installs it first when it isn't there.
+    pub fn shad_switch_to_managed(&mut self) {
+        if shad::installed() {
+            {
+                let mut c = self.cfg.lock().unwrap();
+                c.shad_emulator = shad::emulator().to_string_lossy().into_owned();
+                c.save();
+            }
+            self.toast("Switched to official builds", &format!("PS4 games run on shadPS4 {}.", shad::pretty(&shad::load_state().installed)), 1);
+            self.refresh_settings();
+            return;
+        }
+        if self.shad.busy {
+            return;
+        }
+        self.shad.busy = true;
+        std::thread::spawn(|| {
+            let res = shad::latest_release();
+            post(move |app| {
+                app.shad.busy = false;
+                match res {
+                    Ok(rel) => app.shad_install(rel, None, false, true),
+                    Err(e) => app.toast("Couldn't get shadPS4", &format!("{e}. Check your connection and try again."), 2),
                 }
             });
         });
@@ -142,6 +176,11 @@ impl App {
                 app.set_status("", false);
                 match res {
                     Ok(()) => {
+                        {
+                            let mut c = app.cfg.lock().unwrap();
+                            c.shad_emulator = shad::emulator().to_string_lossy().into_owned();
+                            c.save();
+                        }
                         let what = if updating { "shadPS4 updated" } else { "shadPS4 installed" };
                         app.toast(what, &format!("PS4 games run on shadPS4 {}.", shad::pretty(&rel.tag)), 1);
                         if let Some(id) = launch_after.or(app.shad.launch_after.take()) {
@@ -173,6 +212,10 @@ impl App {
     /// one if automatic updates are still on.
     pub fn shad_games_closed(&mut self) {
         let Some((rel, manual)) = self.shad.pending.take() else { return };
+        if self.cfg.lock().unwrap().shad_own() {
+            crate::log!("queued shadPS4 update dropped: you use your own shadPS4");
+            return;
+        }
         if !manual && !self.cfg.lock().unwrap().shad_auto_update {
             crate::log!("queued shadPS4 update dropped: automatic updates are off");
             return;

@@ -1145,9 +1145,9 @@ impl App {
             None if status.is_some() => crate::results::save_log(&util::cache_dir().join("logs").join(format!("{tid}.log")), &tid, false),
             None => None,
         }.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-        let (emulator, platform) = (self.cfg.lock().unwrap().emulator_path(), self.locals[l].l.platform);
+        let probe = self.emulator_probe(l);
         std::thread::spawn(move || {
-            let kyty = emulator_version(platform, &emulator);
+            let kyty = probe.version();
             post(move |app| {
                 let Some(status) = status else {
                     app.my_results.skip(&tid, &kyty);
@@ -1169,14 +1169,19 @@ impl App {
         });
     }
 
+    fn emulator_probe(&self, l: usize) -> EmulatorProbe {
+        let c = self.cfg.lock().unwrap();
+        EmulatorProbe { platform: self.locals[l].l.platform, kyty: c.emulator_path(), own_shad: c.shad_own() }
+    }
+
     /// After a game closes, ask how far it got, unless it was rated or skipped on this build.
     fn ask_rating(&mut self, game_id: &str) {
         let Some(l) = self.locals.iter().position(|g| g.l.id == game_id) else { return };
         let tid = self.locals[l].l.title_id.clone();
-        let (emulator, platform) = (self.cfg.lock().unwrap().emulator_path(), self.locals[l].l.platform);
+        let probe = self.emulator_probe(l);
         let id = game_id.to_string();
         std::thread::spawn(move || {
-            let kyty = emulator_version(platform, &emulator);
+            let kyty = probe.version();
             post(move |app| {
                 let free = matches!(app.overlay, Overlay::None | Overlay::Hub) && app.live.is_empty() && !app.boot.active;
                 if free && app.my_results.should_ask(&tid, &kyty) {
@@ -2370,8 +2375,9 @@ impl App {
             return;
         }
         let game = self.locals[l].l.clone();
-        // PS4 games run on shadPS4, which is installed the first time one is played.
-        if game.platform == crate::platform::Platform::Ps4 && !crate::shad::installed() {
+        // PS4 games run on shadPS4, which is installed the first time one is played (unless you set your own).
+        let missing_shad = { let c = self.cfg.lock().unwrap(); !c.shad_own() && !c.shad_ok() };
+        if game.platform == crate::platform::Platform::Ps4 && missing_shad {
             self.shad_install_then_launch(game.id.clone());
             return;
         }
@@ -2835,13 +2841,23 @@ pub fn model<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
 }
 
 
-/// The emulator build a game runs on, recorded with its rating: KytyPS5's for PS5 games,
-/// shadPS4's release for PS4 games. Can take a moment for a custom KytyPS5: call off the UI thread.
-fn emulator_version(platform: crate::platform::Platform, kyty: &std::path::Path) -> String {
-    match platform {
-        crate::platform::Platform::Ps4 => crate::shad::pretty(&crate::shad::load_state().installed),
-        crate::platform::Platform::Ps5 => crate::kyty::version_for(kyty),
-        crate::platform::Platform::Pc => String::new(),
+/// What it takes to name the emulator build a game ran on, for its rating: cheap to make, but
+/// `version` can take a moment for a custom KytyPS5, so call it off the UI thread.
+struct EmulatorProbe {
+    platform: crate::platform::Platform,
+    kyty: std::path::PathBuf,
+    own_shad: bool,
+}
+
+impl EmulatorProbe {
+    /// KytyPS5's build for PS5 games, shadPS4's release for PS4 games.
+    fn version(&self) -> String {
+        match self.platform {
+            crate::platform::Platform::Ps4 if self.own_shad => "own build".into(),
+            crate::platform::Platform::Ps4 => crate::shad::pretty(&crate::shad::load_state().installed),
+            crate::platform::Platform::Ps5 => crate::kyty::version_for(&self.kyty),
+            crate::platform::Platform::Pc => String::new(),
+        }
     }
 }
 
