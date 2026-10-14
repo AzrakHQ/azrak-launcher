@@ -137,7 +137,10 @@ itself when it finds an NVIDIA graphics card. To get to the desktop, quit the la
    ```
 
    The first launch downloads artwork and KytyPS5, which takes about a minute.
-2. Already have games? Add their folder in **Settings → Game folders**.
+2. Already have games? Put them in `~/Games/PS5`, `~/Games/PS4` or `~/Games/PC`, or add their
+   folder in **Settings → More game folders**. **Settings → Games folder** changes `~/Games`.
+   Downloads go into `~/Downloads/Games/PS5`, `PS4` or `PC`; **Settings → Downloads
+   folder** changes `~/Downloads/Games`.
 3. To get a game, open it in the **Library**, choose **Download**, then **Install**, then
    **Play**. Keep the launcher open while it downloads.
 

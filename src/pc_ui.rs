@@ -78,7 +78,7 @@ impl App {
         // Room for it, when it's still to be downloaded.
         if !matches!(verdict, Verdict::No(_)) && t.local.is_none() && self.download_for_target(t).is_none() {
             let need = t.game.and_then(|g| self.games[g].g.size_gb);
-            let dir = crate::util::expand_home(&self.cfg.lock().unwrap().download_dir);
+            let dir = crate::util::expand_home(&self.cfg.lock().unwrap().download_path(self.target_platform(t)));
             if let (Some(need), Some(free)) = (need, crate::pc::free_gb(&dir)) {
                 if need > free {
                     return Some((format!("ON THIS PC · {free:.0} GB FREE"), "Not enough space".into(), 3));

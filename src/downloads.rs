@@ -1541,6 +1541,14 @@ mod tests {
     }
 
     #[test]
+    fn owned_folder_creates_a_missing_console_folder() {
+        let temp = crate::hostos::real_tempdir();
+        let job = job(&temp.path().join("Games").join("PS4"), "0123456789abcdef0123456789abcdef01234567");
+        let folder = owned_folder(&job).unwrap();
+        assert!(folder.join(MARKER).is_file() && folder.parent().unwrap().ends_with("Games/PS4"));
+    }
+
+    #[test]
     fn owned_folder_rejects_unowned_and_linked_markers_and_resets_permissions() {
         let temp = crate::hostos::real_tempdir();
         let job = job(temp.path(), "0123456789abcdef0123456789abcdef01234567");

@@ -16,7 +16,7 @@ impl App {
         self.download_pending = Some((game.g.id, game.name.clone(), game.g.magnet.clone()));
         let ui = self.ui();
         ui.set_download_title(game.name.clone().into());
-        ui.set_download_path(self.cfg.lock().unwrap().download_dir.clone().into());
+        ui.set_download_path(self.cfg.lock().unwrap().download_path(game.g.platform).into());
         ui.set_download_error("".into());
         let privacy = match self.cfg.lock().unwrap().download_vpn() {
             None => String::new(),
@@ -54,8 +54,8 @@ impl App {
         let path = self.ui().get_download_path().trim().to_owned();
         match self.downloads.prepare(topic, &name, &magnet, util::expand_home(&path)) {
             Ok(key) => {
+                // A path changed here is for this download only: the downloads folder stays.
                 self.download_pending = None;
-                { let mut cfg = self.cfg.lock().unwrap(); cfg.download_dir = path; cfg.save(); }
                 self.open_downloads(Some(&key));
             }
             Err(error) => self.ui().set_download_error(error.to_string().into()),

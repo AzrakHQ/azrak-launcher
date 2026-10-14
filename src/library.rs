@@ -161,4 +161,17 @@ mod tests {
         let g = &found[0];
         assert_eq!((g.platform, g.title_id.as_str(), g.name.as_str(), g.version.as_str()), (Platform::Ps4, "CUSA04118", "Firewatch", "01.08"));
     }
+
+    #[test]
+    fn finds_games_in_the_console_folders_of_the_games_folder() {
+        let t = tempfile::tempdir().unwrap();
+        ps4(&t.path().join("PS4").join("CUSA04118"), "gd");
+        let ps5 = t.path().join("PS5").join("PPSA12345");
+        std::fs::create_dir_all(ps5.join("sce_sys")).unwrap();
+        std::fs::write(ps5.join("sce_sys/param.json"), r#"{"titleId":"PPSA12345","localizedParameters":{"defaultLanguage":"en-US","en-US":{"titleName":"Fixture"}}}"#).unwrap();
+        let found = scan(&[t.path().to_path_buf()]);
+        let mut ids: Vec<&str> = found.iter().map(|g| g.title_id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, ["CUSA04118", "PPSA12345"]);
+    }
 }

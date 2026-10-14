@@ -79,8 +79,11 @@ downloading in the background.
 which takes well under a second. Covers for newly added games download quietly in the
 background.
 
-**Add your games:** point **Settings → Game folders** at the folder that holds your games. A
-game is any folder with a `sce_sys/param.json`.
+**Add your games:** set **Settings → Games folder** (default `~/Games`). PS5 games install into its
+`PS5` folder, PS4 games into its `PS4` folder and PC games into its `PC` folder, and the launcher
+finds games in all of them. Games
+stored somewhere else go in **Settings → More game folders**. A game is any folder with a
+`sce_sys/param.json` (PS5) or `sce_sys/param.sfo` (PS4).
 
 ## RuTracker catalog
 
@@ -177,8 +180,11 @@ files against the torrent: it seeds only if every piece verifies (**Complete · 
 files to seed** meanwhile). Missing, resized or changed files stop it with an error and
 nothing is downloaded again; unfinished transfers are never started automatically.
 
-The default destination is `~/Downloads/PS5`, editable in Settings or the setup
-dialog. Each torrent gets a private `torrent-<infohash>` subfolder, preventing
+Downloads go into the downloads folder's `PS5`, `PS4` or `PC` folder, by the release's platform
+(`~/Downloads/Games/PS5` by default). **Settings → Downloads folder** changes `~/Downloads/Games`;
+a path changed in the download dialog is for that download only. Older settings migrate on start.
+The old default `~/Downloads/PS5` becomes `~/Downloads/Games`. Another folder named `PS5`, `PS4` or `PC`
+becomes its parent, but never the home or root folder. Transfers already saved keep their folders. Each torrent gets a private `torrent-<infohash>` subfolder, preventing
 unrelated releases from overwriting one another. Existing unowned folders,
 unsafe paths, symlinks and hardlinks are rejected. Free space is checked before
 starting, but filesystem quotas and concurrent filesystem changes can still fail
@@ -268,16 +274,19 @@ AVX2 0/1; RAM GB; GPUs as `name,vulkan,type,VRAM GB,PS5 ok,PS4 ok` separated by 
 ## Download → Install → Play (details)
 
 Once a download completes, choose **Install** in Downloads or its Game Hub.
-Confirm the installation destination (default `~/Games/PS5`, editable in Settings
-and the confirmation dialog). Extraction/copying runs in a separate background
-worker while browsing or minimizing the launcher. Downloads shows its current
-phase, progress, errors and **Cancel install**; closing that panel does not cancel it.
+Confirm the installation destination: the games folder's `PS5`, `PS4` or `PC` folder, by the game's
+platform (`~/Games/PS5` by default; a game not in the catalog goes to `PS5`). A path changed in the
+confirmation dialog is for that game only; **Settings → Games folder** changes the default.
+Extraction/copying runs in a separate background worker while browsing or minimizing the
+launcher. Downloads shows its current phase, progress, errors and **Cancel install**; closing that
+panel does not cancel it.
 
 The installer checks available space, stages output in a private hidden directory,
 and requires exactly one complete game with valid title metadata and a nonempty
 `eboot.bin`. Its title ID must match the selected release when known. Only after
 validation is the game atomically published without replacing an existing folder,
-the destination added to Game folders, and the library refreshed. The action then
+the destination added to More game folders (unless the games folder already covers it), and the
+library refreshed. The action then
 becomes **Play**. Original archives and downloaded folders are always retained;
 installation itself never executes their contents.
 

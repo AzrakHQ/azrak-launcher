@@ -28,7 +28,7 @@ const base = join(artifacts, 'downloads');
 const installRoot = join(artifacts, 'library');
 await mkdir(store, { recursive: true });
 await writeFile(join(config, 'config.json'), JSON.stringify({ sounds: false, game_dirs: [],
-  download_dir: base, install_dir: installRoot, kyty_auto_update: false, app_auto_update: false }));
+  downloads_dir: base, games_dir: installRoot, kyty_auto_update: false, app_auto_update: false }));
 const hash1 = 'a'.repeat(40), hash2 = 'b'.repeat(40), catalogHash = 'c'.repeat(40);
 const folder = join(base, `torrent-${hash1}`);
 await mkdir(folder, { recursive: true });
@@ -194,7 +194,9 @@ try {
   assert.equal(records[0].title_id, 'PPSA12345');
   assert.equal(digest(await readFile(join(records[0].path, 'eboot.bin'))), digest(gameBytes));
   assert.equal(digest(await readFile(archive)), archiveDigest);
-  assert.ok(JSON.parse(await readFile(join(config, 'config.json'))).game_dirs.includes(installRoot));
+  // PS5 games install into the games folder's PS5 folder, which the games folder scan already covers.
+  assert.equal(dirname(records[0].path), join(installRoot, 'PS5'));
+  assert.deepEqual(JSON.parse(await readFile(join(config, 'config.json'))).game_dirs, []);
   await key('Escape'); // Return to the same Hub, which must now show Play.
   const registeredHub = await shot('registered-hub');
   // Same white primary pill: verify registration text and review the Play screenshot.

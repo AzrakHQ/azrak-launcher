@@ -30,9 +30,10 @@ impl App {
         let ui = self.ui();
         ui.set_download_is_install(true);
         ui.set_download_title(job.name.into());
-        ui.set_download_path(self.cfg.lock().unwrap().install_dir.clone().into());
-        ui.set_download_error("".into());
         let platform = self.games.iter().find(|game| game.g.id == job.topic).map(|game| game.g.platform);
+        // A game not in the catalog goes to the PS5 folder, like any game of unknown platform.
+        ui.set_download_path(self.cfg.lock().unwrap().install_path(platform.unwrap_or_default()).into());
+        ui.set_download_error("".into());
         ui.set_download_install_note(install_note(platform).into());
         ui.set_download_consent(true);
     }
@@ -54,8 +55,8 @@ impl App {
             destination: crate::hostos::resolve_existing(&util::expand_home(&destination)), expected_ids: ids, platform };
         match self.installer.start(request) {
             Ok(()) => {
+                // A path changed here is for this game only: the games folder stays.
                 self.install_states.insert(key.clone(), installer::State::Inspecting);
-                { let mut cfg = self.cfg.lock().unwrap(); cfg.install_dir = destination; cfg.save(); }
                 self.install_pending = None;
                 self.push_installs();
                 self.open_downloads(Some(&key));
@@ -77,7 +78,7 @@ impl App {
                     if let Some(parent) = path.parent() {
                         let mut cfg = self.cfg.lock().unwrap();
                         let folder = parent.to_string_lossy().into_owned();
-                        if !cfg.game_dir_paths().iter().any(|existing| existing == parent) {
+                        if !cfg.scans(parent) {
                             cfg.game_dirs.push(folder); cfg.save();
                         }
                         register = true;

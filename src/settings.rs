@@ -21,7 +21,7 @@ pub enum SId {
     ShutDown,
     // Games
     Dirs,
-    InstallDir,
+    GamesDir,
     DownloadDir,
     Rescan,
     // Playing
@@ -80,17 +80,17 @@ impl App {
 
         rows.extend(self.system_rows());
         header(&mut rows, "GAMES");
-        let mut r = row(1, "Game folders");
+        let mut r = row(1, "Games folder");
+        r.value = util::display_path(&cfg.games_dir).into();
+        r.hint = format!("{} found · new games go into its PS5, PS4 or PC folder", plural(self.locals.len(), "installed game")).into();
+        rows.push((SId::GamesDir, r));
+        let mut r = row(1, "More game folders");
         r.value = cfg.game_dirs.iter().map(|d| util::display_path(d)).collect::<Vec<_>>().join("; ").into();
-        r.hint = format!("{} found · separate several folders with ;", plural(self.locals.len(), "installed game")).into();
+        r.hint = "Optional · games stored somewhere else · separate several folders with ;".into();
         rows.push((SId::Dirs, r));
-        let mut r = row(1, "Install new games to");
-        r.value = util::display_path(&cfg.install_dir).into();
-        r.hint = "Downloaded games are set up here when you press Install".into();
-        rows.push((SId::InstallDir, r));
-        let mut r = row(1, "Save downloads to");
-        r.value = util::display_path(&cfg.download_dir).into();
-        r.hint = "Each download gets its own folder".into();
+        let mut r = row(1, "Downloads folder");
+        r.value = util::display_path(&cfg.downloads_dir).into();
+        r.hint = "New downloads go into its PS5, PS4 or PC folder".into();
         rows.push((SId::DownloadDir, r));
         rows.push((SId::Rescan, row(4, "Rescan game folders")));
 
@@ -485,15 +485,15 @@ impl App {
             return;
         }
         match id {
-            SId::Emulator | SId::ShadEmulator | SId::Dirs | SId::Extra | SId::DownloadDir | SId::InstallDir => {
+            SId::Emulator | SId::ShadEmulator | SId::Dirs | SId::Extra | SId::DownloadDir | SId::GamesDir => {
                 let cfg = self.cfg.lock().unwrap().clone();
                 let text = match id {
                     SId::Emulator => cfg.emulator,
                     SId::ShadEmulator => cfg.shad_emulator,
                     SId::Dirs => cfg.game_dirs.join("; "),
                     SId::Extra => cfg.extra_args,
-                    SId::DownloadDir => cfg.download_dir,
-                    SId::InstallDir => cfg.install_dir,
+                    SId::DownloadDir => cfg.downloads_dir,
+                    SId::GamesDir => cfg.games_dir,
                     _ => String::new(),
                 };
                 audio::play(Sound::Select);
@@ -651,15 +651,25 @@ impl App {
             }
             SId::DownloadDir => {
                 if t.is_empty() || !util::expand_home(&t).is_absolute() {
-                    self.toast("Invalid download folder", "Use an absolute path or ~/Downloads/PS5.", 2);
+                    self.toast("Invalid downloads folder", "Use an absolute path or ~/Downloads/Games.", 2);
                 } else {
-                    self.save_cfg(|c| c.download_dir = t);
+                    self.save_cfg(|c| {
+                        c.downloads_dir = t;
+                        c.download_dir = c.download_path(crate::platform::Platform::Ps5);
+                    });
                 }
             }
-            SId::InstallDir => {
+            SId::GamesDir => {
                 if t.is_empty() || !util::expand_home(&t).is_absolute() {
-                    self.toast("Invalid installation folder", "Use an absolute path or ~/Games/PS5.", 2);
-                } else { self.save_cfg(|c| c.install_dir = t); }
+                    self.toast("Invalid games folder", "Use an absolute path or ~/Games.", 2);
+                } else {
+                    self.save_cfg(|c| {
+                        c.games_dir = t;
+                        c.install_dir = c.install_path(crate::platform::Platform::Ps5);
+                    });
+                    self.rescan_library();
+                    self.toast("Installed games rescanned", &format!("{} found.", plural(self.locals.len(), "game")), 1);
+                }
             }
             _ => {}
         }
