@@ -23,6 +23,13 @@ pub struct Gpu {
 }
 
 impl Gpu {
+    /// An NVIDIA card from before Turing (GTX 600–10 series: Kepler GK, Maxwell GM, Pascal GP) on
+    /// the open-source NVK driver, which can't raise its clock above the start-up speed, so games
+    /// run very slowly. Mesa names the chip: "NVIDIA GeForce GTX 1050 Ti (NVK GP107)".
+    pub fn nvk_low_clock(&self) -> bool {
+        self.name.split("(NVK ").nth(1).is_some_and(|chip| ["GK", "GM", "GP"].iter().any(|g| chip.starts_with(g)))
+    }
+
     fn meets(&self, platform: Platform) -> Option<bool> {
         if platform == Platform::Ps4 { self.ps4_ok } else { self.ps5_ok }
     }
@@ -135,6 +142,8 @@ impl Specs {
         let (vram, cores, threads, ram) = if ps4 { (3.5, 4, 8, 7.0) } else { (7.5, 6, 12, 14.5) };
         let slow = if !gpu.discrete {
             Some("integrated GPU".to_string())
+        } else if gpu.nvk_low_clock() {
+            Some("GPU at low clock".to_string())
         } else if gpu.vram_gb < vram {
             Some(format!("{} GB GPU", gpu.vram_gb.round()))
         } else if self.cores < cores || self.threads < threads {
@@ -548,6 +557,11 @@ mod tests {
         let small = pc(6, 12, true, 7.7, vec![gpu("GeForce GTX 1650", (1, 3), true, 4.0)]);
         assert_eq!(small.verdict(Platform::Ps4), Some(Verdict::Good));
         assert_eq!(small.verdict(Platform::Ps5).unwrap().short(), "May run slowly · 4 GB GPU");
+        // Older NVIDIA cards on NVK run at their start-up clock (the test laptop's GTX 1050 Ti).
+        let pascal = pc(4, 8, true, 16.0, vec![gpu("NVIDIA GeForce GTX 1050 Ti (NVK GP107)", (1, 3), true, 4.0)]);
+        assert_eq!(pascal.verdict(Platform::Ps4), Some(Verdict::Slow("GPU at low clock".into())));
+        let turing = pc(6, 12, true, 16.0, vec![gpu("NVIDIA GeForce RTX 2060 (NVK TU106)", (1, 3), true, 6.0)]);
+        assert_eq!(turing.verdict(Platform::Ps4), Some(Verdict::Good));
         // Every reason fits a Game Hub fact's label ("ON THIS PC · …").
         for v in [ivy.verdict(Platform::Ps4), deck.verdict(Platform::Ps4), small.verdict(Platform::Ps5), kepler.verdict(Platform::Ps4)] {
             assert!(v.unwrap().why().unwrap().chars().count() <= 16);

@@ -16,6 +16,7 @@ pub fn explain(v: &Verdict, platform: Platform) -> String {
         Verdict::No(why) if why == "missing features" => format!(
             "Your graphics card lacks Vulkan features {} needs: update its driver, or the card is too old", platform.emulator()),
         Verdict::No(_) => "No graphics driver found: install the driver for your graphics card".into(),
+        Verdict::Slow(why) if why == "GPU at low clock" => "On Linux this NVIDIA card runs on the open-source NVK driver, which keeps GTX 600–1000 series cards at a low clock speed, so games run slowly".into(),
         Verdict::Slow(why) if why == "integrated GPU" => format!("{console} games run best on a graphics card; built-in graphics may be slow"),
         Verdict::Slow(why) if why.ends_with("GPU") => format!("{console} games run best with {} GB of graphics memory", if ps5 { 8 } else { 4 }),
         Verdict::Slow(why) if why.ends_with("CPU") => format!("{console} games run best on {} or more processor cores", if ps5 { 6 } else { 4 }),
