@@ -139,6 +139,13 @@ The branch must exist first: seed it once from a complete local collection
 (`dist/rutracker/{ps5,ps4}-topics.json`, their `.ru-backup.json` sources and
 `english-translations.json`) with `scripts/rutracker-list/publish-catalog.sh`.
 
+### PC games
+
+`--platform linux` (native Linux games, f=1992) and `--platform wine` (Wine-packed, f=2059) work
+with every script. Those forums have no title tag: every topic with a torrent is a release.
+[steam.mjs](steam.mjs) adds Steam artwork and ProtonDB ratings to their Russian sources before
+translation; the daily workflow runs it on up to 900 releases a day.
+
 ### Publishing the offline launcher snapshot
 
 After collection and translation, `npm run publish` validates the complete English

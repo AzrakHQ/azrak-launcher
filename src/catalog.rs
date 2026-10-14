@@ -10,9 +10,12 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 pub const CATALOG_TTL: f64 = 6.0 * 3600.0;
-pub const CATALOG_SCHEMA: u32 = 4;
+pub const CATALOG_SCHEMA: u32 = 5;
 pub const SOURCE: &str = "https://rutracker.net/forum/viewforum.php?f=546";
 pub const PS4_SOURCE: &str = "https://rutracker.net/forum/viewforum.php?f=973";
+/// PC games: native Linux games, and Windows games packed with Wine, DOSBox and the like.
+pub const LINUX_SOURCE: &str = "https://rutracker.net/forum/viewforum.php?f=1992";
+pub const WINE_SOURCE: &str = "https://rutracker.net/forum/viewforum.php?f=2059";
 const BUNDLED: &[u8] = include_bytes!("../assets/rutracker/ps5-topics.json");
 /// Empty until the PS4 snapshot is collected and bundled (see build.rs).
 const BUNDLED_PS4: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ps4-topics.json"));
@@ -27,10 +30,81 @@ struct Source {
     bundled: &'static [u8],
 }
 
-const SOURCES: [Source; 2] = [
+// The PC catalogs aren't built in: they arrive with the daily published catalog.
+const SOURCES: [Source; 4] = [
     Source { platform: Platform::Ps5, url: SOURCE, file: "ps5-topics.json", cache: "catalog-rutracker.json", env: "PS5_LAUNCHER_CATALOG_PATH", bundled: BUNDLED },
     Source { platform: Platform::Ps4, url: PS4_SOURCE, file: "ps4-topics.json", cache: "catalog-rutracker-ps4.json", env: "PS5_LAUNCHER_PS4_CATALOG_PATH", bundled: BUNDLED_PS4 },
+    Source { platform: Platform::Pc, url: LINUX_SOURCE, file: "linux-topics.json", cache: "catalog-rutracker-linux.json", env: "PS5_LAUNCHER_LINUX_CATALOG_PATH", bundled: &[] },
+    Source { platform: Platform::Pc, url: WINE_SOURCE, file: "wine-topics.json", cache: "catalog-rutracker-wine.json", env: "PS5_LAUNCHER_WINE_CATALOG_PATH", bundled: &[] },
 ];
+
+/// A PC release's Steam app (from the published catalog: scripts/rutracker-list/steam.mjs).
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct Steam {
+    pub appid: u64,
+    pub name: String,
+    pub short: String,
+    pub genres: Vec<String>,
+    pub release: Option<String>,
+    pub developers: Vec<String>,
+    pub publishers: Vec<String>,
+    /// Steam sells a Linux version.
+    pub linux: bool,
+    pub metacritic: Option<u32>,
+    pub header: Option<String>,
+    pub shots: Vec<String>,
+    pub video: Option<String>,
+    pub assets: SteamAssets,
+    /// ProtonDB's tier for the Windows version ("platinum", "gold", …).
+    pub protondb: Option<String>,
+}
+
+impl Steam {
+    /// The artwork and details the Library and Game Hub show, in the shape PSN data has: Steam's
+    /// library portrait as the cover, its hero image as the background, its logo over it.
+    pub fn info(&self) -> crate::psn::Info {
+        let hero = self.assets.hero.clone().or_else(|| self.header.clone()).unwrap_or_default();
+        crate::psn::Info {
+            source: Some("steam".into()),
+            name: self.name.clone(),
+            publisher: self.publishers.first().or(self.developers.first()).cloned().unwrap_or_default(),
+            genres: self.genres.clone(),
+            release: self.release.as_deref().and_then(steam_date).unwrap_or_default(),
+            short: self.short.clone(),
+            long: self.short.clone(),
+            master: hero.clone(),
+            hub: hero.clone(),
+            bg: hero,
+            logo: self.assets.logo.clone().unwrap_or_default(),
+            portrait: self.assets.portrait.clone().or_else(|| self.header.clone()).unwrap_or_default(),
+            banner: self.header.clone().unwrap_or_default(),
+            shots: self.shots.clone(),
+            video: self.video.clone().unwrap_or_default(),
+            store: format!("https://store.steampowered.com/app/{}/", self.appid),
+            ..Default::default()
+        }
+    }
+}
+
+/// Steam's "Jan 25, 2018" or "25 Jan, 2018" as "2018-01-25".
+fn steam_date(date: &str) -> Option<String> {
+    const MONTHS: [&str; 12] = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+    let parts: Vec<&str> = date.split(|c: char| c == ' ' || c == ',').filter(|p| !p.is_empty()).collect();
+    let [a, b, year] = parts[..] else { return None };
+    let (month, day) = if a.chars().next()?.is_ascii_digit() { (b, a) } else { (a, b) };
+    let month = MONTHS.iter().position(|m| month.to_ascii_lowercase().starts_with(m))? + 1;
+    let (day, year): (u32, u32) = (day.parse().ok()?, year.parse().ok()?);
+    Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
+pub struct SteamAssets {
+    pub portrait: Option<String>,
+    pub hero: Option<String>,
+    pub logo: Option<String>,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(default)]
@@ -61,6 +135,10 @@ pub struct Game {
     pub game_info: Value,
     /// The console this release is for (from the forum it was listed in).
     pub platform: Platform,
+    /// PC: a Windows game packed to run with Wine (or DOSBox…), from that forum.
+    pub wine: bool,
+    /// PC: the game on Steam, for artwork and ratings.
+    pub steam: Option<Steam>,
 }
 
 impl Game {
@@ -290,8 +368,12 @@ fn import_for(src: &Source, bytes: &[u8]) -> Result<CatalogFile, String> {
         let info = topic["game_info"].clone();
         let title = text(topic, "title");
         let named = text(&info, "name");
-        let name = clean_name(if named.is_empty() { &title } else { &named });
+        let pc = src.platform == Platform::Pc;
+        let name = if pc { crate::pcgame::clean_name(&title) } else { clean_name(if named.is_empty() { &title } else { &named }) };
+        if name.is_empty() && pc { continue; }
         if name.is_empty() { return Err(format!("Topic {id} has no game name")); }
+        let steam = topic.get("steam").filter(|s| s["appid"].as_u64().is_some())
+            .and_then(|s| serde_json::from_value::<Steam>(s.clone()).ok());
         let raw_id = text(&info, "title_id");
         let ids = title_ids(&raw_id);
         let primary_id = ids.first().cloned().unwrap_or_else(|| find_title_id(&[&title]));
@@ -319,6 +401,7 @@ fn import_for(src: &Source, bytes: &[u8]) -> Result<CatalogFile, String> {
             title_ids: ids, region: text(&info, "region"), magnet,
             seeders: topic["seeders"].as_u64(), leechers: topic["leechers"].as_u64(),
             peers_observed: Some(text(topic, "peers_observed")).filter(|at| !at.is_empty()).unwrap_or_else(|| snapshot_at.clone()), game_info: info, platform: src.platform,
+            wine: src.url == WINE_SOURCE, steam,
         });
     }
     // Topics, not title IDs, are the identity: retain regional/version variants.
@@ -385,6 +468,33 @@ mod tests {
         let ps5 = fixture(serde_json::json!([{ "id": "100", "title": "[PS5] Example [EUR]", "game_info": { "title_id": "PPSA12345" } }]));
         let merged = merge(vec![import(&ps5).unwrap(), file]);
         assert_eq!(merged.games.iter().map(|g| (g.id, g.platform)).collect::<Vec<_>>(), vec![(900, Platform::Ps4), (100, Platform::Ps5)]);
+    }
+
+    #[test]
+    fn pc_catalogs_import_as_pc_games_with_their_steam_data() {
+        let wine = serde_json::to_vec(&serde_json::json!({ "source": WINE_SOURCE, "complete": true,
+            "translation": { "language": "en" }, "collected_at": "2026-10-14T00:00:00Z", "topic_count": 2,
+            "topics": [
+                { "id": "6000", "title": "Celeste (v1.4.0.0) + 2 DLC [amd64] [Multi] [Wine]", "magnet": "magnet:?xt=urn:btih:FFEA223A07AB3759DD3C037B0EB4B3992700553A",
+                  "game_info": { "genre": "Platformer" },
+                  "steam": { "appid": 504230, "name": "Celeste", "short": "Help Madeline survive.", "genres": ["Action"], "release": "Jan 25, 2018",
+                    "linux": true, "metacritic": 88, "header": "https://x/header.jpg", "shots": ["https://x/ss.jpg"], "video": null,
+                    "assets": { "portrait": "https://x/p.jpg", "hero": null, "logo": "https://x/logo.png" }, "protondb": "platinum" } },
+                { "id": "6001", "title": "[In development] Unknown Game [amd64] [ENG] [Wine]", "magnet": "magnet:?xt=urn:btih:FFEA223A07AB3759DD3C037B0EB4B3992700553B",
+                  "game_info": { "genre": "RPG" }, "steam": { "appid": null, "checked_at": "2026-10-14T00:00:00Z" } }
+            ] })).unwrap();
+        let file = import_for(&SOURCES[3], &wine).unwrap();
+        let celeste = file.games.iter().find(|g| g.id == 6000).unwrap();
+        assert_eq!((celeste.platform, celeste.wine, celeste.name.as_str()), (Platform::Pc, true, "Celeste"));
+        let info = celeste.steam.as_ref().unwrap().info();
+        assert_eq!((info.portrait.as_str(), info.master.as_str(), info.release.as_str()), ("https://x/p.jpg", "https://x/header.jpg", "2018-01-25"));
+        assert_eq!(info.store, "https://store.steampowered.com/app/504230/");
+        let unknown = file.games.iter().find(|g| g.id == 6001).unwrap();
+        assert_eq!((unknown.name.as_str(), unknown.steam.is_none()), ("Unknown Game", true));
+        assert_eq!(steam_date("25 Jan, 2018").as_deref(), Some("2018-01-25"));
+        assert_eq!(steam_date("Coming soon"), None);
+        // A PC catalog isn't taken for another forum's.
+        assert!(import_for(&SOURCES[2], &wine).is_err());
     }
 
     #[test]

@@ -333,6 +333,40 @@ fabricated local snapshots in a network-disabled namespace. In addition to the
 catalog test prerequisites, it requires Tesseract and ImageMagick. Screenshots
 are retained for visual inspection; these UI fixtures do not perform transfers.
 
+## PC games (details)
+
+Two more RuTracker forums are collected: native Linux games (f=1992) and Linux games with Wine,
+DOSBox and more (f=2059). Their catalogs (`linux-topics.json`, `wine-topics.json`) aren't built
+into the launcher; they arrive with the daily published catalog, as `Platform::Pc` games.
+
+**Steam data.** [steam.mjs](../scripts/rutracker-list/steam.mjs) matches each release to its
+Steam app by name (Steam's public store search and `appdetails`, no key) and stores a `steam`
+block in the catalog: description, genres, release date, screenshots, trailer, which library
+artwork exists (portrait, hero, logo), whether Steam sells a Linux version, and ProtonDB's tier.
+Collections (anthologies, trilogies, "A + B") and near-misses (another game in the series) get no
+match rather than wrong art. The daily workflow looks up at most 900 releases a run, and retries
+unmatched ones after 30 days. The launcher turns the block into the same artwork record PSN
+games use (`Steam::info`). Steam data skips translation (names can be in any script).
+
+**Installing** ([installer.rs](../src/installer.rs) `install_pc`) unpacks every archive in the
+release, or copies the folder. GOG Linux installers (a shell script with a zip appended) are read
+as that zip by libarchive; the script never runs. Symlinks in archives are kept only when they
+stay inside the game (relative, not climbing above its folder); others fail the install.
+Torrents drop the executable flag, so every ELF program, `#!` script and AppImage is made
+executable, recognised by its first bytes. The game's folder is the payload, or the single folder
+in it (GOG's `data/noarch`). [pcgame.rs](../src/pcgame.rs) then chooses what starts it, best
+first: a start script (`start`, `start.sh`…), an AppImage, a native program (64-bit preferred,
+named after the game, not crash handlers or bundled Wine/runtimes), a Windows `.exe` (not
+installers or redistributables). It writes `.ps5-launcher-game.json` (name, topic, launch target,
+alternatives); the Library finds PC games by it and links them to their catalog entry by topic.
+
+**Playing** runs the target in its folder, in its own process group. Start scripts often hand
+over to the game and exit, so a PC game counts as running while any process of its group is
+alive, and its windows are searched across the group. AppImages run without FUSE when there is
+none (`APPIMAGE_EXTRACT_AND_RUN`). A Windows `.exe` runs through `umu-run` (GE-Proton, kept up
+to date by umu) or `wine`, with a prefix per game under the data folder. PC games aren't rated
+for the emulator lists; their This PC verdict is left out (the catalog has no requirements).
+
 ## KytyPS5 updates (details)
 
 The launcher installs and updates [KytyPS5](https://github.com/KytyPS5/KytyPS5) for you, using

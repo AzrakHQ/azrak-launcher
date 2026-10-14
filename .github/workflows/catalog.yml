@@ -17,7 +17,7 @@ concurrency: catalog
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -30,8 +30,11 @@ jobs:
       - name: Start from the published catalog
         run: |
           mkdir -p dist/rutracker
-          for p in ps5 ps4; do
+          for p in ps5 ps4 linux wine; do
+            [ -f previous/$p-topics.ru.json.gz ] || continue
             gunzip -c previous/$p-topics.ru.json.gz >dist/rutracker/$p-topics.json.ru-backup.json
+            # Yesterday's English catalog stays if today's translation fails.
+            [ -f previous/$p-topics.json.gz ] && gunzip -c previous/$p-topics.json.gz >dist/rutracker/$p-topics.json
           done
           gunzip -c previous/english-translations.json.gz >dist/rutracker/english-translations.json
       - name: Refresh and translate
@@ -41,6 +44,14 @@ jobs:
           for p in ps5 ps4; do
             node refresh.mjs --platform $p
             node translate.mjs --platform $p --from-original
+          done
+          # PC games: also Steam artwork and ProtonDB ratings (at most 900 lookups a day; the
+          # rest follow on later days). A failure here never holds back the console catalogs.
+          for p in linux wine; do
+            [ -f ../../dist/rutracker/$p-topics.json.ru-backup.json ] || continue
+            node refresh.mjs --platform $p || echo "::warning::$p refresh failed"
+            node steam.mjs --platform $p --limit 900 || echo "::warning::$p Steam lookup failed"
+            node translate.mjs --platform $p --from-original || echo "::warning::$p translation failed; yesterday's stays"
           done
       - name: Publish
         run: scripts/rutracker-list/publish-catalog.sh dist/rutracker "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}"

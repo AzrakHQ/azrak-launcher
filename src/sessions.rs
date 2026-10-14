@@ -27,8 +27,27 @@ fn xdotool(args: &[&str]) -> String {
         .unwrap_or_default()
 }
 
+/// Visible windows of a session: of its process and of every process in its group (a PC game's
+/// start script hands over to the game, often through Wine; games the launcher starts lead their
+/// own process group).
 pub fn windows_of_pid(pid: u32) -> Vec<String> {
-    xdotool(&["search", "--onlyvisible", "--pid", &pid.to_string()]).split_whitespace().map(String::from).collect()
+    let mut pids = group_members(pid);
+    if !pids.contains(&pid) {
+        pids.insert(0, pid);
+    }
+    pids.iter().flat_map(|p| xdotool(&["search", "--onlyvisible", "--pid", &p.to_string()]).split_whitespace().map(String::from).collect::<Vec<_>>()).collect()
+}
+
+/// Running processes whose process group is `pgid` (not zombies).
+pub fn group_members(pgid: u32) -> Vec<u32> {
+    let Ok(rd) = std::fs::read_dir("/proc") else { return vec![] };
+    rd.flatten().filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok()).filter(|pid| {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).ok().and_then(|stat| {
+            let rest = stat.rsplit_once(')')?.1.split_whitespace().collect::<Vec<_>>();
+            // state, ppid, pgrp
+            Some(rest.first() != Some(&"Z") && rest.get(2)?.parse::<u32>().ok()? == pgid)
+        }).unwrap_or(false)
+    }).collect()
 }
 
 pub fn activate_pid_window(pid: u32) -> bool {
@@ -83,7 +102,8 @@ fn appid(pid: u32) -> u32 {
 
 /// Give a process's windows its id. Returns false when it has no window yet.
 fn gamescope_tag(pid: u32) -> bool {
-    let windows = windows_of_pid(pid);
+    // A game's windows can belong to any process of its group: tag them all with the session's id.
+    let windows = if pid == std::process::id() { xdotool(&["search", "--onlyvisible", "--pid", &pid.to_string()]).split_whitespace().map(String::from).collect() } else { windows_of_pid(pid) };
     for w in &windows {
         xprop(&["-id", w, "-f", "STEAM_GAME", "32c", "-set", "STEAM_GAME", &appid(pid).to_string()]);
     }
@@ -107,6 +127,67 @@ pub fn claim_screen() {
         && !xprop(&["-root", "GAMESCOPECTRL_BASELAYER_APPID"]).contains('=') {
         gamescope_show(std::process::id());
     }
+}
+
+// ------------------------------------------------------------------ PC games
+
+/// How a PC game starts, from its manifest: its script, AppImage or program, run in its folder;
+/// a Windows game through umu-launcher (Proton) or Wine, in its own prefix.
+fn pc_command(game: &LocalGame) -> Result<Command, String> {
+    use crate::pcgame::Kind;
+    let m = game.pc.as_ref().ok_or("This game's manifest is missing; install it again")?;
+    let target = game.path.join(&m.launch);
+    if !target.is_file() {
+        return Err(format!("{} is missing from the game's folder", m.launch));
+    }
+    let dir = target.parent().unwrap_or(&game.path).to_path_buf();
+    let executable = || {
+        use std::os::unix::fs::PermissionsExt;
+        if target.metadata().is_ok_and(|md| md.permissions().mode() & 0o100 == 0) {
+            let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755));
+        }
+    };
+    let mut command = match m.kind {
+        Kind::Script => {
+            // A script without "#!" (some repacks' "start") runs with sh.
+            if crate::pcgame::probe_file(&target) == crate::pcgame::Probe::Script {
+                executable();
+                Command::new(&target)
+            } else {
+                let mut c = Command::new("sh");
+                c.arg(&target);
+                c
+            }
+        }
+        Kind::AppImage => {
+            executable();
+            let mut c = Command::new(&target);
+            // Without FUSE (common on minimal systems), AppImages can still unpack and run.
+            if !Path::new("/dev/fuse").exists() {
+                c.env("APPIMAGE_EXTRACT_AND_RUN", "1");
+            }
+            c
+        }
+        Kind::Native => {
+            executable();
+            Command::new(&target)
+        }
+        Kind::Windows => {
+            let (runner, label) = crate::pcgame::windows_runner()
+                .ok_or("This is a Windows game: install umu-launcher (runs it with Proton) or Wine to play it")?;
+            let prefix = crate::util::data_dir().join("prefixes").join(&game.id);
+            let _ = std::fs::create_dir_all(&prefix);
+            let mut c = Command::new(runner);
+            c.arg(&target).env("WINEPREFIX", &prefix);
+            if label == "Proton" {
+                // umu downloads and updates Proton (GE-Proton) by itself.
+                c.env("GAMEID", "umu-default").env("PROTONPATH", "GE-Proton");
+            }
+            c
+        }
+    };
+    command.current_dir(dir);
+    Ok(command)
 }
 
 // ------------------------------------------------------------------ /proc helpers
@@ -195,6 +276,8 @@ pub struct Session {
     pub own: bool,
     pub log: PathBuf,
     pub stopping: bool,
+    /// Runs until its whole process group has ended (PC games: the start script may exit first).
+    pub group: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -260,6 +343,10 @@ impl Sessions {
         if let Some(s) = inner.live.first() {
             return Err(format!("{} is already running. Stop it first.", s.name));
         }
+        if game.platform == crate::platform::Platform::Pc {
+            let command = pc_command(game)?;
+            return self.spawn(&mut inner, game, command, true);
+        }
         let ps4 = game.platform == crate::platform::Platform::Ps4;
         if ps4 && !crate::shad::emulator().is_file() {
             return Err("shadPS4 isn't installed yet".into());
@@ -289,16 +376,21 @@ impl Sessions {
             // shadPS4: game folder and fullscreen; its other settings live in its own config.
             args = vec!["-g".into(), game.path.to_string_lossy().into_owned(), "-f".into(), cfg.fullscreen.to_string()];
         }
+        let mut command = Command::new(&emu);
+        command.args(&args).current_dir(emu.parent().unwrap_or(Path::new("/")));
+        self.spawn(&mut inner, game, command, false)
+    }
+
+    /// Start a game's process in its own process group, logging to the game's log file.
+    fn spawn(&self, inner: &mut Inner, game: &LocalGame, mut command: Command, group: bool) -> Result<(), String> {
         let log_dir = cache_dir().join("logs");
         let _ = std::fs::create_dir_all(&log_dir);
         let log = log_dir.join(format!("{}.log", if game.title_id.is_empty() { &game.id } else { &game.title_id }));
         let logf = std::fs::File::create(&log).map_err(|e| e.to_string())?;
         let logf2 = logf.try_clone().map_err(|e| e.to_string())?;
-        crate::log!("launch: {} {}", emu.display(), args.join(" "));
+        crate::log!("launch: {command:?}");
         use std::os::unix::process::CommandExt;
-        let child = Command::new(&emu)
-            .args(&args)
-            .current_dir(emu.parent().unwrap_or(Path::new("/")))
+        let child = command
             .stdin(Stdio::null())
             .stdout(logf)
             .stderr(logf2)
@@ -317,6 +409,7 @@ impl Sessions {
             own: true,
             log,
             stopping: false,
+            group,
         });
         Ok(())
     }
@@ -365,7 +458,9 @@ impl Sessions {
     /// PS button: toggle between the game and the launcher.
     pub fn toggle_focus(&self) {
         let pids: Vec<u32> = self.inner.lock().unwrap().live.iter().map(|s| s.pid).collect();
-        if pids.is_empty() || pids.contains(&active_window_pid()) {
+        let active = active_window_pid();
+        let in_game = active != 0 && pids.iter().any(|p| *p == active || group_members(*p).contains(&active));
+        if pids.is_empty() || in_game {
             show_launcher();
         } else {
             self.resume();
@@ -403,14 +498,15 @@ impl Sessions {
                     None => (String::new(), String::new(), Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Unknown game".into())),
                 };
                 crate::log!("detected running game: {name} (pid {pid})");
-                inner.live.push(Session { pid: *pid, game_id, title_id, name, path: path.clone(), since: *started, own: false, log: PathBuf::new(), stopping: false });
+                inner.live.push(Session { pid: *pid, game_id, title_id, name, path: path.clone(), since: *started, own: false, log: PathBuf::new(), stopping: false, group: false });
                 changed = true;
             }
             // Finished sessions.
             let mut i = 0;
             while i < inner.live.len() {
                 let pid = inner.live[i].pid;
-                let (alive, code) = match inner.children.get_mut(&pid) {
+                let group = inner.live[i].group;
+                let (mut alive, code) = match inner.children.get_mut(&pid) {
                     Some(child) => match child.try_wait() {
                         Ok(Some(st)) => (false, st.code().or_else(|| {
                             use std::os::unix::process::ExitStatusExt;
@@ -421,6 +517,9 @@ impl Sessions {
                     },
                     None => (procs.contains_key(&pid), None),
                 };
+                if group && !alive && !group_members(pid).is_empty() {
+                    alive = true;
+                }
                 if alive {
                     i += 1;
                     continue;

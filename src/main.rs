@@ -14,6 +14,7 @@ mod sandbox;
 mod vpn;
 mod pc;
 mod pc_ui;
+mod pcgame;
 mod system;
 mod system_ui;
 mod exfat;

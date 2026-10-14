@@ -120,6 +120,10 @@ impl Specs {
 
     /// Whether games of this console run here. `None`: unknown (the graphics check failed).
     pub fn verdict(&self, platform: Platform) -> Option<Verdict> {
+        // PC games have their own requirements, which the catalog doesn't carry.
+        if platform == Platform::Pc {
+            return None;
+        }
         let gpus = self.gpus.as_ref()?;
         let Some(gpu) = self.gpu_for(platform).filter(|g| !g.software) else {
             return Some(Verdict::No(if gpus.is_empty() { "no GPU driver" } else { "no GPU" }.into()));

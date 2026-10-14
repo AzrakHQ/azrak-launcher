@@ -9,7 +9,7 @@ use std::{
     ffi::{CStr, CString},
     fs::{self, File, Metadata},
     io::{Read, Write},
-    os::{fd::{AsRawFd, FromRawFd}, unix::{ffi::OsStrExt, fs::MetadataExt}},
+    os::{fd::{AsRawFd, FromRawFd}, unix::{ffi::OsStrExt, fs::{MetadataExt, PermissionsExt}}},
     path::{Component, Path, PathBuf},
     sync::{atomic::{AtomicBool, AtomicU64, Ordering}, mpsc::{self, SyncSender}, Arc, Mutex},
     thread::{self, JoinHandle},
@@ -58,6 +58,8 @@ impl Record {
 pub struct Request {
     pub key: String, pub topic: i64, pub name: String, pub source: PathBuf,
     pub destination: PathBuf, pub expected_ids: Vec<String>,
+    /// PC games install differently: everything is unpacked and the way to start it is found.
+    pub platform: crate::platform::Platform,
 }
 
 struct Core { jobs: Mutex<Vec<Record>>, store: PathBuf }
@@ -254,6 +256,13 @@ impl Dir {
         ensure!(fd >= 0, "Create private output {path}: {}", std::io::Error::last_os_error());
         Ok(unsafe { File::from_raw_fd(fd) })
     }
+    fn symlink(&self, path: &str, target: &str) -> Result<()> {
+        let (parent, name) = self.parent(path, true)?;
+        let target = CString::new(target)?;
+        let r = unsafe { libc::symlinkat(target.as_ptr(), parent.0.as_raw_fd(), name.as_ptr()) };
+        ensure!(r == 0, "Create symlink {path}: {}", std::io::Error::last_os_error());
+        Ok(())
+    }
     fn names(&self) -> Result<Vec<String>> {
         let mut names = Vec::new();
         for entry in fs::read_dir(format!("/proc/self/fd/{}", self.0.as_raw_fd()))? {
@@ -289,6 +298,22 @@ fn bounded_read(mut file: File, max: u64) -> Result<Vec<u8>> {
     ensure!(bytes.len() as u64 <= max, "File grew beyond size limit");
     Ok(bytes)
 }
+/// A symlink at `path` pointing to `target` must stay inside the game: relative, and not climbing
+/// above the folder it's installed in.
+fn inside_link(path: &str, target: &str) -> Result<()> {
+    ensure!(!target.is_empty() && target.len() < MAX_PATH && !target.starts_with('/') && !target.contains('\\'),
+        "Symlink {path} points outside the game");
+    let mut depth = path.matches('/').count() as i64;
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => { depth -= 1; ensure!(depth >= 0, "Symlink {path} points outside the game"); }
+            _ => depth += 1,
+        }
+    }
+    Ok(())
+}
+
 fn normal_path(raw: &str) -> Result<String> {
     ensure!(!raw.is_empty() && raw.len() < MAX_PATH && !raw.chars().any(|c| c.is_control()), "Invalid or overlong archive path");
     let raw = raw.replace('\\', "/");
@@ -306,7 +331,16 @@ fn normal_path(raw: &str) -> Result<String> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Entry { path: String, directory: bool, size: u64 }
+struct Entry {
+    path: String, directory: bool, size: u64,
+    /// A symlink's target (PC games only; always relative and inside the game).
+    link: Option<String>,
+    /// The archive marks it executable.
+    exec: bool,
+}
+impl Entry {
+    fn file(path: String, directory: bool, size: u64) -> Self { Self { path, directory, size, link: None, exec: false } }
+}
 #[derive(Default)]
 struct Plan { entries: Vec<Entry>, paths: BTreeMap<String, bool>, explicit: HashSet<String>, total: u64 }
 impl Plan {
@@ -364,7 +398,7 @@ impl Source {
             let st = dir.metadata(&name)?;
             let kind = st.st_mode & libc::S_IFMT;
             if kind == libc::S_IFDIR {
-                self.plan.add(Entry { path: path.clone(), directory: true, size: 0 })?;
+                self.plan.add(Entry::file(path.clone(), true, 0))?;
                 let child = dir.child(name.as_bytes(), false)?;
                 ensure!(child.0.metadata()?.ino() == st.st_ino && child.0.metadata()?.dev() == st.st_dev, "Source directory changed during inspection");
                 self.walk(&child, &path, cancel)?;
@@ -373,7 +407,7 @@ impl Source {
                 let file = dir.read(&name)?;
                 let meta = file.metadata()?;
                 ensure!(meta.ino() == st.st_ino && meta.dev() == st.st_dev, "Source changed during inspection");
-                self.plan.add(Entry { path: path.clone(), directory: false, size: meta.len() })?;
+                self.plan.add(Entry::file(path.clone(), false, meta.len()))?;
                 self.stamps.insert(path, Stamp::of(&meta));
             }
         }
@@ -432,6 +466,7 @@ struct Api {
     skip: Unary, free: Unary, error: Text, pathname: Text, hardlink: Text, symlink: Text,
     size: unsafe extern "C" fn(Handle) -> i64, size_set: Unary,
     kind: unsafe extern "C" fn(Handle) -> libc::mode_t, encrypted: Unary,
+    perm: unsafe extern "C" fn(Handle) -> libc::mode_t,
     version: unsafe extern "C" fn() -> *const libc::c_char,
 }
 impl Api {
@@ -451,13 +486,14 @@ impl Api {
                 hardlink: sym!("archive_entry_hardlink"), symlink: sym!("archive_entry_symlink"),
                 size: sym!("archive_entry_size"), size_set: sym!("archive_entry_size_is_set"),
                 kind: sym!("archive_entry_filetype"), encrypted: sym!("archive_entry_is_encrypted"),
+                perm: sym!("archive_entry_perm"),
                 version: sym!("archive_version_string"), _lib: lib })
         }
     }
     fn version(&self) -> String { unsafe { CStr::from_ptr((self.version)()).to_string_lossy().into_owned() } }
 }
 
-struct Archive<'a> { api: &'a Api, handle: Handle, files: Vec<File>, _names: Vec<CString> }
+struct Archive<'a> { api: &'a Api, handle: Handle, files: Vec<File>, _names: Vec<CString>, links: bool }
 impl<'a> Archive<'a> {
     fn open(api: &'a Api, source: &Source, volumes: &[String]) -> Result<Self> {
         let files: Vec<File> = volumes.iter().map(|p| source.file(p)).collect::<Result<_>>()?;
@@ -466,7 +502,7 @@ impl<'a> Archive<'a> {
         pointers.push(std::ptr::null());
         let handle = unsafe { (api.new)() };
         ensure!(!handle.is_null(), "libarchive allocation failed");
-        let archive = Self { api, handle, files, _names: names };
+        let archive = Self { api, handle, files, _names: names, links: false };
         archive.status(unsafe { (api.formats)(handle) }, "Enable archive formats")?;
         archive.status(unsafe { (api.filters)(handle) }, "Enable archive filters")?;
         archive.status(unsafe { (api.open)(handle, pointers.as_ptr(), 64 * 1024) }, "Open archive (unsupported format, missing volume, or password protection)")?;
@@ -488,17 +524,28 @@ impl<'a> Archive<'a> {
         ensure!(!entry.is_null(), "Missing archive header");
         unsafe {
             ensure!((self.api.encrypted)(entry) <= 0, "Password-protected archives are unsupported");
-            ensure!((self.api.hardlink)(entry).is_null() && (self.api.symlink)(entry).is_null(), "Archive symlinks/hardlinks are forbidden");
+            ensure!((self.api.hardlink)(entry).is_null(), "Archive hardlinks are unsupported");
             let kind = (self.api.kind)(entry);
-            ensure!(kind == libc::S_IFREG || kind == libc::S_IFDIR, "Archive special files are forbidden");
             let p = (self.api.pathname)(entry);
             ensure!(!p.is_null(), "Missing archive pathname");
             let path = normal_path(CStr::from_ptr(p).to_str().context("Non-UTF-8 archive path is unsupported")?)?;
+            // PC games ship library symlinks (libfoo.so -> libfoo.so.1); only ones that stay
+            // inside the game are kept. Console games have none.
+            let target = (self.api.symlink)(entry);
+            if !target.is_null() || kind == libc::S_IFLNK {
+                ensure!(self.links, "Archive symlinks are forbidden");
+                ensure!(!target.is_null(), "Symlink without a target: {path}");
+                let target = CStr::from_ptr(target).to_str().context("Non-UTF-8 symlink target")?;
+                inside_link(&path, target)?;
+                return Ok(Some(Entry { path, directory: false, size: 0, link: Some(target.into()), exec: false }));
+            }
+            ensure!(kind == libc::S_IFREG || kind == libc::S_IFDIR, "Archive special files are forbidden");
             let directory = kind == libc::S_IFDIR;
             ensure!(directory || (self.api.size_set)(entry) != 0, "Archive has unknown uncompressed size; cannot safely install");
             let size = (self.api.size)(entry);
             ensure!(size >= 0 && (!directory || size == 0), "Invalid declared archive size");
-            Ok(Some(Entry { path, directory, size: size as u64 }))
+            let exec = !directory && (self.api.perm)(entry) & 0o111 != 0;
+            Ok(Some(Entry { path, directory, size: size as u64, link: None, exec }))
         }
     }
     fn verify_sources(&self, source: &Source, volumes: &[String]) -> Result<()> {
@@ -512,7 +559,12 @@ impl<'a> Archive<'a> {
 impl Drop for Archive<'_> { fn drop(&mut self) { unsafe { (self.api.free)(self.handle); } } }
 
 fn inspect_archive(api: &Api, source: &Source, paths: &[String], cancel: &AtomicBool) -> Result<Plan> {
-    let archive = Archive::open(api, source, paths)?;
+    inspect_archive_with(api, source, paths, false, cancel)
+}
+
+fn inspect_archive_with(api: &Api, source: &Source, paths: &[String], links: bool, cancel: &AtomicBool) -> Result<Plan> {
+    let mut archive = Archive::open(api, source, paths)?;
+    archive.links = links;
     let mut plan = Plan::default();
     loop {
         check_cancel(cancel)?;
@@ -601,9 +653,13 @@ fn disk_check(destination: &Dir, plan: &Plan) -> Result<()> {
 
 type Progress<'a> = &'a dyn Fn(State, u64, u64);
 fn copy_folder(source: &Source, output: &Dir, cancel: &AtomicBool, progress: Progress<'_>) -> Result<()> {
-    let mut done = 0;
+    copy_entries(source, source.plan.entries.iter(), output, 0, source.plan.total, cancel, progress)
+}
+
+/// Copy these source entries into `output`; `done` bytes of `all` are already installed.
+fn copy_entries<'e>(source: &Source, entries: impl Iterator<Item = &'e Entry>, output: &Dir, mut done: u64, all: u64, cancel: &AtomicBool, progress: Progress<'_>) -> Result<()> {
     let mut buf = vec![0u8; 256 * 1024];
-    for entry in &source.plan.entries {
+    for entry in entries {
         check_cancel(cancel)?;
         if entry.directory { output.parent(&format!("{}/_", entry.path), true)?; continue; }
         let mut input = source.file(&entry.path)?;
@@ -617,7 +673,7 @@ fn copy_folder(source: &Source, output: &Dir, cancel: &AtomicBool, progress: Pro
             ensure!(count <= entry.size, "Source grew beyond inspected size");
             target.write_all(&buf[..n])?;
             done += n as u64;
-            progress(State::Extracting, done, source.plan.total);
+            progress(State::Extracting, done, all);
         }
         ensure!(count == entry.size && source.stamps.get(&entry.path) == Some(&Stamp::of(&input.metadata()?)), "Source changed during copy");
         let _ = source.file(&entry.path)?;
@@ -626,7 +682,14 @@ fn copy_folder(source: &Source, output: &Dir, cancel: &AtomicBool, progress: Pro
     Ok(())
 }
 fn extract(api: &Api, source: &Source, paths: &[String], plan: &Plan, output: &Dir, cancel: &AtomicBool, progress: Progress<'_>) -> Result<()> {
-    let archive = Archive::open(api, source, paths)?;
+    extract_with(api, source, paths, plan, output, 0, plan.total, cancel, progress)
+}
+
+/// Extract one archive into `output`; `before` bytes of a larger install are already done.
+#[allow(clippy::too_many_arguments)]
+fn extract_with(api: &Api, source: &Source, paths: &[String], plan: &Plan, output: &Dir, before: u64, all: u64, cancel: &AtomicBool, progress: Progress<'_>) -> Result<()> {
+    let mut archive = Archive::open(api, source, paths)?;
+    archive.links = plan.entries.iter().any(|e| e.link.is_some());
     let mut done = 0u64;
     let mut buf = vec![0u8; 256 * 1024];
     for expected in &plan.entries {
@@ -635,8 +698,11 @@ fn extract(api: &Api, source: &Source, paths: &[String], plan: &Plan, output: &D
         ensure!(&entry == expected, "Archive headers changed since inspection");
         if entry.directory {
             output.parent(&format!("{}/_", entry.path), true)?;
+        } else if let Some(link) = &entry.link {
+            output.symlink(&entry.path, link)?;
         } else {
             let mut target = output.new_file(&entry.path)?;
+            if entry.exec { target.set_permissions(fs::Permissions::from_mode(0o700))?; }
             let mut count = 0u64;
             loop {
                 check_cancel(cancel)?;
@@ -648,7 +714,7 @@ fn extract(api: &Api, source: &Source, paths: &[String], plan: &Plan, output: &D
                 done = done.checked_add(n as u64).context("Total output overflow")?;
                 ensure!(count <= entry.size && done <= plan.total, "Archive output exceeds inspected header size");
                 target.write_all(&buf[..n as usize])?;
-                progress(State::Extracting, done, plan.total);
+                progress(State::Extracting, before + done, all);
             }
             ensure!(count == entry.size, "Archive entry truncated: {}", entry.path);
             target.sync_all()?;
@@ -676,7 +742,7 @@ fn inspect_image(volume: &crate::exfat::Volume, cancel: &AtomicBool) -> Result<(
     let mut plan = Plan::default();
     for node in &nodes {
         ensure!(normal_path(&node.path)? == node.path, "Unsafe path in disk image: {}", node.path);
-        plan.add(Entry { path: node.path.clone(), directory: node.directory, size: node.size })?;
+        plan.add(Entry::file(node.path.clone(), node.directory, node.size))?;
     }
     ensure!(!plan.entries.is_empty(), "Disk image is empty");
     Ok((nodes, plan))
@@ -762,6 +828,9 @@ fn game_root(output: &Dir, plan: &Plan, expected_ids: &[String], cancel: &Atomic
 fn install(req: &Request, cancel: &AtomicBool, progress: Progress<'_>, commit: &dyn Fn(&Stage, &str, &str, &str) -> Result<()>) -> Result<()> {
     validate_request(req)?;
     check_cancel(cancel)?;
+    if req.platform == crate::platform::Platform::Pc {
+        return install_pc(req, cancel, progress, commit);
+    }
     progress(State::Inspecting, 0, 0);
     let source = Source::inspect(req, cancel)?;
     let paths = volumes(&source.plan)?;
@@ -800,6 +869,154 @@ fn install(req: &Request, cancel: &AtomicBool, progress: Progress<'_>, commit: &
     check_cancel(cancel)?;
     commit(&stage, &root, &leaf, &tid)?;
     if let Some(update) = update { place_update(&stage, &req.destination, &root, &update, &leaf); }
+    Ok(())
+}
+
+/// Every archive in a PC release, each a list of volumes: ordinary archives, and GOG Linux
+/// installers (`.sh` with a zip appended, read as that zip; the script never runs).
+fn pc_archives(source: &Source, plan: &Plan) -> Result<Vec<Vec<String>>> {
+    let mut groups: Vec<Vec<String>> = Vec::new();
+    // Only archives at the top of the release (or in its single folder) are the release's: a
+    // game's own data archives deeper inside stay as they are.
+    let archive = regex::Regex::new(r"(?i)\.(zip|7z|rar|tar|tgz|tar\.(gz|bz2|xz|zst)|r\d{2}|7z\.\d{3}|sh)$").unwrap();
+    let candidates: Vec<&Entry> = plan.entries.iter()
+        .filter(|e| !e.directory && e.path.matches('/').count() <= 1 && archive.is_match(&e.path)).collect();
+    // volumes() takes one archive family at a time: offer it one file (or volume set) at a time.
+    let mut seen = HashSet::new();
+    for entry in candidates.iter().copied() {
+        if seen.contains(&entry.path) { continue; }
+        let lower = entry.path.to_ascii_lowercase();
+        if lower.ends_with(".sh") && gog_installer(source, &entry.path)? {
+            seen.insert(entry.path.clone());
+            groups.push(vec![entry.path.clone()]);
+            continue;
+        }
+        let mut one = Plan::default();
+        let stem = |p: &str| p.to_ascii_lowercase().split(".part").next().unwrap_or("").split(".7z.").next().unwrap_or("").trim_end_matches(".rar").to_string();
+        for e in candidates.iter().filter(|e| stem(&e.path) == stem(&entry.path)) {
+            one.add(Entry::file(e.path.clone(), false, e.size))?;
+        }
+        if let Some(volumes) = volumes(&one)? {
+            seen.extend(volumes.iter().cloned());
+            groups.push(volumes);
+        }
+    }
+    Ok(groups)
+}
+
+/// A GOG Linux installer: a shell script followed by a zip (its end-of-directory record is in the
+/// last 64 KiB).
+fn gog_installer(source: &Source, path: &str) -> Result<bool> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = source.file(path)?;
+    let len = file.metadata()?.len();
+    if len < 1024 { return Ok(false); }
+    let mut head = [0u8; 2];
+    file.read_exact(&mut head)?;
+    if &head != b"#!" { return Ok(false); }
+    let tail = len.min(64 * 1024);
+    file.seek(SeekFrom::Start(len - tail))?;
+    let mut buf = Vec::with_capacity(tail as usize);
+    file.take(tail).read_to_end(&mut buf)?;
+    Ok(buf.windows(4).any(|w| w == b"PK\x05\x06"))
+}
+
+/// Install a PC game: unpack its archives (or copy the folder), make its programs executable
+/// (torrents drop the flag), find how it starts, and leave a manifest for the Library. Nothing in
+/// it runs.
+fn install_pc(req: &Request, cancel: &AtomicBool, progress: Progress<'_>, commit: &dyn Fn(&Stage, &str, &str, &str) -> Result<()>) -> Result<()> {
+    progress(State::Inspecting, 0, 0);
+    let source = Source::inspect(req, cancel)?;
+    let groups = pc_archives(&source, &source.plan)?;
+    let api = if groups.is_empty() { None } else { Some(Api::load()?) };
+    let mut plans = Vec::new();
+    for group in &groups {
+        plans.push(inspect_archive_with(api.as_ref().unwrap(), &source, group, true, cancel)?);
+    }
+    // Everything that isn't one of those archives is copied as it is.
+    let unpacked: HashSet<&String> = groups.iter().flatten().collect();
+    let loose = |e: &&Entry| !unpacked.contains(&e.path);
+    let mut total = Plan::default();
+    for plan in &plans {
+        for e in &plan.entries { total.total = total.total.checked_add(e.size).context("Output size overflow")?; }
+        total.paths.extend(plan.paths.clone());
+    }
+    for e in source.plan.entries.iter().filter(loose) {
+        total.total = total.total.checked_add(e.size).context("Output size overflow")?;
+        total.paths.insert(e.path.clone(), e.directory);
+    }
+    check_cancel(cancel)?;
+    let destination = Dir::absolute(&req.destination, true).context("Open explicit installation destination")?;
+    let actual_dest = fs::canonicalize(format!("/proc/self/fd/{}", destination.0.as_raw_fd()))?;
+    let actual_source = fs::canonicalize(format!("/proc/self/fd/{}", source.dir.0.as_raw_fd()))?;
+    ensure!(!actual_dest.starts_with(&actual_source) && !actual_source.starts_with(&actual_dest), "Source and destination trees must be separate");
+    disk_check(&destination, &total)?;
+    let stage = Stage::new(destination, &req.key)?;
+    let output = stage.payload()?;
+    progress(State::Extracting, 0, total.total);
+    let mut before = 0;
+    for (group, plan) in groups.iter().zip(&plans) {
+        extract_with(api.as_ref().unwrap(), &source, group, plan, &output, before, total.total, cancel, progress)?;
+        before += plan.total;
+    }
+    copy_entries(&source, source.plan.entries.iter().filter(loose), &output, before, total.total, cancel, progress)?;
+    check_cancel(cancel)?;
+    progress(State::Validating, total.total, total.total);
+    // The game's folder: the payload, or the single folder in it (a release wrapped in a
+    // folder, or GOG's data/noarch).
+    let mut root = String::new();
+    loop {
+        let dir = if root.is_empty() { stage.payload()? } else { output.parent(&format!("{root}/_"), false)?.0 };
+        let names: Vec<String> = dir.names()?.into_iter().filter(|n| !n.starts_with('.')).collect();
+        let only_dir = names.len() == 1 && dir.metadata(&names[0])?.st_mode & libc::S_IFMT == libc::S_IFDIR;
+        // GOG's installer zip: the game is data/noarch (next to installer files).
+        let gog = names.iter().any(|n| n == "data") && dir.child(b"data", false).and_then(|d| d.child(b"noarch", false)).is_ok();
+        if only_dir {
+            root = if root.is_empty() { names[0].clone() } else { format!("{root}/{}", names[0]) };
+        } else if gog {
+            root = if root.is_empty() { "data/noarch".into() } else { format!("{root}/data/noarch") };
+        } else { break; }
+    }
+    let game = if root.is_empty() { stage.payload()? } else { output.parent(&format!("{root}/_"), false)?.0 };
+    let mut files = Vec::new();
+    pc_files(&game, "", &mut files, 0, cancel)?;
+    let name = crate::pcgame::clean_name(&req.name);
+    let (launch, kind, alternatives) = crate::pcgame::choose(&files, &name).context(
+        "Nothing in this release can start the game: no start script, Linux program, AppImage or Windows .exe was found")?;
+    let manifest = crate::pcgame::Manifest { version: 1, name: name.clone(), topic: req.topic, launch, kind, alternatives };
+    let mut file = game.new_file(crate::pcgame::MANIFEST)?;
+    file.write_all(&serde_json::to_vec_pretty(&manifest)?)?;
+    file.sync_all()?;
+    let leaf = format!("{}-{}", crate::pcgame::folder_name(&name), &req.key[..12]);
+    check_cancel(cancel)?;
+    commit(&stage, &root, &leaf, "")
+}
+
+/// Every regular file of an installed PC game with what it is; programs and scripts become
+/// executable on the way.
+fn pc_files(dir: &Dir, prefix: &str, out: &mut Vec<(String, crate::pcgame::Probe)>, depth: usize, cancel: &AtomicBool) -> Result<()> {
+    ensure!(depth <= MAX_DEPTH, "Game folder is nested too deeply");
+    for name in dir.names()? {
+        check_cancel(cancel)?;
+        let path = if prefix.is_empty() { name.clone() } else { format!("{prefix}/{name}") };
+        let st = dir.metadata(&name)?;
+        match st.st_mode & libc::S_IFMT {
+            libc::S_IFDIR => pc_files(&dir.child(name.as_bytes(), false)?, &path, out, depth + 1, cancel)?,
+            libc::S_IFREG => {
+                let file = dir.read(&name)?;
+                // Enough for any file's signature and a program's headers.
+                let mut head = Vec::with_capacity(4096);
+                (&file).take(4096).read_to_end(&mut head)?;
+                let probe = crate::pcgame::probe(&head);
+                if probe.runnable() || st.st_mode & 0o100 != 0 {
+                    file.set_permissions(fs::Permissions::from_mode(0o700))?;
+                }
+                ensure!(out.len() < MAX_ENTRIES, "Too many files");
+                out.push((path, probe));
+            }
+            _ => {} // symlinks: checked when unpacked; never followed here
+        }
+    }
     Ok(())
 }
 
@@ -978,7 +1195,7 @@ mod tests {
     use std::time::{Duration, Instant};
     use super::*;
     use sha2::{Digest, Sha256};
-    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::os::unix::fs::symlink;
     const KEY: &str = "0123456789abcdef0123456789abcdef01234567";
     const PARAM: &[u8] = br#"{"titleId":"PPSA12345","localizedParameters":{"en-US":{"titleName":"Generated fixture"}}}"#;
 
@@ -988,7 +1205,7 @@ mod tests {
         fs::create_dir(&source).unwrap();
         fs::write(source.join(OWNED), KEY).unwrap();
         let req = Request { key: KEY.into(), topic: 1, name: "Generated fixture".into(), source,
-            destination: t.path().join("games"), expected_ids: vec!["PPSA12345".into()] };
+            destination: t.path().join("games"), expected_ids: vec!["PPSA12345".into()], platform: Default::default() };
         (t, req)
     }
     fn game(path: &Path) {
@@ -1235,6 +1452,135 @@ mod tests {
         assert_eq!(fs::read(p.join("eboot.bin")).unwrap(), b"fixture binary bytes");
         assert_eq!(Sha256::digest(fs::read(&archive).unwrap()), digest);
         assert_eq!(crate::library::scan(&[req.destination.clone()]).len(), 1); clean(&req);
+    }
+
+    // ---------------------------------------------------------------- PC games
+
+    /// A 64-bit Linux program header (PIE, with an interpreter): what a game's binary starts with.
+    fn elf_program() -> Vec<u8> {
+        let mut h = vec![0u8; 0x200];
+        h[..4].copy_from_slice(b"\x7fELF"); h[4] = 2; h[5] = 1;
+        h[16..18].copy_from_slice(&3u16.to_le_bytes()); h[18..20].copy_from_slice(&0x3eu16.to_le_bytes());
+        h[0x20..0x28].copy_from_slice(&0x40u64.to_le_bytes());
+        h[0x36..0x38].copy_from_slice(&56u16.to_le_bytes()); h[0x38..0x3a].copy_from_slice(&1u16.to_le_bytes());
+        h[0x40..0x44].copy_from_slice(&3u32.to_le_bytes()); // PT_INTERP
+        h
+    }
+    /// A stored (uncompressed) zip with Unix modes, like the zip inside a GOG installer.
+    fn zip(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
+        let (mut out, mut central) = (Vec::new(), Vec::new());
+        for (path, data, mode) in entries {
+            let crc = rar_crc32(data);
+            let offset = out.len() as u32;
+            let mut local = vec![];
+            local.extend(0x04034b50u32.to_le_bytes()); local.extend(20u16.to_le_bytes()); local.extend(0u16.to_le_bytes());
+            local.extend(0u16.to_le_bytes()); local.extend(0u32.to_le_bytes()); local.extend(crc.to_le_bytes());
+            local.extend((data.len() as u32).to_le_bytes()); local.extend((data.len() as u32).to_le_bytes());
+            local.extend((path.len() as u16).to_le_bytes()); local.extend(0u16.to_le_bytes()); local.extend(path.as_bytes());
+            out.extend(&local); out.extend_from_slice(data);
+            central.extend(0x02014b50u32.to_le_bytes()); central.extend((3u16 << 8 | 20).to_le_bytes()); central.extend(20u16.to_le_bytes());
+            central.extend(0u16.to_le_bytes()); central.extend(0u16.to_le_bytes()); central.extend(0u32.to_le_bytes());
+            central.extend(crc.to_le_bytes()); central.extend((data.len() as u32).to_le_bytes()); central.extend((data.len() as u32).to_le_bytes());
+            central.extend((path.len() as u16).to_le_bytes()); central.extend([0u8; 8]);
+            central.extend(((0o100000 | mode) << 16).to_le_bytes()); central.extend(offset.to_le_bytes()); central.extend(path.as_bytes());
+        }
+        let start = out.len() as u32;
+        out.extend(&central);
+        out.extend(0x06054b50u32.to_le_bytes()); out.extend([0u8; 4]);
+        out.extend((entries.len() as u16).to_le_bytes()); out.extend((entries.len() as u16).to_le_bytes());
+        out.extend((central.len() as u32).to_le_bytes()); out.extend(start.to_le_bytes()); out.extend(0u16.to_le_bytes());
+        out
+    }
+    fn pc(req: &mut Request, name: &str) { req.platform = crate::platform::Platform::Pc; req.name = name.into(); req.expected_ids.clear(); }
+    fn manifest(dir: &Path) -> crate::pcgame::Manifest {
+        serde_json::from_slice(&fs::read(dir.join(crate::pcgame::MANIFEST)).unwrap()).unwrap()
+    }
+    fn executable(path: &Path) -> bool { fs::metadata(path).unwrap().permissions().mode() & 0o100 != 0 }
+
+    #[test]
+    fn pc_gog_installer_is_unpacked_without_running_it() {
+        let (_t, mut req) = fixture();
+        pc(&mut req, "Celeste");
+        let data = zip(&[("data/noarch/start.sh", b"#!/bin/bash\ncd game && ./Celeste\n", 0o755),
+            ("data/noarch/game/Celeste", &elf_program(), 0o755), ("data/noarch/gameinfo", b"Celeste\n1.4\n", 0o644),
+            ("data/noarch/support/postinst.sh", b"#!/bin/sh\n", 0o755)]);
+        // A script that would leave a trace if it ever ran.
+        let mut installer = b"#!/bin/sh\ntouch /tmp/ps5-launcher-gog-script-ran\nexit 0\n".to_vec();
+        installer.resize(4096, b'#'); installer.extend(&data);
+        fs::write(req.source.join("gog_celeste_1.4.sh"), &installer).unwrap();
+        let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
+        assert!(p.file_name().unwrap().to_str().unwrap().starts_with("Celeste-"), "{}", p.display());
+        let m = manifest(&p);
+        assert_eq!((m.launch.as_str(), m.kind, m.topic), ("start.sh", crate::pcgame::Kind::Script, 1));
+        assert!(executable(&p.join("start.sh")) && executable(&p.join("game/Celeste")));
+        assert!(!Path::new("/tmp/ps5-launcher-gog-script-ran").exists());
+        assert_eq!(fs::read(req.source.join("gog_celeste_1.4.sh")).unwrap(), installer, "the download is kept as it was");
+        clean(&req);
+    }
+
+    #[test]
+    fn pc_folder_release_gets_its_executable_flags_back() {
+        let (_t, mut req) = fixture();
+        pc(&mut req, "Munin");
+        fs::create_dir_all(req.source.join("Munin/Munin_Data")).unwrap();
+        fs::write(req.source.join("Munin/Munin.x86_64"), elf_program()).unwrap();
+        fs::write(req.source.join("Munin/UnityCrashHandler64"), elf_program()).unwrap();
+        fs::write(req.source.join("Munin/Munin_Data/level0"), b"level").unwrap();
+        let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
+        let m = manifest(&p);
+        assert_eq!((m.launch.as_str(), m.kind), ("Munin.x86_64", crate::pcgame::Kind::Native), "the wrapping folder is the game's folder");
+        assert!(executable(&p.join("Munin.x86_64")) && !executable(&p.join("Munin_Data/level0")));
+        clean(&req);
+    }
+
+    #[test]
+    fn pc_archive_keeps_symlinks_inside_the_game_and_refuses_others() {
+        let (_t, mut req) = fixture();
+        pc(&mut req, "Some Game");
+        let good = tar(&[("Game/start.sh", b"#!/bin/sh\n./bin/game\n", b'0', ""), ("Game/bin/game", &elf_program(), b'0', ""),
+            ("Game/lib/libfoo.so.1", b"library", b'0', ""), ("Game/lib/libfoo.so", b"", b'2', "libfoo.so.1")]);
+        fs::write(req.source.join("Game.tar"), &good).unwrap();
+        let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
+        assert_eq!(fs::read_link(p.join("lib/libfoo.so")).unwrap(), Path::new("libfoo.so.1"));
+        assert_eq!(manifest(&p).launch, "start.sh");
+        assert!(executable(&p.join("start.sh")) && executable(&p.join("bin/game")), "torrent and tar modes are 0644: restored");
+        clean(&req);
+        for bad in ["../../../etc", "/etc/passwd", "a/../../.."] {
+            let (_t, mut req) = fixture();
+            pc(&mut req, "Some Game");
+            fs::write(req.source.join("Game.tar"), tar(&[("Game/start.sh", b"#!/bin/sh\n", b'0', ""), ("Game/evil", b"", b'2', bad)])).unwrap();
+            let error = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap_err();
+            assert!(format!("{error:#}").contains("outside the game"), "{bad}: {error:#}");
+            assert!(!req.destination.exists() || fs::read_dir(&req.destination).unwrap().count() == 0, "nothing published");
+        }
+    }
+
+    #[test]
+    fn pc_release_unpacks_its_own_archives_and_copies_the_rest() {
+        let (_t, mut req) = fixture();
+        pc(&mut req, "Some Game");
+        fs::create_dir_all(req.source.join("Game/data")).unwrap();
+        fs::write(req.source.join("Game/game.x86_64"), elf_program()).unwrap();
+        // The game's own data archive: copied, never unpacked.
+        let data = zip(&[("level.dat", b"level", 0o644)]);
+        fs::write(req.source.join("Game/data/levels.zip"), &data).unwrap();
+        // A patch shipped next to the game: unpacked into it.
+        fs::write(req.source.join("Patch.zip"), zip(&[("Game/patch.txt", b"patched", 0o644)])).unwrap();
+        let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
+        assert_eq!(fs::read(p.join("patch.txt")).unwrap(), b"patched");
+        assert_eq!(fs::read(p.join("data/levels.zip")).unwrap(), data);
+        assert!(!p.join("data/level.dat").exists() && !p.join("Patch.zip").exists());
+        assert_eq!(manifest(&p).launch, "game.x86_64");
+        clean(&req);
+    }
+
+    #[test]
+    fn pc_release_without_anything_to_start_is_refused() {
+        let (_t, mut req) = fixture();
+        pc(&mut req, "Soundtrack");
+        fs::write(req.source.join("track01.flac"), b"audio").unwrap();
+        let error = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap_err();
+        assert!(format!("{error:#}").contains("Nothing in this release can start the game"), "{error:#}");
     }
 
     #[test]
@@ -1511,7 +1857,7 @@ mod tests {
     fn multipart_gap_duplicate_and_multiple_archive_detection() {
         let plan = |names: &[&str]| {
             let mut p = Plan::default();
-            for n in names { p.add(Entry { path: (*n).into(), size: 1, directory: false }).unwrap(); } p
+            for n in names { p.add(Entry::file((*n).into(), false, 1)).unwrap(); } p
         };
         for names in [vec!["x.part02.rar"], vec!["x.part1.rar", "x.part3.rar"], vec!["x.7z.001", "x.7z.003"], vec!["x.r00"], vec!["x.rar", "y.zip"], vec!["x.part1.rar", "x.part01.rar"]] {
             assert!(volumes(&plan(&names)).is_err(), "{names:?}");
@@ -1555,8 +1901,8 @@ mod tests {
         assert_eq!(normal_path("a\\b/./c/").unwrap(), "a/b/c");
         for p in ["", "/a", "\\a", "C:/a", "a/../b", "a\\..\\b", "a\0b", OWNED] { assert!(normal_path(p).is_err(), "{p}"); }
         let mut plan=Plan::default();
-        assert!(plan.add(Entry { path: "sce_sys/param.json".into(), directory: false, size: MAX_PARAM+1 }).is_err());
-        assert!(Plan::default().add(Entry { path: "large".into(), directory: false, size: MAX_FILE+1 }).is_err());
+        assert!(plan.add(Entry::file("sce_sys/param.json".into(), false, MAX_PARAM+1)).is_err());
+        assert!(Plan::default().add(Entry::file("large".into(), false, MAX_FILE+1)).is_err());
         assert!(normal_path(&"a/".repeat(MAX_DEPTH+1)).is_err());
     }
 }

@@ -12,6 +12,8 @@ mouse.
 - **A Library of 400+ PS5 games** with search, genre filters and sorting. New releases show up
   by themselves: the list is updated daily.
 - **PS4 games too:** they run on shadPS4, which the launcher installs and updates by itself, like KytyPS5.
+- **And PC games:** native Linux games, and Windows games packed to run with Wine, with Steam
+  artwork and ProtonDB ratings.
 - **See what runs:** every game shows how far it gets in its emulator.
 - **Download, install and play** without leaving the launcher, through your own VPN if you like.
 - **Keeps itself and KytyPS5 up to date**, without touching your saves.
@@ -137,6 +139,26 @@ PS4 releases shipped as **PKG packages** install like any other: the launcher un
 its update and its DLC for shadPS4 (it fetches a small PKG extractor the first time, and needs
 Linux 5.13 or newer). PS5 PKG
 releases can't be installed; pick a release that is a folder, an archive or an exFAT image.
+
+## PC games
+
+The Library also lists RuTracker's Linux games: native ones, and Windows games packed to run with
+Wine (choose **PC games only** to see just those). They show Steam's artwork and description,
+and Wine-packed games show their [ProtonDB](https://www.protondb.com/) rating, which says how
+well the Windows version runs on Linux.
+
+**Install** unpacks the game, whether it's a folder, an archive, a GOG installer (`.sh`) or an
+AppImage, and finds how to start it: the uploader's start script, the game's program or its
+AppImage. **Play** starts it. If it starts the wrong thing, choose **Options → Start with …** to
+try the next one.
+
+- **Wine-packed games** include their own Wine but need its system libraries: install Wine from
+  your distribution once (`sudo apt install wine` on Ubuntu, Debian and Mint).
+- **Windows games without a start script** run through
+  [umu-launcher](https://github.com/Open-Wine-Components/umu-launcher) (Proton) if it's
+  installed, otherwise through Wine.
+- **Unlike console games**, which run inside an emulator, PC games run with your user's access
+  to your files. Only install releases you trust.
 
 ## Help
 

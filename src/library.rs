@@ -1,4 +1,5 @@
-//! Installed games: folders containing sce_sys/param.json (PS5) or sce_sys/param.sfo (PS4).
+//! Installed games: folders containing sce_sys/param.json (PS5) or sce_sys/param.sfo (PS4), or
+//! the installer's manifest (PC games).
 
 use crate::platform::Platform;
 use crate::util::sha1_hex;
@@ -15,9 +16,21 @@ pub struct LocalGame {
     pub icon0: Option<PathBuf>,
     pub pic0: Option<PathBuf>,
     pub platform: Platform,
+    /// PC games: what Play starts, from the installer's manifest.
+    pub pc: Option<crate::pcgame::Manifest>,
 }
 
 pub fn read_param(dir: &Path) -> Option<LocalGame> {
+    if let Some(m) = crate::pcgame::Manifest::read(dir) {
+        return Some(LocalGame {
+            id: sha1_hex(&dir.to_string_lossy())[..12].to_string(),
+            name: m.name.clone(),
+            path: dir.to_path_buf(),
+            platform: Platform::Pc,
+            pc: Some(m),
+            ..Default::default()
+        });
+    }
     let sce = dir.join("sce_sys");
     let Ok(bytes) = std::fs::read(sce.join("param.json")) else { return read_sfo(dir) };
     let p: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
@@ -40,6 +53,7 @@ pub fn read_param(dir: &Path) -> Option<LocalGame> {
         icon0: file("icon0.png"),
         pic0: file("pic0.png"),
         platform: Platform::Ps5,
+        pc: None,
     })
 }
 
@@ -70,6 +84,7 @@ fn read_sfo(dir: &Path) -> Option<LocalGame> {
         icon0: file("icon0.png"),
         pic0: file("pic1.png").or_else(|| file("pic0.png")),
         platform: Platform::Ps4,
+        pc: None,
     })
 }
 

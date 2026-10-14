@@ -19,6 +19,8 @@ pub fn list_page(platform: crate::platform::Platform) -> &'static str {
     match platform {
         crate::platform::Platform::Ps5 => LIST_PAGE,
         crate::platform::Platform::Ps4 => SHAD_LIST_PAGE,
+        // How Windows games run through Proton/Wine, reported by players.
+        crate::platform::Platform::Pc => "https://www.protondb.com/",
     }
 }
 

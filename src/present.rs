@@ -607,8 +607,9 @@ impl App {
                 let genre_ok = self.genre == "All" || game.buckets.contains(&self.genre.as_str());
                 // Console chips count what pressing them would show, with the other filters.
                 if genre_ok && self.mixed_consoles && self.status_filter_ok(game) {
-                    let chip = if game.g.platform == crate::platform::Platform::Ps5 { n - 2 } else { n - 1 };
-                    status[chip] = true;
+                    if let Some(p) = self.consoles.iter().position(|p| *p == game.g.platform) {
+                        status[n - self.consoles.len() + p] = true;
+                    }
                 }
                 // "All" resets every filter, so it always counts everything.
                 status[0] |= genre_ok;
@@ -1019,8 +1020,20 @@ impl App {
                 game.name, game.version, game.region, game.id).into();
         }
         let pc = self.pc_fact(t);
-        let summary: Vec<Fact> = [
+        // PC games: how it runs on Linux, natively or through Wine (with ProtonDB's rating).
+        let pc_game = self.target_platform(t) == crate::platform::Platform::Pc;
+        let steam = g.and_then(|g| g.steam.clone());
+        let pc_runs: Option<(&str, String, i32)> = pc_game.then(|| match (g.is_some_and(|g| g.wine), steam.as_ref().and_then(|s| s.protondb.clone())) {
+            (true, Some(tier)) => {
+                let kind = match tier.as_str() { "platinum" | "gold" | "native" => 1, "borked" => 3, _ => 2 };
+                ("PROTONDB · RUNS WITH WINE", format!("{}{}", tier[..1].to_uppercase(), &tier[1..]), kind)
+            }
+            (true, None) => ("RUNS WITH", "Wine, included".to_string(), 0),
+            (false, _) => ("ON LINUX", "Native game".to_string(), 1),
+        });
+        let summary = [
             match &ce {
+                _ if pc_game => ("", String::new()), // replaced by pc_runs below
                 Some(e) if e.mine => ("YOUR RESULT", e.status.meaning().to_string()),
                 Some(e) if e.on_linux => ("ON LINUX", e.status.meaning().to_string()),
                 Some(e) if e.windows.is_some() => ("ON WINDOWS · LINUX UNTESTED", e.status.meaning().to_string()),
@@ -1033,12 +1046,27 @@ impl App {
             if let Some(local) = t.local { ("INSTALLED VERSION", self.locals[local].l.version.clone()) }
             else { ("RELEASE VERSION", g.map(|g| g.version.clone()).unwrap_or_default()) },
         ].into_iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| Fact { key: k.into(), value: v.into(), kind: 0 })
+            .collect::<Vec<_>>().into_iter();
+        let summary: Vec<Fact> = pc_runs.map(|(k, v, kind)| Fact { key: k.into(), value: v.into(), kind }).into_iter().chain(summary)
             // Will it run here? Second, next to whether it runs at all; three boxes fit a row.
             .enumerate().flat_map(|(i, f)| {
                 let pc = (i == 0).then(|| pc.clone()).flatten().map(|(k, v, kind)| Fact { key: k.into(), value: v.into(), kind });
                 std::iter::once(f).chain(pc)
             }).take(3).collect();
         h.facts = model(summary.chunks(3).map(|c| FactRow { items: model(c.to_vec()) }).collect());
+        let mut facts = facts;
+        if pc_game {
+            // The emulator lists and console fields don't apply to PC games; Steam's do.
+            facts.retain(|(k, _)| !matches!(*k, "YOUR RESULT" | "ON LINUX" | "ON WINDOWS" | "LAST TESTED" | "TESTED ON" | "TITLE ID" | "CONSOLE FIRMWARE NOTE" | "UPDATE"));
+            if let Some(s) = &steam {
+                facts.push(("METACRITIC", s.metacritic.map(|m| m.to_string()).unwrap_or_default()));
+                facts.push(("STEAM", if s.linux { "Has a Linux version".into() } else { "Windows only on Steam".into() }));
+                if !s.developers.is_empty() { facts.push(("DEVELOPER", s.developers.join(", "))); }
+            }
+            if let Some(m) = t.local.and_then(|l| self.locals[l].l.pc.as_ref()) {
+                facts.push(("STARTS WITH", m.launch.clone()));
+            }
+        }
         let details: Vec<Fact> = facts.into_iter().filter(|(k, v)| !v.is_empty()
             && !matches!(*k, "SEEDERS · SNAPSHOT" | "LEECHERS · SNAPSHOT" | "OBSERVED · NOT LIVE" | "ON KYTYPS5" | "ON SHADPS4" | "SIZE" | "PUBLISHER" | "RELEASE" | "REGION"))
             .map(|(k, v)| Fact { key: k.into(), value: v.into(), kind: 0 }).collect();

@@ -213,3 +213,32 @@ test('the daily refresh adds feed releases, follows re-uploads and drops deleted
   const broken = { ...api, result: { 1: api.result[1] } };
   assert.equal(refreshCatalog({ topics, topic_count: 7 }, [], broken, platform).catalog.topics.length, 7);
 });
+
+test('PC releases are matched to their Steam app by name, never to soundtracks or other games', async () => {
+  const { cleanName, normalize, bestMatch, steamBlock } = await import('./steam.mjs');
+  assert.equal(cleanName('[GOG] Human: Fall Flat [x86] [ENG] [Unity3D]'), 'Human: Fall Flat');
+  assert.equal(cleanName('Transport Fever 3: Deluxe Edition (2026) (v.40408) + 2 DLC [RUS + ENG + 11 / ENG + 1]'), 'Transport Fever 3: Deluxe Edition');
+  assert.equal(cleanName('[Трилогия] Gothic / Готика [x86] [RUS] [Wine]'), 'Gothic');
+  assert.equal(normalize('Age of Empires II: Definitive Edition™'), 'age empires 2');
+  const items = [
+    { type: 'app', id: 1092840, name: 'Celeste Soundtrack' },
+    { type: 'app', id: 504230, name: 'Celeste' },
+    { type: 'app', id: 3779560, name: 'Celeste Blue Wizard Luna' },
+  ];
+  assert.equal(bestMatch('Celeste', items).id, 504230);
+  assert.equal(bestMatch('Age of Empires II Definitive Edition', [{ type: 'app', id: 813780, name: 'Age of Empires II: Definitive Edition' }]).id, 813780);
+  assert.equal(bestMatch('Ori and the Blind Forest', [{ type: 'app', id: 1, name: 'Ori and the Will of the Wisps' }]), null);
+  assert.equal(bestMatch('Some Indie Game', []), null);
+  assert.equal(bestMatch("King's Bounty", [{ type: 'app', id: 2, name: "King's Bounty: Crossworlds" }]), null, 'a spin-off is another game');
+  const { collection } = await import('./steam.mjs');
+  assert.equal(collection("[Антология] Assassin's Creed (2008-2014) [amd64] [RUS]"), true);
+  assert.equal(collection('[Trilogy] Mass Effect (1 + 2 + 3) [amd64]'), true);
+  assert.equal(collection('Bioshock Remastered + Bioshock 2 Remastered [x86]'), true);
+  assert.equal(collection('Transport Fever 3 (v.40408) + 2 DLC [RUS]'), false, 'DLC is part of the game');
+  const block = steamBlock(504230, {
+    name: 'Celeste', short_description: '  Help Madeline  survive. ', genres: [{ description: 'Action' }],
+    release_date: { date: 'Jan 25, 2018' }, platforms: { linux: true }, metacritic: { score: 88 },
+    screenshots: [{ path_full: 'https://x/ss.jpg' }], movies: [{ highlight: true, hls_h264: 'https://x/m.m3u8' }],
+  }, { portrait: 'https://x/p.jpg', hero: null, logo: null }, 'platinum', new Date('2026-10-14T00:00:00Z'));
+  assert.deepEqual([block.short, block.linux, block.video, block.protondb, block.metacritic], ['Help Madeline survive.', true, 'https://x/m.m3u8', 'platinum', 88]);
+});

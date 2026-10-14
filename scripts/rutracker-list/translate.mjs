@@ -9,7 +9,10 @@ const platform = platformFrom(process.argv.slice(2));
 const output = fileURLToPath(new URL(`../../dist/rutracker/${platform.key}-topics.json`, import.meta.url));
 const cachePath = fileURLToPath(new URL('../../dist/rutracker/english-translations.json', import.meta.url));
 const original = JSON.parse(await readFile(process.argv.includes('--from-original') ? `${output}.ru-backup.json` : output, 'utf8'));
-const prepared = prepareCatalog(original);
+// Steam data (PC catalogs) is in English already and may hold names in other scripts: it skips
+// translation and is put back afterwards.
+const steam = new Map(original.topics.filter(t => t.steam).map(t => [t.id, t.steam]));
+const prepared = prepareCatalog({ ...original, topics: original.topics.map(({ steam: _, ...t }) => t) });
 const inputs = translationInputs(prepared);
 const numericSignature = text => text.match(/\d+(?:[.,/]\d+|\.x+|\.\?+)*/gi) || [];
 let cache = {};
@@ -34,7 +37,13 @@ async function translateLines(lines) {
       console.log(`Translation endpoint returned HTTP ${response.status}; retrying in ${wait / 1000} s`);
       await new Promise(done => setTimeout(done, wait));
     }
-    response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+    try {
+      response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+    } catch (error) {
+      // A network failure is retried like a rate limit.
+      response = { ok: false, status: `unreachable (${error.cause?.code || error.name})` };
+      continue;
+    }
     if (response.ok || !(response.status === 429 || response.status >= 500)) break;
   }
   if (!response.ok) throw new Error(`Translation endpoint returned HTTP ${response.status}; source catalog unchanged`);
@@ -101,6 +110,7 @@ function validate(value, key = '') {
   }
 }
 validate(result);
+for (const topic of result.topics) if (steam.has(topic.id)) topic.steam = steam.get(topic.id);
 const backup = `${output}.ru-backup.json`;
 try { await access(backup); } catch (error) { if (error.code !== 'ENOENT') throw error; await copyFile(output, backup); }
 result.translation = { language: 'en', source_language: 'ru', translated_at: new Date().toISOString(),

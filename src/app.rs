@@ -273,6 +273,9 @@ pub struct App {
     pub platform_filter: Option<crate::platform::Platform>,
     /// The Library catalog has games for more than one console (shows badges and a console chip).
     pub mixed_consoles: bool,
+    /// The platforms the catalog has, when there are several: each gets a "… games only" chip,
+    /// the last status chips, in this order.
+    pub consoles: Vec<crate::platform::Platform>,
     /// The status filters lead `genre_list`: All, Installed, In-game, In-game on Linux and, with
     /// more than one console, "PS5 games only" and "PS4 games only". Genres follow.
     pub status_count: usize,
@@ -430,6 +433,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         crash_logs: HashMap::new(),
         platform_filter: None,
         mixed_consoles: false,
+        consoles: Vec::new(),
         status_count: 4,
         compat_checked: 0.0,
     };
@@ -539,6 +543,10 @@ impl App {
     }
 
     pub fn art_for_game(&self, g: &Game) -> Option<Info> {
+        // PC games: Steam's artwork, carried in the catalog.
+        if let Some(steam) = g.steam.as_ref() {
+            return Some(steam.info());
+        }
         let store = self.art.lock().unwrap();
         let sony = std::iter::once(&g.title_id).chain(g.title_ids.iter())
             .filter_map(|id| store.get(id)).find(|info| !info.master.is_empty())
@@ -649,8 +657,13 @@ impl App {
         }
         let mut locals = Vec::new();
         let store = self.art.lock().unwrap();
+        // PC games know the topic they were installed from.
+        let by_topic: HashMap<i64, usize> = self.games.iter().enumerate().map(|(i, g)| (g.g.id, i)).collect();
         for l in libs {
-            let cat = by_tid.get(l.title_id.as_str()).copied().or_else(|| by_name.get(&norm(&l.name)).copied());
+            let topic = l.pc.as_ref().map(|m| m.topic).filter(|t| *t > 0);
+            let cat = topic.and_then(|t| by_topic.get(&t).copied())
+                .or_else(|| (!l.title_id.is_empty()).then(|| by_tid.get(l.title_id.as_str()).copied()).flatten())
+                .or_else(|| by_name.get(&norm(&l.name)).copied());
             let info = Self::sanitize(store.get(&l.title_id).cloned()).or_else(|| cat.and_then(|c| self.games[c].info.clone()));
             let name = Self::display_name(&l.name, info.as_ref());
             locals.push(LocalV { l, info, cat, name });
@@ -732,11 +745,14 @@ impl App {
         list.push(("In-game".into(), count(&|e| e.in_game_anywhere())));
         list.push(("In-game on Linux".into(), count(&|e| e.on_linux && e.status == crate::compat::Status::InGame)));
         use crate::platform::Platform;
-        self.mixed_consoles = [Platform::Ps5, Platform::Ps4].iter().all(|p| self.games.iter().any(|g| g.g.platform == *p));
+        self.consoles = [Platform::Ps5, Platform::Ps4, Platform::Pc].into_iter()
+            .filter(|p| self.games.iter().any(|g| g.g.platform == *p)).collect();
+        self.mixed_consoles = self.consoles.len() > 1;
         if !self.mixed_consoles {
+            self.consoles.clear();
             self.platform_filter = None;
         } else {
-            for p in [Platform::Ps5, Platform::Ps4] {
+            for p in self.consoles.clone() {
                 let n = self.groups.members.iter().filter(|m| m.iter().any(|i| self.games[*i].g.platform == p)).count();
                 list.push((format!("{} games only", p.label()), n));
             }
@@ -1386,21 +1402,31 @@ impl App {
                     self.crash_logs.insert(e.game_id.clone(), saved.clone());
                 }
                 let action = saved.as_ref().map(|p| format!("log:{}", p.display())).unwrap_or_default();
-                let emulator = self.local_platform(&e.game_id).emulator();
+                let platform = self.local_platform(&e.game_id);
+                let pc = platform == crate::platform::Platform::Pc;
+                let emulator = platform.emulator();
                 let what = match crashed {
                     Some(code) => {
                         crate::log!("{} crashed (exit {code}), log: {}", e.name, e.log.display());
                         audio::play(Sound::Error);
-                        (format!("{} stopped unexpectedly", e.name), format!("{emulator} exited with code {code}."))
+                        (format!("{} stopped unexpectedly", e.name), if pc { format!("The game exited with code {code}.") } else { format!("{emulator} exited with code {code}.") })
                     }
+                    None if pc => (format!("{} closed right after starting", e.name), "It may need something this PC doesn't have (Wine, a library).".into()),
                     None => (format!("{} closed right after starting", e.name), format!("{emulator} may not support it yet.")),
                 };
-                let more = if saved.is_some() { format!(" Click to see its log; it's saved for your next report to {emulator}.") } else { String::new() };
+                let more = match (&saved, pc) {
+                    (None, _) => String::new(),
+                    (Some(_), true) => " Click to see its log.".into(),
+                    (Some(_), false) => format!(" Click to see its log; it's saved for your next report to {emulator}."),
+                };
                 self.toast_game_action(&what.0, &format!("{}{more}", what.1), 2, &e.game_id, &action);
             } else {
                 self.toast_game(&e.name, &format!("Played for {played}"), 1, &e.game_id);
             }
-            self.ask_rating(&e.game_id);
+            // Ratings go to the emulators' community lists: not for PC games.
+            if self.local_platform(&e.game_id) != crate::platform::Platform::Pc {
+                self.ask_rating(&e.game_id);
+            }
         }
         if before != after {
             // Play ⇄ Resume/Stop changes the buttons; keep focus on the first one.
@@ -1891,13 +1917,13 @@ impl App {
         self.push_genres();
     }
 
-    /// The console a status-row chip stands for ("PS5 games only" / "PS4 games only").
+    /// The platform a status-row chip stands for ("PS5 games only", "PC games only"…).
     pub fn console_chip(&self, i: usize) -> Option<crate::platform::Platform> {
-        use crate::platform::Platform;
-        if !self.mixed_consoles || i >= self.status_count || i + 2 < self.status_count {
+        let first = self.status_count.checked_sub(self.consoles.len())?;
+        if i < first || i >= self.status_count {
             return None;
         }
-        Some(if i + 2 == self.status_count { Platform::Ps5 } else { Platform::Ps4 })
+        self.consoles.get(i - first).copied()
     }
 
     /// The game is for the console the Library shows (any, unless one is chosen).
@@ -2321,7 +2347,8 @@ impl App {
             a.push(ActionDef { round: true, ..mk("web", "Open web page", "web", false) });
         }
         if in_hub && info.as_ref().is_some_and(|i| !i.store.is_empty()) {
-            a.push(ActionDef { round: true, ..mk("store", "PlayStation Store", "bag", false) });
+            let label = if self.target_platform(t) == crate::platform::Platform::Pc { "Steam page" } else { "PlayStation Store" };
+            a.push(ActionDef { round: true, ..mk("store", label, "bag", false) });
         }
         if !a.iter().any(|x| x.primary) {
             if let Some(f) = a.first_mut() {
@@ -2371,7 +2398,8 @@ impl App {
             "store" => {
                 if let Some(i) = self.target_info(t).filter(|i| !i.store.is_empty()) {
                     open_url(&i.store);
-                    self.toast("Opened in your browser", "The PlayStation Store page is in your browser.", 1);
+                    let page = if self.target_platform(t) == crate::platform::Platform::Pc { "The Steam page" } else { "The PlayStation Store page" };
+                    self.toast("Opened in your browser", &format!("{page} is in your browser."), 1);
                 }
             }
             "folder" => {
@@ -2417,8 +2445,25 @@ impl App {
             }
             "compat" => {
                 let platform = self.target_platform(t);
-                open_url(crate::compat::list_page(platform));
-                self.toast("Opened in your browser", &format!("The {} compatibility list is in your browser.", platform.emulator()), 1);
+                if platform == crate::platform::Platform::Pc {
+                    let appid = t.game.and_then(|g| self.games[g].g.steam.as_ref()).map(|s| s.appid);
+                    open_url(&appid.map(|a| format!("https://www.protondb.com/app/{a}")).unwrap_or_else(|| crate::compat::list_page(platform).into()));
+                    self.toast("Opened in your browser", "ProtonDB: how well it runs on Linux, reported by players.", 1);
+                } else {
+                    open_url(crate::compat::list_page(platform));
+                    self.toast("Opened in your browser", &format!("The {} compatibility list is in your browser.", platform.emulator()), 1);
+                }
+            }
+            "start_with" => {
+                let Some(l) = t.local else { return };
+                let game = self.locals[l].l.clone();
+                match crate::pcgame::rotate_launch(&game.path) {
+                    Ok(m) => {
+                        self.toast("Play now starts", &m.launch, 1);
+                        self.rescan_library();
+                    }
+                    Err(e) => self.toast("Couldn't change it", &e, 2),
+                }
             }
             _ => {}
         }
@@ -2628,6 +2673,7 @@ impl App {
         for a in self.actions_for(t, true) {
             let label = match a.id {
                 "web" => "Open web page".to_string(),
+                "store" if self.target_platform(t) == crate::platform::Platform::Pc => "Steam page".to_string(),
                 "store" => "PlayStation Store page".to_string(),
                 "trailer" => "Watch trailer".to_string(),
                 _ => a.label.clone(),
@@ -2637,16 +2683,29 @@ impl App {
         if self.overlay != Overlay::Hub {
             items.insert(items.iter().position(|a| a.id == "trailer").unwrap_or(items.len()).min(if t.local.is_some() { 1 } else { 0 }), mk("hub", "Game Hub", "info"));
         }
-        if t.local.is_some() {
+        let pc = self.target_platform(t) == crate::platform::Platform::Pc;
+        if let Some(l) = t.local {
             items.push(mk("folder", "Open game folder", "folder"));
-            items.push(mk("log", "View emulator log", "log"));
-            items.push(mk("rate", "Rate how it runs", "star"));
+            items.push(mk("log", if pc { "View game log" } else { "View emulator log" }, "log"));
+            if pc {
+                // When the launcher picked the wrong thing to start: the next candidate.
+                if let Some(m) = self.locals[l].l.pc.as_ref().filter(|m| !m.alternatives.is_empty()) {
+                    items.push(mk("start_with", &format!("Start with {}", m.alternatives[0]), "play"));
+                }
+            } else {
+                items.push(mk("rate", "Rate how it runs", "star"));
+            }
         }
-        if let Some(g) = t.game {
+        if let Some(g) = t.game.filter(|g| self.games[*g].g.steam.is_none()) {
             let on = self.cfg.lock().unwrap().rawg_art.contains(&self.games[g].g.id);
             items.push(mk("rawg_art", if on { "Use PlayStation artwork" } else { "Use RAWG artwork" }, "star"));
         }
-        items.push(mk("compat", if self.target_platform(t) == crate::platform::Platform::Ps4 { "shadPS4 compatibility list" } else { "KytyPS5 compatibility list" }, "web"));
+        let compat = match self.target_platform(t) {
+            crate::platform::Platform::Ps4 => "shadPS4 compatibility list",
+            crate::platform::Platform::Ps5 => "KytyPS5 compatibility list",
+            crate::platform::Platform::Pc => "ProtonDB page",
+        };
+        items.push(mk("compat", compat, "web"));
         items.push(mk("settings", "Settings", "gear"));
         let title = t.local.map(|l| self.locals[l].name.clone()).or_else(|| t.game.map(|g| self.games[g].name.clone())).unwrap_or_default();
         self.menu_target = Some(t);
@@ -2675,7 +2734,7 @@ impl App {
     fn show_launch_splash(&mut self, l: usize) {
         self.push_launch(l);
         let platform = self.locals[l].l.platform;
-        self.ui().set_launch_sub(format!("Starting with {}…", platform.emulator()).into());
+        self.ui().set_launch_sub(if platform == crate::platform::Platform::Pc { "Starting…".into() } else { format!("Starting with {}…", platform.emulator()).into() });
         self.ui().set_launch_ps4(platform == crate::platform::Platform::Ps4);
         self.push_controller_status();
         self.push_overlay(Overlay::Launch, self.zone, self.idx);
@@ -2882,5 +2941,6 @@ fn emulator_version(platform: crate::platform::Platform, kyty: &std::path::Path)
     match platform {
         crate::platform::Platform::Ps4 => crate::shad::pretty(&crate::shad::load_state().installed),
         crate::platform::Platform::Ps5 => crate::kyty::version_for(kyty),
+        crate::platform::Platform::Pc => String::new(),
     }
 }

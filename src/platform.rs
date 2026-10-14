@@ -1,4 +1,5 @@
-//! Which console a game is for: PS5 games run on KytyPS5, PS4 games on shadPS4.
+//! Which platform a game is for: PS5 games run on KytyPS5, PS4 games on shadPS4, and PC games
+//! (native Linux, or Windows games packed with Wine) run by themselves.
 
 use serde::{Deserialize, Serialize};
 
@@ -7,6 +8,7 @@ pub enum Platform {
     #[default]
     Ps5,
     Ps4,
+    Pc,
 }
 
 impl Platform {
@@ -14,14 +16,16 @@ impl Platform {
         match self {
             Platform::Ps5 => "PS5",
             Platform::Ps4 => "PS4",
+            Platform::Pc => "PC",
         }
     }
 
-    /// The emulator that runs this console's games.
+    /// What runs this platform's games.
     pub fn emulator(self) -> &'static str {
         match self {
             Platform::Ps5 => "KytyPS5",
             Platform::Ps4 => "shadPS4",
+            Platform::Pc => "Linux",
         }
     }
 
