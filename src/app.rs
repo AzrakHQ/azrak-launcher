@@ -615,24 +615,11 @@ impl App {
         let hub_id = self.hub.and_then(|t| t.local).and_then(|i| self.locals.get(i)).map(|l| l.l.id.clone());
         let menu_id = self.menu_target.and_then(|t| t.local).and_then(|i| self.locals.get(i)).map(|l| l.l.id.clone());
         let libs = self.library.lock().unwrap().clone();
-        let mut by_tid: HashMap<&str, usize> = HashMap::new();
-        let mut by_name: HashMap<String, usize> = HashMap::new();
-        for (i, g) in self.games.iter().enumerate() {
-            for id in std::iter::once(&g.g.title_id).chain(g.g.title_ids.iter()).filter(|id| !id.is_empty()) {
-                by_tid.entry(id).or_insert(i);
-            }
-            by_name.entry(norm(&g.name)).or_insert(i);
-            by_name.entry(norm(&g.g.name)).or_insert(i);
-        }
+        let index = CatalogIndex::new(self.games.iter().map(|g| (&g.g, g.name.as_str())));
         let mut locals = Vec::new();
         let store = self.art.lock().unwrap();
-        // PC games know the topic they were installed from.
-        let by_topic: HashMap<i64, usize> = self.games.iter().enumerate().map(|(i, g)| (g.g.id, i)).collect();
         for l in libs {
-            let topic = l.pc.as_ref().map(|m| m.topic).filter(|t| *t > 0);
-            let cat = topic.and_then(|t| by_topic.get(&t).copied())
-                .or_else(|| (!l.title_id.is_empty()).then(|| by_tid.get(l.title_id.as_str()).copied()).flatten())
-                .or_else(|| by_name.get(&norm(&l.name)).copied());
+            let cat = index.find(&l);
             let info = Self::sanitize(store.get(&l.title_id).cloned()).or_else(|| cat.and_then(|c| self.games[c].info.clone()));
             let name = Self::display_name(&l.name, info.as_ref());
             locals.push(LocalV { l, info, cat, name });
@@ -688,8 +675,9 @@ impl App {
                 format!("group:{:?}", self.groups.releases(catalog).first())
             } else if !local.l.title_id.is_empty() { format!("id:{}", local.l.title_id) }
             else {
+                // The PC and the PS5 version of a game are two games.
                 let name = norm(&local.name);
-                if name.is_empty() { format!("path:{}", local.l.path.display()) } else { format!("name:{name}") }
+                if name.is_empty() { format!("path:{}", local.l.path.display()) } else { format!("name:{}:{name}", local.l.platform.label()) }
             };
             seen.insert(key)
         }).map(RowItem::Local).collect();
@@ -1067,6 +1055,12 @@ impl App {
             return self.locals[l].l.platform;
         }
         t.game.map(|g| self.games[g].g.platform).unwrap_or_default()
+    }
+
+    /// A PC game that runs through Proton or Wine: a Wine-packed release, or an installed .exe.
+    pub fn pc_windows(&self, t: Target) -> bool {
+        let installed = t.local.and_then(|l| self.locals[l].l.pc.as_ref()).is_some_and(|m| m.kind == crate::pcgame::Kind::Windows);
+        installed || t.game.is_some_and(|g| self.games[g].g.wine)
     }
 
     fn local_platform(&self, game_id: &str) -> crate::platform::Platform {
@@ -2350,7 +2344,7 @@ impl App {
                 let game = self.locals[l].l.clone();
                 match crate::pcgame::rotate_launch(&game.path) {
                     Ok(m) => {
-                        self.toast("Play now starts", &m.launch, 1);
+                        self.toast("Play now starts", &crate::pcgame::short_path(&m.launch, &m.alternatives.last().cloned().unwrap_or_default()), 1);
                         self.rescan_library();
                     }
                     Err(e) => self.toast("Couldn't change it", &e, 2),
@@ -2399,8 +2393,10 @@ impl App {
         };
         if let Some(s) = s {
             audio::play(Sound::Back);
-            let emulator = self.local_platform(&s.game_id).emulator();
-            self.toast_game(&format!("Stopping {}…", s.name), &format!("Closing the game and saving {emulator}'s caches."), 0, &s.game_id.clone());
+            let platform = self.local_platform(&s.game_id);
+            let sub = if platform == crate::platform::Platform::Pc { "Closing the game.".to_string() }
+                else { format!("Closing the game and saving {}'s caches.", platform.emulator()) };
+            self.toast_game(&format!("Stopping {}…", s.name), &sub, 0, &s.game_id.clone());
             self.sessions.stop(s.pid);
         }
     }
@@ -2581,7 +2577,7 @@ impl App {
             if pc {
                 // When the launcher picked the wrong thing to start: the next candidate.
                 if let Some(m) = self.locals[l].l.pc.as_ref().filter(|m| !m.alternatives.is_empty()) {
-                    items.push(mk("start_with", &format!("Start with {}", m.alternatives[0]), "play"));
+                    items.push(mk("start_with", &format!("Start with {}", crate::pcgame::short_path(&m.alternatives[0], &m.launch)), "play"));
                 }
             } else {
                 items.push(mk("rate", "Rate how it runs", "star"));
@@ -2829,6 +2825,55 @@ fn emulator_version(platform: crate::platform::Platform, kyty: &std::path::Path)
         crate::platform::Platform::Ps4 => crate::shad::pretty(&crate::shad::load_state().installed),
         crate::platform::Platform::Ps5 => crate::kyty::version_for(kyty),
         crate::platform::Platform::Pc => String::new(),
+    }
+}
+
+/// Finds the catalog release an installed game is: a PC game by the topic it was installed from,
+/// a PlayStation game by title ID, else by name, on the same platform only (a PC and a PS5
+/// game of the same name are different games).
+struct CatalogIndex {
+    by_topic: HashMap<i64, usize>,
+    by_tid: HashMap<String, usize>,
+    by_name: HashMap<(crate::platform::Platform, String), usize>,
+}
+
+impl CatalogIndex {
+    /// `games`: each release with its display name.
+    fn new<'a>(games: impl Iterator<Item = (&'a crate::catalog::Game, &'a str)>) -> Self {
+        let mut index = Self { by_topic: HashMap::new(), by_tid: HashMap::new(), by_name: HashMap::new() };
+        for (i, (g, display)) in games.enumerate() {
+            index.by_topic.insert(g.id, i);
+            for id in std::iter::once(&g.title_id).chain(g.title_ids.iter()).filter(|id| !id.is_empty()) {
+                index.by_tid.entry(id.clone()).or_insert(i);
+            }
+            index.by_name.entry((g.platform, norm(display))).or_insert(i);
+            index.by_name.entry((g.platform, norm(&g.name))).or_insert(i);
+        }
+        index
+    }
+
+    fn find(&self, l: &LocalGame) -> Option<usize> {
+        let topic = l.pc.as_ref().map(|m| m.topic).filter(|t| *t > 0);
+        topic.and_then(|t| self.by_topic.get(&t).copied())
+            .or_else(|| (!l.title_id.is_empty()).then(|| self.by_tid.get(&l.title_id).copied()).flatten())
+            .or_else(|| self.by_name.get(&(l.platform, norm(&l.name))).copied())
+    }
+}
+
+#[cfg(test)]
+mod catalog_index_tests {
+    use super::*;
+    use crate::platform::Platform;
+
+    #[test]
+    fn installed_games_match_releases_of_their_own_platform() {
+        let release = |id: i64, name: &str, platform: Platform| crate::catalog::Game { id, name: name.into(), platform, ..Default::default() };
+        let games = [release(1, "Hollow Knight", Platform::Ps5), release(2, "Hollow Knight", Platform::Pc), release(3, "Celeste", Platform::Ps5)];
+        let index = CatalogIndex::new(games.iter().map(|g| (g, g.name.as_str())));
+        let local = |name: &str, platform: Platform| LocalGame { name: name.into(), platform, ..Default::default() };
+        assert_eq!(index.find(&local("Hollow Knight", Platform::Pc)), Some(1));
+        assert_eq!(index.find(&local("Hollow Knight", Platform::Ps5)), Some(0));
+        assert_eq!(index.find(&local("Celeste", Platform::Pc)), None, "no PC release of it: not the PS5 one");
     }
 }
 

@@ -362,9 +362,10 @@ dropped; players need no account for any artwork.
 
 **Installing** ([installer.rs](../src/installer.rs) `install_pc`) unpacks the release's archives,
 or copies the folder. Those are the archives at its top or in a folder at its top (each volume
-set, `game.rar` + `game.r00`… or `game.part1.rar`…, as one), unless the game's program sits
-beside them (`data.tar` next to `game.x86_64` is the game's data, copied as it is). A start
-script beside an archive doesn't count: it usually starts what's in the archive. GOG Linux installers (a shell script with a zip appended) are read
+set, `game.rar` + `game.r00`… or `game.part1.rar`…, as one). An archive is unpacked when it
+holds something that starts a game (a program, AppImage or script, read by its first bytes while
+inspecting it), or when nothing beside it could; otherwise it's the game's data and is copied as
+it is (`data.tar` next to `game.x86_64`, or next to the `start.sh` that reads it). GOG Linux installers (a shell script with a zip appended) are read
 as that zip by libarchive; the script never runs. Symlinks in archives are kept only when they
 stay inside the game (relative, not climbing above its folder); others fail the install.
 Torrents drop the executable flag, so every ELF program, `#!` script and AppImage is made
@@ -374,7 +375,8 @@ first: a start script (`start`, `start.sh`…), an AppImage, a native program (6
 named after the game, not crash handlers or bundled Wine/runtimes), a Windows `.exe` (not
 installers or redistributables). It writes `.ps5-launcher-game.json` (name, topic, launch target,
 alternatives); the Library finds PC games by it (in a games folder, a folder in it, or one level
-deeper) and links them to their catalog entry by topic.
+deeper) and links them to their catalog entry by topic, else by name among PC releases only (a
+PC and a PS5 game of the same name are two games).
 
 **Playing** runs the target in its folder, in its own process group. Start scripts often hand
 over to the game and exit, so a PC game counts as running while any process of its group is

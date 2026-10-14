@@ -1404,9 +1404,11 @@ export component AppWindow inherits Window {
                         background: f ? #ffffff : transparent;
                         HorizontalLayout {
                             padding-left: (18px * S.k);
+                            padding-right: (18px * S.k);
                             spacing: (16px * S.k);
                             Image { source: Icons.get(m.icon); colorize: f ? #0a0d18 : Theme.text2; width: (24px * S.k); height: (24px * S.k); y: (17px * S.k); }
-                            Text { text: m.label; font-size: (20px * S.k); color: f ? #0a0d18 : Theme.text; vertical-alignment: center; }
+                            // Long labels (a game's file names) stay inside the menu.
+                            Text { text: m.label; font-size: (20px * S.k); color: f ? #0a0d18 : Theme.text; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; min-width: 0; }
                         }
                         TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.menu, i); } }
                     }

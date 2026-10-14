@@ -276,8 +276,9 @@ impl App {
             c.push(chip("cal", rel, false));
         }
         if g.is_none() {
-            if let Some(l) = t.local {
-                c.push(chip("tag", self.locals[l].l.title_id.clone(), false));
+            // Not in the catalog: its title ID, or "PC" (PC games have none).
+            if let Some(l) = t.local.map(|l| &self.locals[l].l) {
+                c.push(chip("tag", if l.title_id.is_empty() { l.platform.label().to_string() } else { l.title_id.clone() }, false));
             }
         }
         c
@@ -355,7 +356,11 @@ impl App {
                 let desc = info.as_ref().map(|i| i.short.clone()).filter(|s| s.chars().count() > 30 && s.chars().any(|c| c.is_lowercase()))
                     .or_else(|| g.and_then(|g| g.description.first().cloned()))
                     .or_else(|| g.map(|g| g.excerpt.clone()))
-                    .unwrap_or_else(|| format!("Installed locally. Launches with the {} emulator.", self.target_platform(t).emulator()));
+                    .unwrap_or_else(|| match self.target_platform(t) {
+                        crate::platform::Platform::Pc if self.pc_windows(t) => "Installed locally. A Windows game, run with Proton or Wine.".to_string(),
+                        crate::platform::Platform::Pc => "Installed locally. Runs on Linux by itself, no emulator needed.".to_string(),
+                        platform => format!("Installed locally. Launches with the {} emulator.", platform.emulator()),
+                    });
                 h.desc = truncate(&desc, 260).into();
                 self.hero_actions = self.actions_for(t, false);
             }
@@ -943,7 +948,7 @@ impl App {
             h.cover_loaded = true;
         }
         h.no_art = !h.cover_loaded && cover.as_ref().is_none_or(|r| self.images.has_failed(&r.key));
-        h.console = t.game.map(|g| self.games[g].g.platform.label()).unwrap_or_default().into();
+        h.console = self.target_platform(t).label().into();
 
         // KytyPS5 status is in the facts grid below, so it isn't repeated as a chip here.
         let mut chips: Vec<ChipData> = Vec::new();
@@ -1041,13 +1046,21 @@ impl App {
         // PC games: how it runs on Linux, natively or through Wine (with ProtonDB's rating).
         let pc_game = self.target_platform(t) == crate::platform::Platform::Pc;
         let steam = g.and_then(|g| g.steam.clone());
-        let pc_runs: Option<(&str, String, i32)> = pc_game.then(|| match (g.is_some_and(|g| g.wine), steam.as_ref().and_then(|s| s.protondb.clone())) {
-            (true, Some(tier)) => {
+        // Wine-packed releases bring their Wine; an installed .exe (catalogued or not) runs
+        // through Proton or Wine.
+        let wine_packed = g.is_some_and(|g| g.wine);
+        let pc_windows = self.pc_windows(t);
+        let pc_runs: Option<(&str, String, i32)> = pc_game.then(|| match (steam.as_ref().and_then(|s| s.protondb.clone()), wine_packed) {
+            (Some(tier), _) if pc_windows => {
                 let kind = match tier.as_str() { "platinum" | "gold" | "native" => 1, "borked" => 3, _ => 2 };
                 ("PROTONDB · RUNS WITH WINE", format!("{}{}", tier[..1].to_uppercase(), &tier[1..]), kind)
             }
-            (true, None) => ("RUNS WITH", "Wine, included".to_string(), 0),
-            (false, _) => ("ON LINUX", "Native game".to_string(), 1),
+            (None, true) => ("RUNS WITH", "Wine, included".to_string(), 0),
+            _ if pc_windows => match crate::pcgame::windows_runner() {
+                Some((_, runner)) => ("WINDOWS GAME · RUNS WITH", runner.to_string(), 0),
+                None => ("WINDOWS GAME", "Needs Proton or Wine".to_string(), 3),
+            },
+            _ => ("ON LINUX", "Native game".to_string(), 1),
         });
         let summary = [
             match &ce {

@@ -342,7 +342,9 @@ impl Entry {
     fn file(path: String, directory: bool, size: u64) -> Self { Self { path, directory, size, link: None, exec: false } }
 }
 #[derive(Default)]
-struct Plan { entries: Vec<Entry>, paths: BTreeMap<String, bool>, explicit: HashSet<String>, total: u64 }
+struct Plan { entries: Vec<Entry>, paths: BTreeMap<String, bool>, explicit: HashSet<String>, total: u64,
+    /// A PC archive holds something that can start a game (a program, AppImage or script).
+    starts: bool }
 impl Plan {
     fn add(&mut self, entry: Entry) -> Result<()> {
         ensure!(self.entries.len() < MAX_ENTRIES, "Archive/source exceeds {MAX_ENTRIES} entries");
@@ -574,6 +576,20 @@ fn inspect_archive_with(api: &Api, source: &Source, paths: &[String], links: boo
     loop {
         check_cancel(cancel)?;
         let Some(entry) = archive.header()? else { break; };
+        // PC archives: is there something that starts a game in it? Read by its first bytes, as
+        // pcgame does once it's installed (torrents and tar files often drop the executable flag).
+        if links && !plan.starts && !entry.directory && entry.link.is_none() && entry.size > 0 {
+            let mut head = vec![0u8; entry.size.min(4096) as usize];
+            let mut got = 0;
+            while got < head.len() {
+                let n = unsafe { (api.data)(archive.handle, head[got..].as_mut_ptr().cast(), head.len() - got) };
+                if n < 0 { archive.status(n as i32, "Inspect archive data (corruption, password, or missing volume)")?; }
+                if n <= 0 { break; }
+                got += (n as usize).min(head.len() - got);
+            }
+            use crate::pcgame::Probe;
+            plan.starts = matches!(crate::pcgame::probe(&head[..got]), Probe::Elf { .. } | Probe::Exe | Probe::AppImage | Probe::Script);
+        }
         plan.add(entry)?;
         archive.status(unsafe { (api.skip)(archive.handle) }, "Inspect archive data (missing volume or corrupt archive)")?;
     }
@@ -877,34 +893,39 @@ fn install(req: &Request, cancel: &AtomicBool, progress: Progress<'_>, commit: &
     Ok(())
 }
 
-/// Every archive in a PC release, each a list of volumes: ordinary archives, and GOG Linux
-/// installers (`.sh` with a zip appended, read as that zip; the script never runs).
-fn pc_archives(source: &Source, plan: &Plan) -> Result<Vec<Vec<String>>> {
-    // Only archives at the top of the release (or in a folder at its top) are the release's: a
-    // game's own data archives deeper inside stay as they are.
+/// An archive at the top of a PC release.
+struct PcArchive {
+    volumes: Vec<String>,
+    /// A GOG Linux installer (`.sh` with a zip appended, read as that zip; the script never runs).
+    gog: bool,
+    /// A program or script that could start the game sits beside it.
+    beside_starter: bool,
+}
+
+/// The archives at the top of a PC release (or in a folder at its top): a game's own data
+/// archives deeper inside stay as they are. Each volume set (game.rar, game.r00, …) is one.
+fn pc_archives(source: &Source, plan: &Plan) -> Result<Vec<PcArchive>> {
     let top: Vec<&Entry> = plan.entries.iter().filter(|e| !e.directory && e.path.matches('/').count() <= 1).collect();
     let folder = |path: &str| path.rsplit_once('/').map_or("", |(dir, _)| dir).to_string();
     let mut gog = HashSet::new();
     for e in top.iter().filter(|e| e.path.to_ascii_lowercase().ends_with(".sh")) {
         if gog_installer(source, &e.path)? { gog.insert(e.path.clone()); }
     }
-    // Nor are archives next to the game's program: `data.tar` beside `game.x86_64` is read by
-    // the game. A start script doesn't count: it often starts what's in the archive beside it.
-    let mut game_folders = HashSet::new();
+    let mut starters = HashSet::new();
     for e in &top {
         if gog.contains(&e.path) || volume_of(&e.path)?.is_some() { continue; }
         let mut head = Vec::with_capacity(4096);
         source.file(&e.path)?.take(4096).read_to_end(&mut head)?;
-        if matches!(crate::pcgame::probe(&head), crate::pcgame::Probe::Elf { .. } | crate::pcgame::Probe::Exe | crate::pcgame::Probe::AppImage) {
-            game_folders.insert(folder(&e.path));
+        use crate::pcgame::Probe;
+        if matches!(crate::pcgame::probe(&head), Probe::Elf { .. } | Probe::Exe | Probe::AppImage | Probe::Script) {
+            starters.insert(folder(&e.path));
         }
     }
-    // volumes() takes one archive family at a time (game.rar, game.r00, … is one).
-    let mut groups: Vec<Vec<String>> = Vec::new();
+    let mut archives = Vec::new();
     let mut families: Vec<(String, Plan)> = Vec::new();
-    for e in top.iter().filter(|e| !game_folders.contains(&folder(&e.path))) {
+    for e in &top {
         if gog.contains(&e.path) {
-            groups.push(vec![e.path.clone()]);
+            archives.push(PcArchive { volumes: vec![e.path.clone()], gog: true, beside_starter: false });
             continue;
         }
         let Some((family, _)) = volume_of(&e.path)? else { continue };
@@ -915,9 +936,12 @@ fn pc_archives(source: &Source, plan: &Plan) -> Result<Vec<Vec<String>>> {
         families[i].1.add(Entry::file(e.path.clone(), false, e.size))?;
     }
     for (_, one) in &families {
-        if let Some(volumes) = volumes(one)? { groups.push(volumes); }
+        if let Some(volumes) = volumes(one)? {
+            let beside_starter = starters.contains(&folder(&volumes[0]));
+            archives.push(PcArchive { volumes, gog: false, beside_starter });
+        }
     }
-    Ok(groups)
+    Ok(archives)
 }
 
 /// A GOG Linux installer: a shell script followed by a zip (its end-of-directory record is in the
@@ -943,11 +967,19 @@ fn gog_installer(source: &Source, path: &str) -> Result<bool> {
 fn install_pc(req: &Request, cancel: &AtomicBool, progress: Progress<'_>, commit: &dyn Fn(&Stage, &str, &str, &str) -> Result<()>) -> Result<()> {
     progress(State::Inspecting, 0, 0);
     let source = Source::inspect(req, cancel)?;
-    let groups = pc_archives(&source, &source.plan)?;
-    let api = if groups.is_empty() { None } else { Some(Api::load()?) };
+    let archives = pc_archives(&source, &source.plan)?;
+    let api = if archives.is_empty() { None } else { Some(Api::load()?) };
+    // Which archives are the release's packaging, to unpack: a GOG installer; one that holds
+    // something to start the game; one with nothing beside it that could. The rest are the
+    // game's data (`data.tar` beside `game.x86_64` or a `start.sh` that reads it): copied.
+    let mut groups = Vec::new();
     let mut plans = Vec::new();
-    for group in &groups {
-        plans.push(inspect_archive_with(api.as_ref().unwrap(), &source, group, true, cancel)?);
+    for archive in archives {
+        let plan = inspect_archive_with(api.as_ref().unwrap(), &source, &archive.volumes, true, cancel)?;
+        if archive.gog || plan.starts || !archive.beside_starter {
+            groups.push(archive.volumes);
+            plans.push(plan);
+        }
     }
     // Everything that isn't one of those archives is copied as it is.
     let unpacked: HashSet<&String> = groups.iter().flatten().collect();
@@ -1622,6 +1654,22 @@ mod tests {
     }
 
     #[test]
+    fn pc_data_archive_beside_a_start_script_is_copied() {
+        let (_t, mut req) = fixture();
+        pc(&mut req, "Some Game");
+        // A script-run game (Python, LÖVE…) that reads data.tar as it is.
+        fs::write(req.source.join("start.sh"), b"#!/bin/sh\npython3 game.py data.tar\n").unwrap();
+        fs::write(req.source.join("game.py"), b"print('game')\n").unwrap();
+        let data = tar(&[("level.dat", b"level", b'0', "")]);
+        fs::write(req.source.join("data.tar"), &data).unwrap();
+        let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
+        assert_eq!(fs::read(p.join("data.tar")).unwrap(), data);
+        assert!(!p.join("level.dat").exists());
+        assert_eq!(manifest(&p).launch, "start.sh");
+        clean(&req);
+    }
+
+    #[test]
     fn pc_classic_multipart_rar_is_one_archive() {
         let (_t, mut req) = fixture();
         pc(&mut req, "Some Game");
@@ -1629,7 +1677,7 @@ mod tests {
             fs::write(req.source.join(name), b"x").unwrap();
         }
         let source = Source::inspect(&req, &AtomicBool::new(false)).unwrap();
-        let mut groups = pc_archives(&source, &source.plan).unwrap();
+        let mut groups: Vec<Vec<String>> = pc_archives(&source, &source.plan).unwrap().into_iter().map(|a| a.volumes).collect();
         groups.sort();
         assert_eq!(groups, vec![vec!["game.rar".to_string(), "game.r00".into(), "game.r01".into()], vec!["other.zip".to_string()]]);
     }

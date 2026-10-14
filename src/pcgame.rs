@@ -252,6 +252,19 @@ pub fn folder_name(name: &str) -> String {
 
 /// How a Windows game is started: umu-launcher (Proton, downloaded and kept up to date by umu
 /// itself) when installed, else the system's Wine. `None`: neither is installed.
+/// A launch target as people read it: its file name, with its folder when `other` (what it's
+/// told apart from) has the same file name (`bin/x86/game` vs `bin/x86_64/game`).
+pub fn short_path(path: &str, other: &str) -> String {
+    let file = |p: &str| p.rsplit('/').next().unwrap_or(p).to_string();
+    if file(path) == file(other) && path.contains('/') {
+        let mut parts = path.rsplit('/');
+        let name = parts.next().unwrap_or_default();
+        match parts.next() { Some(dir) => format!("{dir}/{name}"), None => name.to_string() }
+    } else {
+        file(path)
+    }
+}
+
 pub fn windows_runner() -> Option<(PathBuf, &'static str)> {
     for (tool, label) in [("umu-run", "Proton"), ("wine", "Wine")] {
         if let Some(path) = which(tool) {
@@ -357,6 +370,13 @@ mod tests {
         }
         assert_eq!(folder_name("Human: Fall Flat"), "Human-Fall-Flat");
         assert_eq!(folder_name("../.."), "game");
+    }
+
+    #[test]
+    fn short_paths() {
+        assert_eq!(short_path("Game/Binaries/Win64/Game-Win64-Shipping.exe", "Game.exe"), "Game-Win64-Shipping.exe");
+        assert_eq!(short_path("bin/x86/game", "bin/x86_64/game"), "x86/game");
+        assert_eq!(short_path("start.sh", "game.x86_64"), "start.sh");
     }
 
     #[test]
