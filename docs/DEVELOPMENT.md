@@ -347,8 +347,13 @@ Collections (anthologies, trilogies, "A + B") and near-misses (another game in t
 match rather than wrong art. The daily workflow looks up at most 900 releases a run, and retries
 unmatched ones after 30 days. A match whose artwork or ProtonDB rating couldn't be checked
 (network, rate limit) is marked `partial` and looked up again the next run; `--retry` also
-re-checks matches missing artwork. Releases never looked up go first, so retries can't take a
-run's slots from them. The launcher turns the block into the same artwork record PSN
+re-checks matches missing artwork. A miss remembers the name it searched for (`query`) and is
+searched again when the name cleaner gives a different one. Releases never looked up go first,
+so retries can't take a run's slots from them, and each run stops after a time budget
+(`--minutes`). The game's name comes from the release title (`cleanName` in steam.mjs, mirrored
+by `pcgame::clean_name`; both are tested against
+[clean-names.json](../scripts/rutracker-list/clean-names.json)): versions, builds, dates and
+years in brackets go, wherever they are, and so do "+ DLC/OST/Mods" extras. The launcher turns the block into the same artwork record PSN
 games use (`Steam::info`). Steam data skips translation (names can be in any script).
 
 **Artwork order** (`pick_art` in [app.rs](../src/app.rs)): PC games show Steam's artwork.

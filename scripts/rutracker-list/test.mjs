@@ -297,7 +297,7 @@ test('Steam matches whose artwork or rating could not be checked are looked up a
   assert.equal(due({ steam: complete }, now, true), true, '--retry re-checks missing artwork');
   const { protondb, ...older } = complete; // no ProtonDB answer, from before `partial`
   assert.equal(due({ steam: older }, now), true);
-  assert.equal(due({ steam: { appid: null, checked_at: now.toISOString() } }, now), false);
+  assert.equal(due({ title: 'Celeste', steam: { appid: null, query: 'Celeste', checked_at: now.toISOString() } }, now), false);
 });
 
 test('a match that only lacks its ProtonDB rating just asks ProtonDB', async () => {
@@ -333,4 +333,20 @@ test('translations keep every number of the original; added ones are fine', asyn
   assert.equal(keepsNumbers('Версия 1,5', 'Version 1.5'), false, 'reformatted');
   assert.equal(keepsNumbers('01.02.2020', '2020'), false, 'dropped');
   assert.equal(keepsNumbers('2 из 4', '4 of 2'), false, 'reordered');
+});
+
+test('release names: versions, builds and extras go; the JS and Rust cleaners agree', async () => {
+  const { cleanName } = await import('./steam.mjs');
+  const cases = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('./clean-names.json', import.meta.url), 'utf8'));
+  for (const [title, want] of cases) assert.equal(cleanName(title), want, title);
+});
+
+test('a miss searched under an older cleaned name is looked up again', async () => {
+  const { due } = await import('./steam.mjs');
+  const now = new Date('2026-10-15T00:00:00Z');
+  const title = 'Mafia III: Definitive Edition (v.build 25654741 (08.10.2026)) [Wine] [MULTi10]';
+  const checked_at = now.toISOString();
+  assert.equal(due({ title, steam: { appid: null, checked_at } }, now), true, 'no query: from before');
+  assert.equal(due({ title, steam: { appid: null, query: 'Mafia III: Definitive Edition (v.build 25654741', checked_at } }, now), true);
+  assert.equal(due({ title, steam: { appid: null, query: 'Mafia III: Definitive Edition', checked_at } }, now), false);
 });

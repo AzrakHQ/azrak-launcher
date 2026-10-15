@@ -221,25 +221,106 @@ pub fn choose(files: &[(String, Probe)], game_name: &str) -> Option<(String, Kin
 }
 
 /// The game's name from a release title: "[GOG] Celeste (v1.4) [x86, amd64] [Multi] [Native]" →
-/// "Celeste".
+/// "Celeste". Mirrors cleanName in scripts/rutracker-list/steam.mjs (Steam is searched by it);
+/// both are tested against scripts/rutracker-list/clean-names.json.
 pub fn clean_name(title: &str) -> String {
     use std::sync::LazyLock;
     static LEADING: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^(?:\s*\[[^\]]*\]\s*)+").unwrap());
-    static TRAILING: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(
-        r"(?i)\s*(?:\((?:v\.?\s*)?[\d.,_\-/ ]+[a-z]?\)|\(v\.?[^)]*\)|\((?:build|rev|update|alpha|beta|early access|in development)[^)]*\)|\+\s*\d+\s*dlc\b.*|\+\s*(?:dlc|ost|soundtrack|bonus|update)s?\b.*)\s*$").unwrap());
+    // "+ 3 DLC", "+ OST", "+ All DLC", "+ 2 Soundtrack Albums!", "+ Mods", "+ Dedicated Server".
+    static EXTRAS: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(
+        r"(?i)\s*\+\s*(?:\d+\s*)?(?:all\s+)?(?:dlcs?|ost|soundtracks?|bonus(?:es)?|updates?|mods?|dedicated server)\b[^()]*$").unwrap());
+    // A bare version at the end: "DROD: The City Beneath v3.3.1.98".
+    static BARE_VERSION: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\s+v\.?\d[A-Za-z0-9_.\-]*$").unwrap());
     let name = LEADING.replace(title, "");
     let mut name = name.split(" [").next().unwrap_or("").trim().to_string();
+    // "Russian / English" titles: the part with Latin letters (a " / " inside brackets doesn't count).
+    let parts = top_level(&name, " / ");
+    if parts.len() == 2 {
+        let latin = |s: &str| s.chars().filter(|c| c.is_ascii_alphabetic()).count();
+        name = if latin(&parts[1]) > latin(&parts[0]) { parts[1].trim().to_string() } else { parts[0].trim().to_string() };
+    }
+    // Bracketed versions, builds, dates and years, wherever they are (nested brackets included).
+    let chars: Vec<char> = name.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '(' {
+            out.push(chars[i]);
+            i += 1;
+            continue;
+        }
+        let (mut depth, mut j) = (0, i);
+        while j < chars.len() {
+            if chars[j] == '(' { depth += 1; } else if chars[j] == ')' { depth -= 1; if depth == 0 { break; } }
+            j += 1;
+        }
+        let end = j.min(chars.len());
+        let content: String = chars[i + 1..end].iter().collect();
+        // A removed group takes the space before it: "Age of Empires II (2): …" → "Age of Empires II: …".
+        if version_group(&content) {
+            out.truncate(out.trim_end().len());
+        } else {
+            out.extend(&chars[i..(j + 1).min(chars.len())]);
+        }
+        i = j + 1;
+    }
+    let mut name = out.split_whitespace().collect::<Vec<_>>().join(" ");
     loop {
-        let shorter = TRAILING.replace(&name, "").trim().to_string();
+        let shorter = EXTRAS.replace(&name, "").trim().to_string();
         if shorter == name || shorter.is_empty() { break; }
         name = shorter;
     }
-    // "Russian / English" titles: the part with Latin letters.
-    if let Some((a, b)) = name.split_once(" / ") {
-        let latin = |s: &str| s.chars().filter(|c| c.is_ascii_alphabetic()).count();
-        name = if latin(b) > latin(a) { b.trim().to_string() } else { a.trim().to_string() };
+    let bare = BARE_VERSION.replace(&name, "").trim().to_string();
+    if bare.is_empty() { name } else { bare }
+}
+
+/// Whether a bracketed group only gives a version, build, date or year (the brackets inside it and
+/// any "+ DLC" aside): "(v.build 9218157)", "(pre-Alpha 1.7.0c)", "(часть 1 и 2, версия 1.07)".
+fn version_group(content: &str) -> bool {
+    use std::sync::LazyLock;
+    static INNER_EXTRAS: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(
+        r"(?i)\s*\+\s*(?:\d+\s*)?(?:all\s+)?(?:dlcs?|ost|soundtracks?|bonus(?:es)?|updates?|mods?)\b").unwrap());
+    static V_DOT: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\bv\.(\S)").unwrap());
+    static NUMBERED: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^[a-z]{0,3}\d[a-z0-9_.\-/:]*$").unwrap());
+    static STAGED: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^(?:build|indev|alpha|beta|pre-alpha)[-.]?\d[a-z0-9_.\-]*$").unwrap());
+    static COMMIT: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^[0-9a-f]{7,40}$").unwrap());
+    const WORDS: [&str; 30] = ["v", "v.", "build", "rev", "revision", "release", "patch", "hotfix", "update", "upd", "alpha", "beta",
+        "pre-alpha", "pre-beta", "rc", "indev", "milestone", "early", "access", "in", "development", "версия", "сборка", "билд",
+        "патч", "обновление", "часть", "и", "в", "разработке"];
+    // An add-on: "(+ DLC)", "(+DLC Goatperson)", "(+ Space Age)".
+    if content.trim().starts_with('+') {
+        return true;
     }
-    name
+    let text = INNER_EXTRAS.replace_all(&content.replace(['(', ')'], " "), " ").to_lowercase();
+    let text = V_DOT.replace_all(&text, "v. $1");
+    let tokens: Vec<&str> = text.split(|c: char| c.is_whitespace() || c == ',' || c == ';').filter(|t| !t.is_empty()).collect();
+    // "+" between versions ("1.29.6 + 1.35.5"), not between games ("1 + 2").
+    let versions = tokens.iter().any(|t| t.as_bytes().windows(3).any(|w| w[0].is_ascii_digit() && w[1] == b'.' && w[2].is_ascii_digit()));
+    tokens.iter().all(|t| {
+        WORDS.contains(t) || ["-", "–", "—", "/"].contains(t) || NUMBERED.is_match(t) || STAGED.is_match(t) || COMMIT.is_match(t)
+            || (*t == "+" && versions)
+    })
+}
+
+/// `text` split at `separator` where it isn't inside brackets.
+fn top_level(text: &str, separator: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0usize, 0);
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        let c = rest.chars().next().unwrap();
+        if c == '(' { depth += 1; } else if c == ')' { depth = depth.saturating_sub(1); }
+        else if depth == 0 && rest.starts_with(separator) {
+            parts.push(text[start..i].to_string());
+            i += separator.len();
+            start = i;
+            continue;
+        }
+        i += c.len_utf8();
+    }
+    parts.push(text[start..].to_string());
+    parts
 }
 
 /// A folder name for a game: its name in safe characters.
@@ -250,8 +331,6 @@ pub fn folder_name(name: &str) -> String {
     if s.is_empty() { "game".into() } else { s }
 }
 
-/// How a Windows game is started: umu-launcher (Proton, downloaded and kept up to date by umu
-/// itself) when installed, else the system's Wine. `None`: neither is installed.
 /// A launch target as people read it: its file name, with its folder when `other` (what it's
 /// told apart from) has the same file name (`bin/x86/game` vs `bin/x86_64/game`).
 pub fn short_path(path: &str, other: &str) -> String {
@@ -265,6 +344,8 @@ pub fn short_path(path: &str, other: &str) -> String {
     }
 }
 
+/// How a Windows game is started: umu-launcher (Proton, downloaded and kept up to date by umu
+/// itself) when installed, else the system's Wine. `None`: neither is installed.
 pub fn windows_runner() -> Option<(PathBuf, &'static str)> {
     for (tool, label) in [("umu-run", "Proton"), ("wine", "Wine")] {
         if let Some(path) = which(tool) {
@@ -370,6 +451,14 @@ mod tests {
         }
         assert_eq!(folder_name("Human: Fall Flat"), "Human-Fall-Flat");
         assert_eq!(folder_name("../.."), "game");
+    }
+
+    #[test]
+    fn clean_names_match_the_catalog_scripts() {
+        let cases: Vec<(String, String)> = serde_json::from_str(include_str!("../scripts/rutracker-list/clean-names.json")).unwrap();
+        for (title, want) in cases {
+            assert_eq!(clean_name(&title), want, "{title}");
+        }
     }
 
     #[test]

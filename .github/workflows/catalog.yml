@@ -45,15 +45,16 @@ jobs:
             node refresh.mjs --platform $p
             # Releases without a title ID (new ones: their details aren't read) get Steam's
             # artwork, by exact name; a failure only leaves them for tomorrow.
-            node steam.mjs --platform $p --limit 300 || echo "::warning::$p Steam artwork lookup failed"
+            node steam.mjs --platform $p --limit 300 --minutes 10 || echo "::warning::$p Steam artwork lookup failed"
             node translate.mjs --platform $p --from-original
           done
-          # PC games: also Steam artwork and ProtonDB ratings (at most 900 lookups a day; the
-          # rest follow on later days). A failure here never holds back the console catalogs.
+          # PC games: also Steam artwork and ProtonDB ratings (at most 900 lookups and 40 minutes a
+          # platform a day, so the job stays well inside its time limit; the rest follow on later
+          # days). A failure here never holds back the console catalogs.
           for p in linux wine; do
             [ -f ../../dist/rutracker/$p-topics.json.ru-backup.json ] || continue
             node refresh.mjs --platform $p || echo "::warning::$p refresh failed"
-            node steam.mjs --platform $p --limit 900 || echo "::warning::$p Steam lookup failed"
+            node steam.mjs --platform $p --limit 900 --minutes 40 || echo "::warning::$p Steam lookup failed"
             node translate.mjs --platform $p --from-original || echo "::warning::$p translation failed; yesterday's stays"
           done
       - name: Publish

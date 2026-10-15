@@ -10,7 +10,7 @@
 // the launcher can't find PlayStation artwork for (new releases from the daily refresh, whose
 // details aren't read). There only an exact name match counts, and ProtonDB isn't asked.
 //
-//   node steam.mjs --platform linux|wine|ps5|ps4 [--catalog path] [--limit 300] [--retry]
+//   node steam.mjs --platform linux|wine|ps5|ps4 [--catalog path] [--limit 300] [--minutes 40] [--retry]
 import { readFile, rename, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,17 +20,73 @@ const ASSETS = 'https://shared.akamai.steamstatic.com/store_item_assets/steam/ap
 const RETRY_DAYS = 30;
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 
-/** The game's name from a release title (mirrors pcgame::clean_name in the launcher). */
+/** Words that only describe a version: "(v.build 9218157)", "(pre-Alpha 1.7.0c)",
+ * "(часть 1 и 2, версия 1.07)", "(Early Access)". */
+const VERSION_WORDS = new Set(['v', 'v.', 'build', 'rev', 'revision', 'release', 'patch', 'hotfix', 'update', 'upd',
+  'alpha', 'beta', 'pre-alpha', 'pre-beta', 'rc', 'indev', 'milestone', 'early', 'access', 'in', 'development', 'версия',
+  'сборка', 'билд', 'патч', 'обновление', 'часть', 'и', 'в', 'разработке', '-', '–', '—', '/']);
+const versionToken = token => VERSION_WORDS.has(token)
+  || /^[a-z]{0,3}\d[\w.\-/:]*$/.test(token)                 // 1.6.0f2, v1.228, 30.06.22, 2026, b18, rv22189, pr1.8347
+  || /^(?:build|indev|alpha|beta|pre-alpha)[-.]?\d[\w.\-]*$/.test(token) // indev-1588
+  || /^[0-9a-f]{7,40}$/.test(token);                           // a build's commit: a0cef1aaa
+// "+ 3 DLC", "+ OST", "+ All DLC", "+ 2 Soundtrack Albums!", "+ Mods", "+ Dedicated Server".
+const EXTRAS = /\s*\+\s*(?:\d+\s*)?(?:all\s+)?(?:dlcs?|ost|soundtracks?|bonus(?:es)?|updates?|mods?|dedicated server)\b[^()]*$/i;
+
+/** Whether a bracketed group only gives a version, build, date or year (the brackets inside it and
+ * any "+ DLC" aside). */
+export function versionGroup(content) {
+  // An add-on: "(+ DLC)", "(+DLC Goatperson)", "(+ Space Age)".
+  if (content.trim().startsWith('+')) return true;
+  const text = content.replace(/[()]/g, ' ').replace(/\s*\+\s*(?:\d+\s*)?(?:all\s+)?(?:dlcs?|ost|soundtracks?|bonus(?:es)?|updates?|mods?)\b/gi, ' ')
+    .toLowerCase().replace(/\bv\.(?=\S)/g, 'v. ');
+  const tokens = text.split(/[\s,;]+/).filter(Boolean);
+  // "+" between versions ("1.29.6 + 1.35.5"), not between games ("1 + 2").
+  const versions = tokens.some(token => /\d\.\d/.test(token));
+  return tokens.every(token => versionToken(token) || (token === '+' && versions));
+}
+
+/** The game's name from a release title (mirrors pcgame::clean_name in the launcher; both are
+ * tested against clean-names.json). */
 export function cleanName(title) {
   let name = String(title).replace(/^(?:\s*\[[^\]]*\]\s*)+/, '').split(' [')[0].trim();
-  const trailing = /\s*(?:\((?:v\.?\s*)?[\d.,_\-/ ]+[a-z]?\)|\(v\.?[^)]*\)|\((?:build|rev|update|alpha|beta|early access|in development|в разработке)[^)]*\)|\+\s*\d+\s*dlc\b.*|\+\s*(?:dlc|ost|soundtrack|bonus|update)s?\b.*)\s*$/i;
-  for (let shorter = name.replace(trailing, '').trim(); shorter && shorter !== name; shorter = name.replace(trailing, '').trim()) name = shorter;
-  const parts = name.split(' / ');
-  if (parts.length === 2) {
+  // "Russian / English" titles: the part with Latin letters (a " / " inside brackets doesn't count).
+  const split = topLevel(name, ' / ');
+  if (split.length === 2) {
     const latin = s => (s.match(/[a-z]/gi) || []).length;
-    name = (latin(parts[1]) > latin(parts[0]) ? parts[1] : parts[0]).trim();
+    name = (latin(split[1]) > latin(split[0]) ? split[1] : split[0]).trim();
   }
-  return name;
+  // Bracketed versions, builds, dates and years, wherever they are (nested brackets included).
+  let out = '';
+  for (let i = 0; i < name.length; i++) {
+    if (name[i] !== '(') { out += name[i]; continue; }
+    let depth = 0, j = i;
+    for (; j < name.length; j++) {
+      if (name[j] === '(') depth++;
+      else if (name[j] === ')' && --depth === 0) break;
+    }
+    const group = name.slice(i, j + 1);
+    // A removed group takes the space before it: "Age of Empires II (2): …" → "Age of Empires II: …".
+    if (versionGroup(group.slice(1, j < name.length ? -1 : undefined))) out = out.trimEnd();
+    else out += group;
+    i = j;
+  }
+  name = out.replace(/\s+/g, ' ').trim();
+  for (let shorter = name.replace(EXTRAS, '').trim(); shorter && shorter !== name; shorter = name.replace(EXTRAS, '').trim()) name = shorter;
+  // A bare version at the end: "DROD: The City Beneath v3.3.1.98".
+  return name.replace(/\s+v\.?\d[\w.\-]*$/i, '').trim() || name;
+}
+
+/** `text` split at `separator` where it isn't inside brackets. */
+function topLevel(text, separator) {
+  const parts = [];
+  let depth = 0, start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '(') depth++;
+    else if (text[i] === ')') depth = Math.max(0, depth - 1);
+    else if (depth === 0 && text.startsWith(separator, i)) { parts.push(text.slice(start, i)); start = i + separator.length; i += separator.length - 1; }
+  }
+  parts.push(text.slice(start));
+  return parts;
 }
 
 /** Comparable form of a name: lower case, letters and digits, roman numerals as digits. */
@@ -151,10 +207,11 @@ export function needsSteamArt(topic) {
   return !(topic.game_info?.title_id || /(?:PPSA|CUSA)\d{5}/i.test(topic.title));
 }
 
-/** Look up one release. Returns the steam block (appid null when Steam doesn't have it). */
+/** Look up one release. Returns the steam block (appid null when Steam doesn't have it; `query`
+ * keeps the name searched for, so a better cleanName searches again). */
 export async function lookup(title, now = new Date(), { exact = false, ratings = true } = {}) {
-  if (collection(title)) return { appid: null, reason: 'collection', checked_at: now.toISOString() };
   const name = cleanName(title);
+  if (collection(title)) return { appid: null, reason: 'collection', query: name, checked_at: now.toISOString() };
   const search = async term => (await get(`https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(term)}&l=english&cc=US`))?.items;
   let item = bestMatch(name, await search(name), { exact });
   // Nothing for "Game: Deluxe Edition": the base game's name, matched just as strictly.
@@ -163,11 +220,11 @@ export async function lookup(title, now = new Date(), { exact = false, ratings =
     await sleep(1600);
     item = bestMatch(shorter, await search(shorter), { exact });
   }
-  if (!item) return { appid: null, checked_at: now.toISOString() };
+  if (!item) return { appid: null, query: name, checked_at: now.toISOString() };
   await sleep(1600); // appdetails allows about 200 requests per 5 minutes
   const details = await get(`https://store.steampowered.com/api/appdetails?appids=${item.id}&l=english&cc=US`);
   const data = details?.[item.id]?.success ? details[item.id].data : null;
-  if (!data) return { appid: null, checked_at: now.toISOString() };
+  if (!data) return { appid: null, query: name, checked_at: now.toISOString() };
   const base = `${ASSETS}/${item.id}`;
   const assets = {};
   let partial = false;
@@ -183,11 +240,13 @@ export async function lookup(title, now = new Date(), { exact = false, ratings =
 
 /** Whether a topic needs (another) lookup: never looked up; a match whose artwork or rating
  * couldn't be checked (`partial`, or no ProtonDB answer from before that flag); no match for 30
- * days. With `retry`: every miss, and matches missing artwork. */
+ * days, or searched under a name cleanName now gives differently. With `retry`: every miss, and
+ * matches missing artwork. */
 export function due(topic, now, retry = false) {
   const steam = topic.steam;
   if (!steam) return true;
-  if (steam.appid == null) return retry || now - new Date(steam.checked_at || 0) > RETRY_DAYS * 86400_000;
+  if (steam.appid == null) return retry || steam.query !== cleanName(topic.title)
+    || now - new Date(steam.checked_at || 0) > RETRY_DAYS * 86400_000;
   return Boolean(steam.partial) || !('protondb' in steam)
     || (retry && Object.values(steam.assets || {}).some(url => url == null));
 }
@@ -217,6 +276,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const option = (flag, fallback) => { const i = args.indexOf(flag); return i >= 0 ? args[i + 1] : fallback; };
   const path = resolve(option('--catalog', fileURLToPath(new URL(`../../dist/rutracker/${platform.key}-topics.json.ru-backup.json`, import.meta.url))));
   const limit = Number(option('--limit', '100000'));
+  // --minutes: stop looking up after this long (the rest follow on later runs).
+  const until = Date.now() + Number(option('--minutes', '600')) * 60_000;
   const catalog = JSON.parse(await readFile(path, 'utf8'));
   const now = new Date();
   // --retry: look up unmatched releases again now (after the matching improved).
@@ -230,6 +291,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     await rename(temporary, path);
   };
   for (const topic of todo) {
+    if (Date.now() > until) { console.log('Time budget used; the rest follow on the next run'); break; }
     const ratingOnly = topic.steam?.appid && !('protondb' in topic.steam);
     try {
       topic.steam = await update(topic, now, { console_ });
