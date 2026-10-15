@@ -9,33 +9,14 @@
 //! running it needs no FUSE. shadPS4 keeps saves and settings in ~/.local/share/shadPS4, which
 //! every version shares.
 
-use crate::util::{atomic_write, http_json, now_secs};
-use serde::{Deserialize, Serialize};
+use crate::emulator::store::ManagedStore;
+pub use crate::emulator::store::Release;
+use crate::util::http_json;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const REPO: &str = "shadps4-emu/shadPS4";
-pub const CHECK_INTERVAL: f64 = 6.0 * 3600.0;
-
-#[derive(Clone, Debug)]
-pub struct Release {
-    pub tag: String,
-    pub url: String,
-    pub size: u64,
-    pub sha256: String,
-}
-
-#[derive(Serialize, Deserialize, Default, Clone, Debug)]
-#[serde(default)]
-pub struct State {
-    pub installed: String,
-    pub previous: String,
-    pub last_check: f64,
-    pub latest: String,
-    /// A build the user rolled back from: not re-installed automatically.
-    pub skip: String,
-}
 
 pub fn root() -> PathBuf {
     crate::util::data_dir().join("shadps4")
@@ -62,29 +43,8 @@ pub fn emulator() -> PathBuf {
     root().join("current").join("squashfs-root").join("AppRun")
 }
 
-pub fn is_managed(emulator: &Path) -> bool {
-    emulator.starts_with(root())
-}
-
-pub fn installed() -> bool {
-    emulator().is_file() && !load_state().installed.is_empty()
-}
-
-pub fn load_state() -> State {
-    std::fs::read(root().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-}
-
-fn save_state(s: &State) {
-    if let Ok(j) = serde_json::to_vec_pretty(s) {
-        let _ = atomic_write(&root().join("state.json"), &j);
-    }
-}
-
-pub fn mark_checked(latest: &str) {
-    let mut s = load_state();
-    s.last_check = now_secs();
-    s.latest = latest.to_string();
-    save_state(&s);
+pub fn store() -> ManagedStore {
+    ManagedStore::new(root())
 }
 
 /// "v.0.18.0" -> "0.18.0".
@@ -170,22 +130,13 @@ fn runs(emulator: &Path) -> bool {
     text.contains("shadPS4")
 }
 
-fn switch_current(tag: &str) -> Result<(), String> {
-    let r = root();
-    let tmp = r.join("current.new");
-    let _ = std::fs::remove_file(&tmp);
-    std::os::unix::fs::symlink(Path::new("versions").join(tag), &tmp).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, r.join("current")).map_err(|e| e.to_string())
-}
-
 /// Download, verify, unpack and activate a release. Keeps the previous version for rollback.
 pub fn install(rel: &Release, progress: &dyn Fn(String, f32)) -> Result<(), String> {
-    let r = root();
-    let versions = r.join("versions");
-    std::fs::create_dir_all(&versions).map_err(|e| e.to_string())?;
-    let zip = r.join(format!("{}.zip.part", rel.tag));
+    let store = store();
+    std::fs::create_dir_all(store.versions_dir()).map_err(|e| e.to_string())?;
+    let zip = store.download_path(&rel.tag, "zip");
     let last = std::cell::Cell::new(u64::MAX);
-    crate::kyty::download_file(&rel.url, rel.size, &rel.sha256, &zip, &|done, total| {
+    crate::emulator::download::file(&rel.url, rel.size, &rel.sha256, &zip, &|done, total| {
         let pct = if total > 0 { done * 100 / total } else { 0 };
         if pct != last.get() {
             last.set(pct);
@@ -197,7 +148,7 @@ pub fn install(rel: &Release, progress: &dyn Fn(String, f32)) -> Result<(), Stri
     })?;
 
     progress("Installing shadPS4…".into(), 0.9);
-    let staging = versions.join(format!("{}.tmp", rel.tag));
+    let staging = store.staging_dir(&rel.tag);
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     let fail = |e: String| {
@@ -217,49 +168,9 @@ pub fn install(rel: &Release, progress: &dyn Fn(String, f32)) -> Result<(), Stri
     if !unpacked || !runs(&emu) {
         return Err(fail("the downloaded shadPS4 does not run on this system".into()));
     }
-    let final_dir = versions.join(&rel.tag);
-    let _ = std::fs::remove_dir_all(&final_dir);
-    std::fs::rename(&staging, &final_dir).map_err(|e| e.to_string())?;
-
-    let mut st = load_state();
-    if st.installed != rel.tag {
-        st.previous = std::mem::take(&mut st.installed);
-    }
-    st.installed = rel.tag.clone();
-    st.latest = rel.tag.clone();
-    if st.skip == rel.tag {
-        st.skip.clear();
-    }
-    st.last_check = now_secs();
-    switch_current(&rel.tag)?;
-    save_state(&st);
-    cleanup(&st);
+    store.activate(&rel.tag, &staging)?;
     crate::log!("shadPS4 installed: {}", rel.tag);
     Ok(())
-}
-
-/// Switch back to the previously installed version.
-pub fn rollback() -> Result<String, String> {
-    let mut st = load_state();
-    if st.previous.is_empty() || !root().join("versions").join(&st.previous).is_dir() {
-        return Err("no previous version to roll back to".into());
-    }
-    switch_current(&st.previous)?;
-    st.skip = st.installed.clone();
-    std::mem::swap(&mut st.installed, &mut st.previous);
-    save_state(&st);
-    Ok(st.installed)
-}
-
-/// Keep only the installed and previous versions.
-fn cleanup(st: &State) {
-    let Ok(rd) = std::fs::read_dir(root().join("versions")) else { return };
-    for e in rd.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if name != st.installed && name != st.previous {
-            let _ = std::fs::remove_dir_all(e.path());
-        }
-    }
 }
 
 #[cfg(test)]

@@ -38,6 +38,29 @@ const SOURCES: [Source; 4] = [
     Source { platform: Platform::Pc, url: WINE_SOURCE, file: "wine-topics.json", cache: "catalog-rutracker-wine.json", env: "PS5_LAUNCHER_WINE_CATALOG_PATH", bundled: &[] },
 ];
 
+#[cfg(test)]
+mod sources_tests {
+    use super::*;
+
+    /// A platform needs a catalog source here and a forum in the collector (and the daily
+    /// workflow); this keeps the Rust side and scripts/rutracker-list/platforms.mjs in step.
+    #[test]
+    fn every_platform_has_a_catalog_and_the_collector_knows_each_forum() {
+        for p in Platform::ALL {
+            assert!(SOURCES.iter().any(|s| s.platform == p), "{}: no catalog source in catalog.rs", p.label());
+        }
+        let forum = |url: &str| url.rsplit("f=").next().unwrap_or("").to_string();
+        let script = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/rutracker-list/platforms.mjs")).unwrap();
+        for s in &SOURCES {
+            assert!(script.contains(&format!("forumId: '{}'", forum(s.url))), "{}: forum {} is missing from platforms.mjs", s.file, forum(s.url));
+        }
+        let files: HashSet<_> = SOURCES.iter().map(|s| s.file).collect();
+        assert_eq!(files.len(), SOURCES.len(), "two sources share a file");
+        let caches: HashSet<_> = SOURCES.iter().map(|s| s.cache).collect();
+        assert_eq!(caches.len(), SOURCES.len(), "two sources share a cache file");
+    }
+}
+
 /// A PC release's Steam app (from the published catalog: scripts/rutracker-list/steam.mjs).
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default)]

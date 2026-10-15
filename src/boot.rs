@@ -1,7 +1,7 @@
 //! Welcome / boot screen.
 //!
-//! First run: loads the local catalog and downloads official artwork and the latest KytyPS5 build in
-//! parallel (one combined progress bar), then preloads the Home screen and the first Library
+//! First run: loads the local catalog and downloads official artwork and the latest build of the
+//! emulators that ask for it (`Emulator::fetch_on_first_run`) in parallel (one combined progress bar), then preloads the Home screen and the first Library
 //! page, so nothing is missing or still loading when the user gets in.
 //! Later runs: a short splash while the Home screen decodes from cache. If the emulator has
 //! gone missing, it is fetched here too.
@@ -22,8 +22,8 @@ pub struct Boot {
     pub waiting_catalog: bool,
     pub waiting_art: bool,
     pub waiting_covers: bool,
-    pub waiting_kyty: bool,
-    pub kyty_needed: bool,
+    /// The emulators fetched on this screen.
+    pub emus: Vec<BootEmu>,
     pub collected: bool,
     pub keys: HashSet<String>,
     pub total: usize,
@@ -32,7 +32,6 @@ pub struct Boot {
     pub f_catalog: f32,
     pub f_art: f32,
     pub f_covers: f32,
-    pub f_kyty: f32,
     pub f_img: f32,
     pub text_main: String,
     pub cat_text: String,
@@ -43,8 +42,23 @@ pub struct Boot {
     pub cover_keys: Vec<String>,
     pub cover_imgs: Vec<slint::Image>,
     pub cover_shown: Vec<String>,
-    pub text_kyty: String,
-    pub kyty_note: String,
+}
+
+/// One emulator's step on the welcome screen.
+#[derive(Default, Clone)]
+pub struct BootEmu {
+    pub id: &'static str,
+    pub needed: bool,
+    pub waiting: bool,
+    /// Download progress, 0..1.
+    pub frac: f32,
+    pub note: String,
+}
+
+impl Boot {
+    pub fn any_waiting(&self) -> bool {
+        self.emus.iter().any(|e| e.waiting)
+    }
 }
 
 fn parse_fraction(s: &str) -> Option<f32> {
@@ -56,17 +70,27 @@ fn parse_fraction(s: &str) -> Option<f32> {
 impl App {
     pub fn boot_start(&mut self, first: bool) {
         let cfg = self.cfg.lock().unwrap().clone();
-        let managed = crate::kyty::is_managed(&cfg.emulator_path());
-        // First start: always get the latest official KytyPS5 (unless the user turned updates off).
+        // First start: always get the latest official build (unless the user turned updates off).
         // Any start: fetch it if the emulator is missing.
-        let kyty_needed = cfg.kyty_auto_update && ((first && !(managed && cfg.emulator_ok())) || !cfg.emulator_ok());
+        let emus: Vec<BootEmu> = crate::emulator::all().iter().filter(|e| e.fetch_on_first_run()).map(|emu| {
+            let managed = emu.is_managed(&emu.path(&cfg));
+            let ok = emu.runnable(&cfg);
+            let needed = emu.auto_update(&cfg) && ((first && !(managed && ok)) || !ok);
+            let note = if ok && !needed {
+                format!("{} emulator found", emu.name())
+            } else if needed {
+                format!("Getting the latest {} emulator", emu.name())
+            } else {
+                format!("{} emulator not found · you can set it in Settings", emu.name())
+            };
+            BootEmu { id: emu.id(), needed, waiting: needed, frac: 0.0, note }
+        }).collect();
         self.boot = Boot {
             active: true,
             first,
             waiting_catalog: self.games.is_empty(),
             waiting_art: first,
-            waiting_kyty: kyty_needed,
-            kyty_needed,
+            emus: emus.clone(),
             started: Some(Instant::now()),
             f_catalog: if self.games.is_empty() { 0.0 } else { 1.0 },
             ..Default::default()
@@ -76,24 +100,19 @@ impl App {
         ui.set_boot_first(first);
         ui.set_boot_ready(false);
         ui.set_boot_progress(0.0);
-        self.boot.kyty_note = if cfg.emulator_ok() && !kyty_needed {
-            "KytyPS5 emulator found".into()
-        } else if kyty_needed {
-            "Getting the latest KytyPS5 emulator".into()
-        } else {
-            "KytyPS5 emulator not found · you can set it in Settings".into()
-        };
         self.boot_render();
-        if kyty_needed {
-            self.kyty.force_install = true;
-            self.kyty_check(false);
+        for e in emus.iter().filter(|e| e.needed) {
+            if let Some(emu) = crate::emulator::by_id(e.id) {
+                self.emus.get_mut(emu).force_install = true;
+                self.emu_check(emu, false);
+            }
         }
         self.boot_maybe_ready();
         if !first {
             // Never keep a returning user waiting on a slow network (unless the emulator is missing).
             slint::Timer::single_shot(Duration::from_secs(5), || {
                 with_app(|app| {
-                    if !app.boot.waiting_kyty {
+                    if !app.boot.any_waiting() {
                         app.boot_ready();
                     }
                 })
@@ -109,8 +128,8 @@ impl App {
             parts.push((0.25, b.f_art));
             parts.push((0.18, b.f_covers));
         }
-        if b.kyty_needed {
-            parts.push((if b.first { 0.35 } else { 0.8 }, b.f_kyty));
+        for e in b.emus.iter().filter(|e| e.needed) {
+            parts.push((if b.first { 0.35 } else { 0.8 }, e.frac));
         }
         parts.push((if parts.is_empty() { 1.0 } else { 0.1 }, b.f_img));
         let total: f32 = parts.iter().map(|p| p.0).sum();
@@ -157,15 +176,19 @@ impl App {
         } else {
             step("Official artwork & details", "Done".into(), 2)
         });
-        steps.push(if !b.kyty_needed {
-            if self.cfg.lock().unwrap().emulator_ok() { step("KytyPS5 emulator", "Found".into(), 2) } else { step("KytyPS5 emulator", "Not installed".into(), 3) }
-        } else if b.waiting_kyty {
-            step("KytyPS5 emulator", if b.f_kyty > 0.0 { format!("{}%", (b.f_kyty * 100.0).round()) } else { "Checking…".into() }, 1)
-        } else if b.kyty_note.starts_with("Could not") {
-            step("KytyPS5 emulator", "Failed · retry in Settings".into(), 3)
-        } else {
-            step("KytyPS5 emulator", "Latest build".into(), 2)
-        });
+        for e in &b.emus {
+            let Some(emu) = crate::emulator::by_id(e.id) else { continue };
+            let label = format!("{} emulator", emu.name());
+            steps.push(if !e.needed {
+                if emu.runnable(&self.cfg.lock().unwrap()) { step(&label, "Found".into(), 2) } else { step(&label, "Not installed".into(), 3) }
+            } else if e.waiting {
+                step(&label, if e.frac > 0.0 { format!("{}%", (e.frac * 100.0).round()) } else { "Checking…".into() }, 1)
+            } else if e.note.starts_with("Could not") {
+                step(&label, "Failed · retry in Settings".into(), 3)
+            } else {
+                step(&label, "Latest build".into(), 2)
+            });
+        }
         steps.push(if b.waiting_catalog || b.waiting_art {
             step("Covers & Home screen", String::new(), 0)
         } else if !b.ready {
@@ -274,20 +297,37 @@ impl App {
         }
     }
 
-    pub fn boot_kyty_progress(&mut self, text: &str, frac: f32) {
-        if self.boot.active && self.boot.waiting_kyty {
-            self.boot.f_kyty = frac;
-            self.boot.text_kyty = text.to_string();
+    pub fn boot_emu_progress(&mut self, id: &str, _text: &str, frac: f32) {
+        if !self.boot.active {
+            return;
+        }
+        if let Some(e) = self.boot.emus.iter_mut().find(|e| e.id == id && e.waiting) {
+            e.frac = frac;
             self.boot_render();
         }
     }
 
-    pub fn boot_kyty_done(&mut self, note: &str) {
-        if self.boot.active && self.boot.waiting_kyty {
-            self.boot.waiting_kyty = false;
-            self.boot.f_kyty = 1.0;
-            self.boot.kyty_note = note.to_string();
+    pub fn boot_emu_done(&mut self, id: &str, note: &str) {
+        if !self.boot.active {
+            return;
+        }
+        if let Some(e) = self.boot.emus.iter_mut().find(|e| e.id == id && e.waiting) {
+            e.waiting = false;
+            e.frac = 1.0;
+            e.note = note.to_string();
             self.boot_maybe_ready();
+        }
+    }
+
+    /// The network came back while the screen is still up: wait for `id` again.
+    pub fn boot_emu_wait_again(&mut self, id: &str) {
+        if !self.boot.active {
+            return;
+        }
+        if let Some(e) = self.boot.emus.iter_mut().find(|e| e.id == id && e.needed) {
+            e.waiting = true;
+            e.frac = 0.0;
+            self.boot_render();
         }
     }
 
@@ -303,7 +343,7 @@ impl App {
         if !self.boot.collected {
             self.boot_collect();
         }
-        if self.boot.keys.is_empty() && !self.boot.waiting_kyty {
+        if self.boot.keys.is_empty() && !self.boot.any_waiting() {
             self.boot_ready();
         } else {
             self.boot_render();
@@ -408,10 +448,9 @@ impl App {
             self.warm_covers();
         }
         // Background work that was hidden behind the splash now shows in the status line.
-        if self.kyty.busy {
-            let p = self.kyty.progress.clone();
+        if let Some(p) = self.emus.progress().map(str::to_string) {
             self.set_status(&p, true);
         }
-        self.shad_tick();
+        self.emu_tick();
     }
 }

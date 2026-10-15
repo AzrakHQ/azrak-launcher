@@ -1,7 +1,8 @@
 //! Game sessions: launch, detect, stop and switch between games and the launcher (Steam-style).
-//! Any kyty_emulator process is detected, including ones started outside the launcher.
+//! Any process of a registered emulator (see `crate::emulator`) is detected, including ones
+//! started outside the launcher.
 
-use crate::config::{Config, VIDEO_OUT_MODES};
+use crate::config::Config;
 use crate::library::LocalGame;
 use crate::util::{atomic_write, cache_dir, config_dir, now_secs};
 use serde::{Deserialize, Serialize};
@@ -10,8 +11,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-const EMULATOR_NAMES: [&str; 3] = ["kyty_emulator", "kyty_emulator.exe", "shadps4"];
 
 // ------------------------------------------------------------------ X11 helpers (xdotool)
 
@@ -301,38 +300,13 @@ fn parse_ps_line(line: &str) -> Option<(u32, f64, &str)> {
     Some((pid.parse().ok()?, parse_etime(etime)?, command.trim_start()))
 }
 
-/// The command line KytyPS5 gets for a game. The window size (--screen-width and --screen-height)
-/// only sizes the window; --video-out-resolution is what the game is told its screen is. Extra
-/// arguments come last, so they can override the rest.
-fn kyty_args(cfg: &Config, game: &str) -> Vec<String> {
-    let mut args: Vec<String> = vec![
-        "--game".into(),
-        game.to_string(),
-        "--screen-width".into(),
-        cfg.width.to_string(),
-        "--screen-height".into(),
-        cfg.height.to_string(),
-        "--present-mode".into(),
-        cfg.present_mode.clone(),
-        "--video-out-resolution".into(),
-        // A value the launcher does not know (a hand-edited settings file) falls back to the default.
-        VIDEO_OUT_MODES.iter().find(|(k, _)| *k == cfg.video_out).map_or(VIDEO_OUT_MODES[0].0, |(k, _)| *k).to_string(),
-    ];
-    if cfg.fullscreen {
-        args.push("--fullscreen".into());
-    }
-    if cfg.amd_cpu {
-        args.push("--amd-cpu".into());
-    }
-    args.extend(shell_split(&cfg.extra_args));
-    args
-}
-
 /// The game path from an emulator's command line; None unless it is the emulator running a game.
 /// `ps` joins the arguments with spaces, so a path containing spaces ends at the next " --" option.
+/// Only emulators whose game option is a long one ("--game") can be told apart that way; a short
+/// one ("-g") has no safe end, so those are only noticed on Linux, where /proc keeps the arguments apart.
 #[cfg(any(target_os = "macos", test))]
-fn emulator_game(command: &str, extra_name: &str) -> Option<String> {
-    let names = EMULATOR_NAMES.iter().copied().chain((!extra_name.is_empty()).then_some(extra_name));
+fn emulator_game(command: &str, extra_names: &[String]) -> Option<String> {
+    let names = crate::emulator::process_names().into_iter().chain(extra_names.iter().map(String::as_str).filter(|n| !n.is_empty()));
     let is_emulator = names.into_iter().any(|name| {
         command.match_indices(name).any(|(i, _)| {
             // The program's own name: after a "/" (or at the start), and ending the program word.
@@ -343,15 +317,16 @@ fn emulator_game(command: &str, extra_name: &str) -> Option<String> {
     if !is_emulator {
         return None;
     }
-    let after = command.split_once(" --game ")?.1;
+    let after = crate::emulator::game_flags().into_iter().filter(|f| f.starts_with("--")).find_map(|f| command.split_once(&format!(" {f} ")))?.1;
     let game = after.split(" --").next().unwrap_or(after).trim();
     (!game.is_empty()).then(|| game.to_string())
 }
 
 /// pid -> (game path, start time) for every running emulator.
 #[cfg(target_os = "linux")]
-fn scan_emulators(extra_name: &str) -> HashMap<u32, (String, f64)> {
+fn scan_emulators(extra_names: &[String]) -> HashMap<u32, (String, f64)> {
     let mut found = HashMap::new();
+    let (names, flags) = (crate::emulator::process_names(), crate::emulator::game_flags());
     let Ok(rd) = std::fs::read_dir("/proc") else { return found };
     for e in rd.flatten() {
         let Ok(pid) = e.file_name().to_string_lossy().parse::<u32>() else { continue };
@@ -359,12 +334,12 @@ fn scan_emulators(extra_name: &str) -> HashMap<u32, (String, f64)> {
         let args: Vec<String> = raw.split(|b| *b == 0).filter(|a| !a.is_empty()).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
         let Some(argv0) = args.first() else { continue };
         let base = Path::new(argv0).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        if !(EMULATOR_NAMES.contains(&base.as_str()) || (!extra_name.is_empty() && base == extra_name)) {
+        if !(names.contains(&base.as_str()) || (!base.is_empty() && extra_names.contains(&base))) {
             continue;
         }
         // Only an emulator that is running a game counts (not e.g. `kyty_emulator --help`).
-        // KytyPS5 takes `--game <dir>`, shadPS4 `-g <dir>`.
-        let Some(mut game) = args.iter().position(|a| a == "--game" || a == "-g").and_then(|i| args.get(i + 1)).cloned() else { continue };
+        // Each emulator says which option carries the game folder (`Emulator::game_flags`).
+        let Some(mut game) = args.iter().position(|a| flags.contains(&a.as_str())).and_then(|i| args.get(i + 1)).cloned() else { continue };
         if !game.is_empty() && !game.starts_with('/') {
             if let Ok(cwd) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
                 game = cwd.join(&game).to_string_lossy().into_owned();
@@ -388,13 +363,13 @@ fn is_alive(pid: u32) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn scan_emulators(extra_name: &str) -> HashMap<u32, (String, f64)> {
+fn scan_emulators(extra_names: &[String]) -> HashMap<u32, (String, f64)> {
     let mut found = HashMap::new();
     let Ok(out) = Command::new("ps").args(["-axww", "-o", "pid=,etime=,command="]).stderr(Stdio::null()).output() else { return found };
     let now = now_secs();
     for line in String::from_utf8_lossy(&out.stdout).lines() {
         let Some((pid, elapsed, command)) = parse_ps_line(line) else { continue };
-        let Some(game) = emulator_game(command, extra_name) else { continue };
+        let Some(game) = emulator_game(command, extra_names) else { continue };
         found.insert(pid, (game_folder(game), now - elapsed));
     }
     found
@@ -502,23 +477,13 @@ impl Sessions {
             let command = pc_command(game)?;
             return self.spawn(&mut inner, game, command, true);
         }
-        let ps4 = game.platform == crate::platform::Platform::Ps4;
-        if ps4 && !cfg.shad_ok() {
-            return Err(if cfg.shad_own() {
-                format!("shadPS4 not found or not executable:\n{}", cfg.shad_path().display())
-            } else {
-                "shadPS4 isn't installed yet".into()
-            });
+        let emulator = crate::emulator::selected(&cfg, game.platform)
+            .ok_or_else(|| format!("No emulator runs {} games", game.platform.label()))?;
+        if !emulator.runnable(&cfg) {
+            return Err(emulator.unavailable_message(&cfg));
         }
-        if !ps4 && !cfg.emulator_ok() {
-            return Err(format!("Emulator not found or not executable:\n{}", cfg.emulator_path().display()));
-        }
-        let emu = if ps4 { cfg.shad_path() } else { cfg.emulator_path() };
-        let mut args = kyty_args(&cfg, &game.path.to_string_lossy());
-        if ps4 {
-            // shadPS4: game folder and fullscreen; its other settings live in its own config.
-            args = vec!["-g".into(), game.path.to_string_lossy().into_owned(), "-f".into(), cfg.fullscreen.to_string()];
-        }
+        let emu = emulator.path(&cfg);
+        let args = emulator.launch_args(&cfg, &game.path);
         let mut command = Command::new(&emu);
         command.args(&args).current_dir(emu.parent().unwrap_or(Path::new("/")));
         self.spawn(&mut inner, game, command, false)
@@ -599,7 +564,12 @@ impl Sessions {
                 gamescope_tag(pid);
             }
         }
-        let extra = self.config.lock().unwrap().emulator_path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        // A self-built or renamed emulator is recognised by the name of the file the user chose.
+        let extra: Vec<String> = {
+            let cfg = self.config.lock().unwrap();
+            crate::emulator::all().iter().filter(|e| e.watches_custom_binary_name())
+                .filter_map(|e| e.path(&cfg).file_name().map(|n| n.to_string_lossy().into_owned())).collect()
+        };
         let procs = scan_emulators(&extra);
         let mut changed = false;
         let mut finished = Vec::new();
@@ -797,8 +767,7 @@ pub fn log_tail(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{emulator_error, emulator_game, game_folder, kyty_args, parse_etime, parse_ps_line};
-    use crate::config::Config;
+    use super::{emulator_error, emulator_game, game_folder, parse_etime, parse_ps_line};
 
     #[test]
     fn emulator_error_reads_the_reason_without_the_source_location() {
@@ -848,30 +817,8 @@ mod tests {
     }
 
     #[test]
-    fn kyty_gets_the_video_out_resolution_and_extra_arguments_last() {
-        let mut cfg = Config::default();
-        let args = kyty_args(&cfg, "/g/PPSA1");
-        let at = args.iter().position(|a| a == "--video-out-resolution").expect("always passed");
-        assert_eq!(args[at + 1], "Title", "the default is what a PS5 reports for the game");
-        // The window size is separate from what the game is told.
-        assert!(args.windows(2).any(|w| w == ["--screen-width", "1920"]));
-        for (mode, value) in [("FullHd", "FullHd"), ("Uhd", "Uhd")] {
-            cfg.video_out = mode.into();
-            let args = kyty_args(&cfg, "/g/PPSA1");
-            let at = args.iter().position(|a| a == "--video-out-resolution").unwrap();
-            assert_eq!(args[at + 1], value);
-        }
-        cfg.video_out = "Bogus".into();
-        let args = kyty_args(&cfg, "/g/PPSA1");
-        let at = args.iter().position(|a| a == "--video-out-resolution").unwrap();
-        assert_eq!(args[at + 1], "Title", "an unknown value falls back to the default");
-        cfg.extra_args = "--tessellation".into();
-        assert_eq!(kyty_args(&cfg, "/g/PPSA1").last().map(String::as_str), Some("--tessellation"));
-    }
-
-    #[test]
     fn emulator_command_lines() {
-        let game = |c: &str| emulator_game(c, "");
+        let game = |c: &str| emulator_game(c, &[]);
         assert_eq!(game("/opt/kyty/kyty_emulator --game /games/CUSA1"), Some("/games/CUSA1".into()));
         // ps joins arguments with spaces: the path ends at the next option.
         assert_eq!(game("/opt/kyty/kyty_emulator --game /Users/me/My Games/CUSA 1 --fullscreen --amd-cpu"), Some("/Users/me/My Games/CUSA 1".into()));
@@ -890,8 +837,10 @@ mod tests {
 
     #[test]
     fn a_custom_emulator_name_counts_too() {
-        assert_eq!(emulator_game("/opt/custom/my-kyty --game /g/x", "my-kyty"), Some("/g/x".into()));
-        assert_eq!(emulator_game("/opt/custom/my-kyty --game /g/x", ""), None);
+        let mine = ["my-kyty".to_string()];
+        assert_eq!(emulator_game("/opt/custom/my-kyty --game /g/x", &mine), Some("/g/x".into()));
+        assert_eq!(emulator_game("/opt/custom/my-kyty --game /g/x", &[]), None);
+        assert_eq!(emulator_game("/opt/custom/my-kyty --game /g/x", &[String::new()]), None, "an empty name matches nothing");
     }
 
     #[test]

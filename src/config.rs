@@ -3,6 +3,7 @@
 use crate::platform::Platform;
 use crate::util::{atomic_write, config_dir, expand_home};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -11,6 +12,14 @@ pub struct Config {
     pub emulator: String,
     /// The shadPS4 that PS4 games start with: the launcher's copy, or your own build.
     pub shad_emulator: String,
+    /// The path of every other emulator (see `crate::emulator`), by emulator id. KytyPS5 and
+    /// shadPS4 keep theirs in the two fields above.
+    pub emulator_paths: BTreeMap<String, String>,
+    /// Automatic updates of every other emulator, by emulator id (missing = on).
+    pub emulator_auto_update: BTreeMap<String, bool>,
+    /// Which emulator runs a platform's games, by platform label ("PS4") and emulator id. A
+    /// platform that isn't listed uses the first emulator registered for it.
+    pub platform_emulators: BTreeMap<String, String>,
     /// Where games live: PS5 games install into its PS5 folder, PS4 games into its PS4 folder.
     pub games_dir: String,
     /// More folders to look for games in, besides the games folder.
@@ -56,6 +65,9 @@ impl Default for Config {
         Config {
             emulator: String::new(),
             shad_emulator: String::new(),
+            emulator_paths: BTreeMap::new(),
+            emulator_auto_update: BTreeMap::new(),
+            platform_emulators: BTreeMap::new(),
             games_dir: String::new(),
             game_dirs: vec!["~/Games/PS5".into()],
             downloads_dir: String::new(),
@@ -103,15 +115,9 @@ impl Config {
         cfg.one_update_switch();
         cfg.one_games_folder();
         cfg.one_downloads_folder();
-        if cfg.emulator.is_empty() || !cfg.emulator_path().is_file() {
-            let managed = crate::kyty::managed_emulator();
-            if managed.is_file() {
-                cfg.emulator = managed.to_string_lossy().into_owned();
-            } else if let Some(found) = detect_emulator() {
-                cfg.emulator = found.to_string_lossy().into_owned();
-            }
+        for emu in crate::emulator::all() {
+            crate::emulator::adopt_default_path(&mut cfg, *emu);
         }
-        cfg.fill_shad(&crate::shad::emulator());
         cfg
     }
 
@@ -158,7 +164,7 @@ impl Config {
     fn covered_dirs(&self) -> Vec<PathBuf> {
         let root = expand_home(&self.games_root());
         let mut dirs = vec![root.clone()];
-        dirs.extend([Platform::Ps5, Platform::Ps4, Platform::Pc].map(|p| root.join(p.label())));
+        dirs.extend(Platform::ALL.map(|p| root.join(p.label())));
         dirs
     }
 
@@ -192,35 +198,6 @@ impl Config {
         self.vpn_only.then(|| self.vpn_interface.clone())
     }
 
-    pub fn emulator_path(&self) -> PathBuf {
-        expand_home(self.emulator.trim())
-    }
-
-    pub fn emulator_ok(&self) -> bool {
-        runnable(&self.emulator_path())
-    }
-
-    pub fn shad_path(&self) -> PathBuf {
-        expand_home(self.shad_emulator.trim())
-    }
-
-    pub fn shad_ok(&self) -> bool {
-        runnable(&self.shad_path())
-    }
-
-    /// Whether PS4 games use your own shadPS4: a path you set outside the launcher's folder.
-    /// The launcher then doesn't install or update shadPS4.
-    pub fn shad_own(&self) -> bool {
-        !self.shad_emulator.trim().is_empty() && !crate::shad::is_managed(&self.shad_path())
-    }
-
-    /// Nothing set: use the launcher's shadPS4 once it is installed. A path you set is kept.
-    pub fn fill_shad(&mut self, managed: &std::path::Path) {
-        if self.shad_emulator.trim().is_empty() && managed.is_file() {
-            self.shad_emulator = managed.to_string_lossy().into_owned();
-        }
-    }
-
     /// The games folder and its console folders first, then the more game folders, each once.
     pub fn game_dir_paths(&self) -> Vec<PathBuf> {
         let mut dirs = self.covered_dirs();
@@ -243,7 +220,7 @@ const OLD_DOWNLOAD_DIR: &str = "~/Downloads/PS5";
 fn root_from(old: &str) -> String {
     let old = old.trim().trim_end_matches('/');
     let path = Path::new(old);
-    let console = path.file_name().is_some_and(|n| [Platform::Ps5, Platform::Ps4, Platform::Pc].iter().any(|p| n == p.label()));
+    let console = path.file_name().is_some_and(|n| Platform::ALL.iter().any(|p| n == p.label()));
     let parent = path.parent().filter(|p| {
         let full = expand_home(&p.to_string_lossy());
         console && !p.as_os_str().is_empty() && full != Path::new("/") && full != expand_home("~")
@@ -257,7 +234,7 @@ fn root_or(root: &str, fallback: &str) -> String {
     if root.is_empty() || !expand_home(root).is_absolute() { fallback.into() } else { root.into() }
 }
 
-fn runnable(path: &std::path::Path) -> bool {
+pub(crate) fn runnable(path: &std::path::Path) -> bool {
     std::fs::metadata(path).map(|m| m.is_file() && is_executable(&m)).unwrap_or(false)
 }
 
@@ -387,37 +364,35 @@ mod tests {
 
     #[test]
     fn shad_is_your_own_only_outside_the_launchers_folder() {
+        use crate::emulator::{shadps4::ShadPs4, Emulator};
         let mut c = Config::default();
-        assert!(!c.shad_own(), "nothing set yet: the launcher installs its own");
+        assert!(!ShadPs4.is_own(&c), "nothing set yet: the launcher installs its own");
         c.shad_emulator = "  ".into();
-        assert!(!c.shad_own(), "blank text is not a path");
-        c.shad_emulator = crate::shad::emulator().to_string_lossy().into_owned();
-        assert!(!c.shad_own(), "the launcher's copy");
+        assert!(!ShadPs4.is_own(&c), "blank text is not a path");
+        c.shad_emulator = ShadPs4.binary().to_string_lossy().into_owned();
+        assert!(!ShadPs4.is_own(&c), "the launcher's copy");
         let dir = tempfile::tempdir().unwrap();
         let exe = dir.path().join("shadps4");
         c.shad_emulator = exe.to_string_lossy().into_owned();
-        assert!(c.shad_own() && !c.shad_ok(), "a missing file is not runnable");
+        assert!(ShadPs4.is_own(&c) && !ShadPs4.runnable(&c), "a missing file is not runnable");
         std::fs::write(&exe, "#!/bin/sh\n").unwrap();
-        assert!(!c.shad_ok(), "not executable yet");
+        assert!(!ShadPs4.runnable(&c), "not executable yet");
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-        assert!(c.shad_ok());
-        assert_eq!(c.shad_path(), exe);
+        assert!(ShadPs4.runnable(&c));
+        assert_eq!(ShadPs4.path(&c), exe);
     }
 
     #[test]
-    fn an_empty_shad_path_takes_the_launchers_copy_once_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let managed = dir.path().join("AppRun");
+    fn new_settings_fields_are_optional_and_round_trip() {
+        let old: Config = serde_json::from_str(r#"{"emulator": "/k/kyty_emulator"}"#).unwrap();
+        assert!(old.emulator_paths.is_empty() && old.emulator_auto_update.is_empty() && old.platform_emulators.is_empty());
         let mut c = Config::default();
-        c.fill_shad(&managed);
-        assert!(c.shad_emulator.is_empty(), "not installed yet");
-        std::fs::write(&managed, "").unwrap();
-        c.fill_shad(&managed);
-        assert_eq!(c.shad_path(), managed);
-        c.shad_emulator = "/somewhere/else/shadps4".into();
-        c.fill_shad(&managed);
-        assert_eq!(c.shad_emulator, "/somewhere/else/shadps4", "a path you set is never replaced");
+        c.emulator_paths.insert("other".into(), "/o/other".into());
+        c.platform_emulators.insert("PS4".into(), "other".into());
+        let again: Config = serde_json::from_slice(&serde_json::to_vec(&c).unwrap()).unwrap();
+        assert_eq!(again.emulator_paths["other"], "/o/other");
+        assert_eq!(again.platform_emulators["PS4"], "other");
     }
 }
 

@@ -258,8 +258,7 @@ pub struct App {
     pub pc: Option<crate::pc::Specs>,
     pub pc_checking: bool,
     pub boot: crate::boot::Boot,
-    pub kyty: crate::kyty_ui::KytyUi,
-    pub shad: crate::shad_ui::ShadUi,
+    pub emus: crate::emulator_ui::EmulatorUis,
     pub warming: bool,
     pub upd: crate::update::AppUpdate,
     pub compat: crate::compat::Db,
@@ -422,8 +421,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         pc: None,
         pc_checking: false,
         boot: Default::default(),
-        kyty: Default::default(),
-        shad: Default::default(),
+        emus: Default::default(),
         warming: false,
         upd: Default::default(),
         compat: crate::compat::with_mine(crate::compat::load().0, &crate::results::load()),
@@ -448,8 +446,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
     }
     APP.with(|a| *a.borrow_mut() = Some(app));
     with_app(move |app| app.boot_start(first_run));
-    with_app(|app| app.kyty_start());
-    with_app(|app| app.shad_start());
+    with_app(|app| app.emu_start());
     with_app(|app| app.app_update_start());
     with_app(|app| app.compat_start());
     with_app(|app| app.net_watch_start());
@@ -704,7 +701,7 @@ impl App {
         list.push(("In-game".into(), count(&|e| e.in_game_anywhere())));
         list.push(("In-game on Linux".into(), count(&|e| e.on_linux && e.status == crate::compat::Status::InGame)));
         use crate::platform::Platform;
-        self.consoles = [Platform::Ps5, Platform::Ps4, Platform::Pc].into_iter()
+        self.consoles = Platform::ALL.into_iter()
             .filter(|p| self.games.iter().any(|g| g.g.platform == *p)).collect();
         self.mixed_consoles = self.consoles.len() > 1;
         if !self.mixed_consoles {
@@ -803,18 +800,7 @@ impl App {
         crate::log!("network is up: retrying the downloads that failed");
         // Covers that failed offline load again when the catalog reload below redraws the Library.
         self.images.clear_failures();
-        let (auto, missing) = { let c = self.cfg.lock().unwrap(); (c.kyty_auto_update, !c.emulator_ok()) };
-        if auto && missing {
-            // Back on the welcome screen's list, if it's still up.
-            if self.boot.active && self.boot.kyty_needed {
-                self.boot.waiting_kyty = true;
-                self.boot.f_kyty = 0.0;
-                self.boot_render();
-            }
-            self.kyty.force_install = true;
-        }
-        self.kyty_check(false);
-        self.shad_tick();
+        self.emu_network_back();
         self.start_sync(false);
     }
 
@@ -1035,7 +1021,7 @@ impl App {
             let last = Mutex::new(std::time::Instant::now() - Duration::from_secs(1));
             images::warm(rest, 10, &|done, total| {
                 throttle(&|d, t| post(move |app| {
-                    if !app.boot.active && !app.syncing && !app.enriching && !app.kyty.busy && !app.upd.busy {
+                    if !app.boot.active && !app.syncing && !app.enriching && !app.emus.any_busy() && !app.upd.busy {
                         app.set_status(&format!("Downloading game art {d}/{t}"), true);
                     }
                 }), done, total, &last)
@@ -1170,8 +1156,7 @@ impl App {
     }
 
     fn emulator_probe(&self, l: usize) -> EmulatorProbe {
-        let c = self.cfg.lock().unwrap();
-        EmulatorProbe { platform: self.locals[l].l.platform, kyty: c.emulator_path(), own_shad: c.shad_own() }
+        EmulatorProbe { platform: self.locals[l].l.platform, cfg: self.cfg.lock().unwrap().clone() }
     }
 
     /// After a game closes, ask how far it got, unless it was rated or skipped on this build.
@@ -1347,8 +1332,7 @@ impl App {
             }
             self.tick();
             if self.live.is_empty() {
-                self.kyty_games_closed();
-                self.shad_games_closed();
+                self.emu_games_closed();
             }
         }
     }
@@ -2375,10 +2359,14 @@ impl App {
             return;
         }
         let game = self.locals[l].l.clone();
-        // PS4 games run on shadPS4, which is installed the first time one is played (unless you set your own).
-        let missing_shad = { let c = self.cfg.lock().unwrap(); !c.shad_own() && !c.shad_ok() };
-        if game.platform == crate::platform::Platform::Ps4 && missing_shad {
-            self.shad_install_then_launch(game.id.clone());
+        // An emulator the launcher looks after (shadPS4 for PS4 games) is installed the first time
+        // one of its games is played, unless you set your own.
+        let to_install = {
+            let c = self.cfg.lock().unwrap();
+            crate::emulator::selected(&c, game.platform).filter(|e| !e.uses_own_build(&c) && !e.runnable(&c))
+        };
+        if let Some(emu) = to_install {
+            self.emu_install_then_launch(emu, game.id.clone());
             return;
         }
         match self.sessions.launch(&game) {
@@ -2845,19 +2833,13 @@ pub fn model<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {
 /// `version` can take a moment for a custom KytyPS5, so call it off the UI thread.
 struct EmulatorProbe {
     platform: crate::platform::Platform,
-    kyty: std::path::PathBuf,
-    own_shad: bool,
+    cfg: crate::config::Config,
 }
 
 impl EmulatorProbe {
-    /// KytyPS5's build for PS5 games, shadPS4's release for PS4 games.
+    /// The build of the emulator that runs the game's platform (empty for PC games).
     fn version(&self) -> String {
-        match self.platform {
-            crate::platform::Platform::Ps4 if self.own_shad => "own build".into(),
-            crate::platform::Platform::Ps4 => crate::shad::pretty(&crate::shad::load_state().installed),
-            crate::platform::Platform::Ps5 => crate::kyty::version_for(&self.kyty),
-            crate::platform::Platform::Pc => String::new(),
-        }
+        crate::emulator::selected(&self.cfg, self.platform).map(|e| e.version_for(&self.cfg)).unwrap_or_default()
     }
 }
 

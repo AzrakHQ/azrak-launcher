@@ -498,6 +498,10 @@ its official Linux builds from GitHub Releases.
 To turn this off, disable **Settings → Update automatically** (it covers the launcher, KytyPS5 and shadPS4). Managed builds live
 in `~/.local/share/ps5-launcher/kyty/`.
 
+## Adding another emulator
+
+Emulators are plugins behind one trait; see [ADDING_AN_EMULATOR.md](ADDING_AN_EMULATOR.md).
+
 ## PS4 games
 
 A `Platform` (PS5 or PS4) travels with each installed game and catalog release
@@ -506,7 +510,8 @@ A `Platform` (PS5 or PS4) travels with each installed game and catalog release
 - **Installed games:** PS4 game folders are recognized by `sce_sys/param.sfo`
   ([src/sfo.rs](../src/sfo.rs), a bounds-checked PSF reader). Only full games (category `gd`)
   are listed; updates (`gp`) and add-ons are skipped, also by the installer.
-- **Emulator:** shadPS4's official Linux release ([src/shad.rs](../src/shad.rs)) is installed in
+- **Emulator:** shadPS4's official Linux release ([src/shad.rs](../src/shad.rs), plugged in by
+  [src/emulator/shadps4.rs](../src/emulator/shadps4.rs)) is installed in
   the background once the start-up screen closes (after any KytyPS5 download), or right away
   when a PS4 game is played first. The zip is SHA-256 checked, its AppImage unpacked once
   (`--appimage-extract`, so no FUSE), and `AppRun` launched as `-g <game> -f <fullscreen>`.

@@ -191,7 +191,7 @@ pub fn install(rel: &Release, exe: &Path, progress: &dyn Fn(String, f32)) -> Res
     #[cfg(not(target_os = "macos"))]
     let appimage = appimage_path().is_some_and(|p| p == exe);
     let last = std::cell::Cell::new(101u64);
-    let res = crate::kyty::download_file(&rel.url, rel.size, &rel.sha256, &archive, &|done, total| {
+    let res = crate::emulator::download::file(&rel.url, rel.size, &rel.sha256, &archive, &|done, total| {
         let pct = if total > 0 { done * 100 / total } else { 0 };
         if pct != last.get() {
             last.set(pct);
@@ -290,7 +290,7 @@ impl App {
         }
         self.upd.checking = true;
         self.upd.error.clear();
-        self.kyty_refresh_settings();
+        self.refresh_settings_if_open();
         std::thread::spawn(move || {
             let res = latest_release();
             post(move |app| {
@@ -320,7 +320,7 @@ impl App {
                         }
                     }
                 }
-                app.kyty_refresh_settings();
+                app.refresh_settings_if_open();
             });
         });
     }
@@ -335,13 +335,13 @@ impl App {
                 crate::log!("launcher update {} available, not installed: {e}", rel.version);
                 self.upd.error = format!("Can't update automatically: {e}");
                 self.toast_app("Update available", &format!("PS5 Launcher {} can't install automatically: {e}.", rel.version), 0);
-                self.kyty_refresh_settings();
+                self.refresh_settings_if_open();
                 return;
             }
         };
         self.upd.busy = true;
         self.upd.error.clear();
-        self.kyty_refresh_settings();
+        self.refresh_settings_if_open();
         std::thread::spawn(move || {
             let last = std::sync::Mutex::new(String::new());
             let res = install(&rel, &exe, &|p, _| {
@@ -353,7 +353,7 @@ impl App {
                         if !app.boot.active {
                             app.set_status(&p, true);
                         }
-                        app.kyty_refresh_settings();
+                        app.refresh_settings_if_open();
                     });
                 }
             });
@@ -372,7 +372,7 @@ impl App {
                         app.toast_app("Update failed", &e, 2);
                     }
                 }
-                app.kyty_refresh_settings();
+                app.refresh_settings_if_open();
             });
         });
     }

@@ -11,36 +11,15 @@
 //! Kyty writes its data relative to its working directory, so each version folder gets symlinks
 //! to `data/`: saves and shader caches survive updates and rollbacks.
 
-use crate::util::{atomic_write, http_json, now_secs};
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
+use crate::emulator::store::ManagedStore;
+pub use crate::emulator::store::Release;
+use crate::util::http_json;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const REPO: &str = "KytyPS5/KytyPS5";
 /// Folders Kyty writes relative to its working directory.
 pub const DATA_DIRS: [&str; 6] = ["_SaveData", "_PipelineCache", "_DownloadData", "_TempData", "_Textures", "_Patches"];
-pub const CHECK_INTERVAL: f64 = 6.0 * 3600.0;
-
-#[derive(Clone, Debug)]
-pub struct Release {
-    pub tag: String,
-    pub url: String,
-    pub size: u64,
-    pub sha256: String,
-}
-
-#[derive(Serialize, Deserialize, Default, Clone, Debug)]
-#[serde(default)]
-pub struct State {
-    pub installed: String,
-    pub previous: String,
-    pub last_check: f64,
-    pub latest: String,
-    /// A build the user rolled back from: not re-installed automatically.
-    pub skip: String,
-}
 
 pub fn root() -> PathBuf {
     std::env::var_os("XDG_DATA_HOME")
@@ -59,21 +38,8 @@ pub fn is_managed(emulator: &Path) -> bool {
     emulator.starts_with(root())
 }
 
-pub fn load_state() -> State {
-    std::fs::read(root().join("state.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
-}
-
-fn save_state(s: &State) {
-    if let Ok(j) = serde_json::to_vec_pretty(s) {
-        let _ = atomic_write(&root().join("state.json"), &j);
-    }
-}
-
-pub fn mark_checked(latest: &str) {
-    let mut s = load_state();
-    s.last_check = now_secs();
-    s.latest = latest.to_string();
-    save_state(&s);
+pub fn store() -> ManagedStore {
+    ManagedStore::new(root())
 }
 
 /// Short, human version of a tag: "KytyPS5-2026-09-29-59a1760" -> "2026-09-29 · 59a1760".
@@ -83,11 +49,6 @@ pub fn pretty(tag: &str) -> String {
         Some((date, sha)) if sha.len() >= 7 && date.len() == 10 => format!("{date} · {sha}"),
         _ => t.to_string(),
     }
-}
-
-/// Commit id of a tag ("…-59a1760" -> "59a1760").
-pub fn tag_commit(tag: &str) -> &str {
-    tag.rsplit('-').next().unwrap_or("")
 }
 
 /// Whether a release asset is the KytyPS5 build for `os` ("linux" or "macos").
@@ -165,7 +126,7 @@ fn pick_release(releases: &serde_json::Value, os: &str) -> Result<Release, Strin
 /// The KytyPS5 build a game runs on: the managed build's tag, or a custom build's
 /// "2026-09-30 (b7a1fac)". Can take up to 3 s for a custom build: call it off the UI thread.
 pub fn version_for(emulator: &Path) -> String {
-    let installed = load_state().installed;
+    let installed = store().load_state().installed;
     if is_managed(emulator) && !installed.is_empty() {
         return installed;
     }
@@ -198,48 +159,6 @@ pub fn binary_version(emulator: &Path) -> Option<(String, String)> {
     let line = text.lines().next()?;
     let field = |k: &str| line.split(&format!("{k} = ")).nth(1).map(|s| s.split(',').next().unwrap_or("").trim().to_string());
     Some((field("git")?, field("date").unwrap_or_default().replace('.', "-")))
-}
-
-/// Large downloads can take minutes: no overall deadline, only a stall timeout per read.
-static DOWNLOADER: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
-    ureq::AgentBuilder::new()
-        .user_agent(crate::util::USER_AGENT)
-        .timeout_connect(std::time::Duration::from_secs(15))
-        .timeout_read(std::time::Duration::from_secs(60))
-        .build()
-});
-
-fn download(rel: &Release, dest: &Path, progress: &dyn Fn(u64, u64)) -> Result<(), String> {
-    download_file(&rel.url, rel.size, &rel.sha256, dest, progress)
-}
-
-/// Stream `url` to `dest`, verifying its SHA-256 when one is given.
-pub fn download_file(url: &str, size: u64, sha256: &str, dest: &Path, progress: &dyn Fn(u64, u64)) -> Result<(), String> {
-    let resp = DOWNLOADER.get(url).call().map_err(|e| format!("download failed: {e}"))?;
-    let total = resp.header("Content-Length").and_then(|s| s.parse().ok()).unwrap_or(size);
-    let mut reader = resp.into_reader();
-    let mut file = std::fs::File::create(dest).map_err(|e| e.to_string())?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 1 << 16];
-    let mut done = 0u64;
-    loop {
-        let n = reader.read(&mut buf).map_err(|e| format!("download interrupted: {e}"))?;
-        if n == 0 {
-            break;
-        }
-        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
-        hasher.update(&buf[..n]);
-        done += n as u64;
-        progress(done, total);
-    }
-    file.flush().map_err(|e| e.to_string())?;
-    if !sha256.is_empty() {
-        let got = format!("{:x}", hasher.finalize());
-        if !got.eq_ignore_ascii_case(sha256) {
-            return Err("download is corrupted (checksum mismatch)".into());
-        }
-    }
-    Ok(())
 }
 
 fn link_data_dirs(version_dir: &Path) -> Result<(), String> {
@@ -285,22 +204,13 @@ pub fn import_data_from(emulator_dir: &Path) -> usize {
     copied
 }
 
-fn switch_current(tag: &str) -> Result<(), String> {
-    let r = root();
-    let tmp = r.join("current.new");
-    let _ = std::fs::remove_file(&tmp);
-    std::os::unix::fs::symlink(Path::new("versions").join(tag), &tmp).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, r.join("current")).map_err(|e| e.to_string())
-}
-
 /// Download, verify, extract and activate a release. Keeps the previous version for rollback.
 pub fn install(rel: &Release, progress: &dyn Fn(String, f32)) -> Result<(), String> {
-    let r = root();
-    let versions = r.join("versions");
-    std::fs::create_dir_all(&versions).map_err(|e| e.to_string())?;
-    let archive = r.join(format!("{}.tar.gz.part", rel.tag));
+    let store = store();
+    std::fs::create_dir_all(store.versions_dir()).map_err(|e| e.to_string())?;
+    let archive = store.download_path(&rel.tag, "tar.gz");
     let last = std::cell::Cell::new(0u64);
-    download(rel, &archive, &|done, total| {
+    crate::emulator::download::file(&rel.url, rel.size, &rel.sha256, &archive, &|done, total| {
         let pct = if total > 0 { done * 100 / total } else { 0 };
         if pct != last.get() {
             last.set(pct);
@@ -312,7 +222,7 @@ pub fn install(rel: &Release, progress: &dyn Fn(String, f32)) -> Result<(), Stri
     })?;
 
     progress("Installing KytyPS5…".into(), 0.95);
-    let staging = versions.join(format!("{}.tmp", rel.tag));
+    let staging = store.staging_dir(&rel.tag);
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     let ok = extract(&archive, &staging);
@@ -338,50 +248,10 @@ pub fn install(rel: &Release, progress: &dyn Fn(String, f32)) -> Result<(), Stri
         });
     }
     link_data_dirs(&dir)?;
-    let final_dir = versions.join(&rel.tag);
-    let _ = std::fs::remove_dir_all(&final_dir);
-    std::fs::rename(&dir, &final_dir).map_err(|e| e.to_string())?;
+    store.activate(&rel.tag, &dir)?;
     let _ = std::fs::remove_dir_all(&staging);
-
-    let mut st = load_state();
-    if st.installed != rel.tag {
-        st.previous = std::mem::take(&mut st.installed);
-    }
-    st.installed = rel.tag.clone();
-    st.latest = rel.tag.clone();
-    if st.skip == rel.tag {
-        st.skip.clear();
-    }
-    st.last_check = now_secs();
-    switch_current(&rel.tag)?;
-    save_state(&st);
-    cleanup(&st);
     crate::log!("KytyPS5 installed: {}", rel.tag);
     Ok(())
-}
-
-/// Switch back to the previously installed version.
-pub fn rollback() -> Result<String, String> {
-    let mut st = load_state();
-    if st.previous.is_empty() || !root().join("versions").join(&st.previous).is_dir() {
-        return Err("no previous version to roll back to".into());
-    }
-    switch_current(&st.previous)?;
-    st.skip = st.installed.clone();
-    std::mem::swap(&mut st.installed, &mut st.previous);
-    save_state(&st);
-    Ok(st.installed)
-}
-
-/// Keep only the installed and previous versions.
-fn cleanup(st: &State) {
-    let Ok(rd) = std::fs::read_dir(root().join("versions")) else { return };
-    for e in rd.flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if name != st.installed && name != st.previous {
-            let _ = std::fs::remove_dir_all(e.path());
-        }
-    }
 }
 
 #[cfg(test)]
@@ -408,7 +278,6 @@ mod tests {
     #[test]
     fn tags() {
         assert_eq!(pretty("KytyPS5-2026-09-29-59a1760"), "2026-09-29 · 59a1760");
-        assert_eq!(tag_commit("KytyPS5-2026-09-29-59a1760"), "59a1760");
     }
 }
 
