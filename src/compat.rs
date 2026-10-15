@@ -129,19 +129,15 @@ impl Entry {
         }
     }
 
-    /// Reaches gameplay in any report: Linux, Windows, another OS or your own.
-    pub fn in_game_anywhere(&self) -> bool {
-        [Some(self.status), self.linux, self.windows].contains(&Some(Status::InGame))
+    /// Reaches gameplay on Linux, in the community's result or yours. The launcher only runs on
+    /// Linux, so a result from another system doesn't count.
+    pub fn in_game(&self) -> bool {
+        self.on_linux && self.status == Status::InGame
     }
 
-    /// Short tag for Library covers: "In-game", or "Win · In-game" for a result from elsewhere.
-    pub fn tag(&self) -> String {
-        match self.source() {
-            "Linux" => self.status.label().to_string(),
-            "Windows" => format!("Win · {}", self.status.label()),
-            "macOS" => format!("Mac · {}", self.status.label()),
-            _ => format!("Other OS · {}", self.status.label()),
-        }
+    /// Short tag for Library covers ("In-game"): Linux results only.
+    pub fn tag(&self) -> Option<String> {
+        self.on_linux.then(|| self.status.label().to_string())
     }
 
     /// Chip text: "In-game on Linux", or "In-game on Windows · untested on Linux".
@@ -447,7 +443,7 @@ mod tests {
         assert_eq!(e.status, Status::MainMenu);
         assert!(e.on_linux);
         assert_eq!(e.windows, Some(Status::InGame));
-        assert_eq!(e.tag(), "Menus");
+        assert_eq!(e.tag().as_deref(), Some("Menus"));
         assert_eq!(e.platforms, vec!["Linux", "Windows"]);
         assert_eq!(e.tested_date(), "2026-08-18");
         assert!(Status::InGame < Status::DoesntBoot);
@@ -459,9 +455,10 @@ mod tests {
         let db = parse(json).unwrap();
         let w = &db["PPSA1"];
         assert!(!w.on_linux);
-        assert_eq!(w.tag(), "Win · In-game");
+        assert_eq!(w.tag(), None, "covers show Linux results only");
+        assert!(!w.in_game());
         assert_eq!(w.chip_text(), "In-game on Windows · untested on Linux");
-        assert_eq!(db["PPSA2"].tag(), "Other OS · Boots");
+        assert_eq!(db["PPSA2"].tag(), None);
     }
 
     #[test]
@@ -473,7 +470,7 @@ mod tests {
         assert_eq!((fw.status, fw.on_linux, fw.windows), (Status::InGame, true, Some(Status::InGame)));
         assert_eq!(fw.tested_date(), "2026-10-01");
         assert_eq!(fw.platforms, vec!["Linux", "Windows"]);
-        assert_eq!(db["CUSA00001"].tag(), "Win · Boots");
+        assert_eq!(db["CUSA00001"].tag(), None);
         assert!(!db.contains_key("CUSA00002"), "unknown statuses are skipped");
         let url = report_url_for("Firewatch", "CUSA04118", "0.18.0", "01.08", Status::MainMenu, "");
         assert!(url.starts_with(SHAD_REPORT_FORM));
@@ -493,17 +490,9 @@ mod tests {
         assert_eq!(e.status, Status::Logo);
         assert_eq!(e.windows, Some(Status::InGame), "the community's results stay visible");
         assert_eq!(e.chip_text(), "Boots on Linux · your result");
-        assert_eq!(db["PPSA9"].tag(), "In-game");
-        assert!(e.in_game_anywhere(), "Windows says in-game, even though your result is Boots");
-    }
-
-    #[test]
-    fn in_game_anywhere_checks_every_os() {
-        let json = br#"{"A":{"status":"InGame","platforms":{"windows":{"status":"InGame"},"linux":{"status":"Logo"}}},"B":{"status":"MainMenu","platforms":{"linux":{"status":"MainMenu"}}},"C":{"status":"InGame"}}"#;
-        let db = parse(json).unwrap();
-        assert!(db["A"].in_game_anywhere() && db["A"].status == Status::Logo);
-        assert!(!db["B"].in_game_anywhere());
-        assert!(db["C"].in_game_anywhere());
+        assert_eq!(db["PPSA9"].tag().as_deref(), Some("In-game"));
+        assert!(db["PPSA9"].in_game());
+        assert!(!e.in_game(), "your Boots on this PC counts, not Windows' In-game");
     }
 
     #[test]

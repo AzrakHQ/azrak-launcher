@@ -121,9 +121,9 @@ Each game shows a tag from its emulator's community list ([KytyPS5](https://kyty
 PS5, [shadPS4](https://github.com/shadps4-compatibility/shadps4-game-compatibility) for PS4):
 🟢 **In-game**, 🟡 **Menus**, 🟠 **Boots** (intro logos only), 🔴 **Doesn't boot**, or ⚪ **Untested**.
 
-Linux results come first. A result from Windows is marked **Win**, because games can behave
-differently on Linux. In the Library, **In-game** lists every game that reaches gameplay, and
-**In-game on Linux** only the ones confirmed on Linux.
+Only Linux results count, since the launcher runs on Linux: covers and the Library's **In-game**
+filter show what's been confirmed there. A game tested only on Windows shows that result in its
+Game Hub, marked as untested on Linux, because games can behave differently there.
 
 **Will it run on my PC?** Each Game Hub also says **On this PC: Should run well**, **May run
 slowly** (with the reason, e.g. integrated graphics) or **Won't start** (e.g. a graphics card

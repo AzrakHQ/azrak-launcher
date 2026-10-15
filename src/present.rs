@@ -621,8 +621,7 @@ impl App {
                 if genre_ok && self.platform_ok(game) {
                     status[1] |= game.local.is_some();
                     let compat = self.game_compat(game);
-                    status[2] |= compat.is_some_and(|entry| entry.in_game_anywhere());
-                    status[3] |= compat.is_some_and(|entry| entry.on_linux && entry.status == crate::compat::Status::InGame);
+                    status[2] |= compat.is_some_and(|entry| entry.in_game());
                 }
                 if self.matches_status(index) { any = true; buckets.extend(game.buckets.iter().copied()); }
             }
@@ -793,7 +792,8 @@ impl App {
             }
             let g = &self.games[gi];
             let ce = self.game_compat(g);
-            let (compat, compat_level) = ce.map(|e| (e.tag(), e.status.level())).unwrap_or_default();
+            // Covers show Linux results only; the Game Hub has the rest.
+            let (compat, compat_level) = ce.and_then(|e| Some((e.tag()?, e.status.level()))).unwrap_or_default();
             // Size is always visible. Version/region details belong to the selected Hub release.
             let releases = self.groups.releases(gi).len();
             let meta = g.g.size_gb.map(|size| if size >= 1.0 { format!("{size:.1} GB") } else { format!("{:.1} MB", size * 1024.0) }).unwrap_or_else(|| "Size unknown".into());

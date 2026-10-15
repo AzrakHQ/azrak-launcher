@@ -275,7 +275,7 @@ pub struct App {
     /// The platforms the catalog has, when there are several: each gets a "… games only" chip,
     /// the last status chips, in this order.
     pub consoles: Vec<crate::platform::Platform>,
-    /// The status filters lead `genre_list`: All, Installed, In-game, In-game on Linux and, with
+    /// The status filters lead `genre_list`: All, Installed, In-game (on Linux) and, with
     /// more than one console, "PS5 games only" and "PS4 games only". Genres follow.
     pub status_count: usize,
 }
@@ -701,8 +701,8 @@ impl App {
         list.push(("Installed".into(), installed));
         let count = |f: &dyn Fn(&crate::compat::Entry) -> bool| self.groups.members.iter()
             .filter(|members| members.iter().any(|i| self.game_compat(&self.games[*i]).is_some_and(f))).count();
-        list.push(("In-game".into(), count(&|e| e.in_game_anywhere())));
-        list.push(("In-game on Linux".into(), count(&|e| e.on_linux && e.status == crate::compat::Status::InGame)));
+        // Linux results only: the launcher runs on Linux.
+        list.push(("In-game".into(), count(&|e| e.in_game())));
         use crate::platform::Platform;
         self.consoles = [Platform::Ps5, Platform::Ps4, Platform::Pc].into_iter()
             .filter(|p| self.games.iter().any(|g| g.g.platform == *p)).collect();
@@ -1831,8 +1831,7 @@ impl App {
     /// The status filter alone (Installed, In-game, …), whatever the console.
     pub fn status_filter_ok(&self, game: &GameV) -> bool {
         self.status_filter == "All" || (self.status_filter == "Installed" && game.local.is_some())
-            || (self.status_filter == "In-game" && self.game_compat(game).is_some_and(|entry| entry.in_game_anywhere()))
-            || (self.status_filter == "In-game on Linux" && self.game_compat(game).is_some_and(|entry| entry.on_linux && entry.status == crate::compat::Status::InGame))
+            || (self.status_filter == "In-game" && self.game_compat(game).is_some_and(|entry| entry.in_game()))
     }
 
     pub fn open_sort_picker(&mut self) {

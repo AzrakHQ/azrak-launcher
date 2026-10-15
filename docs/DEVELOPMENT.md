@@ -110,7 +110,8 @@ smaller windows reduce the column count and maintain readable caption text. Dens
 changes retain the current scroll position's game rather than jumping back to the start.
 Artwork caching, visible-row virtualization and look-ahead prefetching are unchanged.
 
-**All / Installed / In-game / In-game on Linux** filters are separate from the **GENRE** row,
+**All / Installed / In-game** filters (In-game: Linux results only; covers likewise show only a
+Linux result, the Game Hub every OS's) are separate from the **GENRE** row,
 and can be combined with genres and search. Counts reflect those combinations without
 duplicating release variants. Genre-row arrows expose options beyond the viewport.
 Click the sort control or press Enter on it to open all seven sort choices; arrows select,
