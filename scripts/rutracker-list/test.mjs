@@ -325,3 +325,12 @@ test('releases never looked up come before lookups that keep failing', async () 
   const todo = lookupOrder(topics.filter(t => due(t, now))).slice(0, 900);
   assert.equal(todo[0].id, 'new');
 });
+
+test('translations keep every number of the original; added ones are fine', async () => {
+  const { keepsNumbers } = await import('./english.mjs');
+  assert.equal(keepsNumbers('от третьего лица', '3rd person'), true);
+  assert.equal(keepsNumbers('Версия 1.2.3 от 01.02.2020', 'Version 1.2.3 from 01.02.2020'), true);
+  assert.equal(keepsNumbers('Версия 1,5', 'Version 1.5'), false, 'reformatted');
+  assert.equal(keepsNumbers('01.02.2020', '2020'), false, 'dropped');
+  assert.equal(keepsNumbers('2 из 4', '4 of 2'), false, 'reordered');
+});

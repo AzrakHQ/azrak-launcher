@@ -206,3 +206,14 @@ export function transliterate(value) {
     return ch === ch.toLowerCase() ? latin : latin.charAt(0).toUpperCase() + latin.slice(1);
   });
 }
+
+export const numericSignature = text => text.match(/\d+(?:[.,/]\d+|\.x+|\.\?+)*/gi) || [];
+// Every number, version and date of the original is in the translation, unchanged and in order; a
+// number the translation adds ("от третьего лица" → "3rd person") is fine.
+export function keepsNumbers(text, translation) {
+  const want = numericSignature(text);
+  let found = 0;
+  for (const token of numericSignature(translation)) if (token === want[found]) found++;
+  return found === want.length;
+}
+
