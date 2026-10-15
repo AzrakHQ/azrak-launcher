@@ -278,11 +278,13 @@ test('Steam matches whose artwork or rating could not be checked are looked up a
   const { lookup, due } = await import('./steam.mjs');
   const now = new Date('2026-10-14T00:00:00Z');
   const realFetch = globalThis.fetch;
-  // Steam's store answers; its artwork server and ProtonDB are unreachable.
+  // Steam's store answers; its artwork server is unreachable and ProtonDB overloaded. (Not
+  // unreachable: that would skip ProtonDB for the rest of the run, and of these tests.)
   globalThis.fetch = async (url) => {
     const u = String(url);
     if (u.includes('storesearch')) return Response.json({ items: [{ type: 'app', id: 504230, name: 'Celeste' }] });
     if (u.includes('appdetails')) return Response.json({ 504230: { success: true, data: { name: 'Celeste' } } });
+    if (u.includes('protondb')) return new Response('', { status: 503 });
     throw new TypeError('fetch failed');
   };
   let block;
@@ -296,6 +298,22 @@ test('Steam matches whose artwork or rating could not be checked are looked up a
   const { protondb, ...older } = complete; // no ProtonDB answer, from before `partial`
   assert.equal(due({ steam: older }, now), true);
   assert.equal(due({ steam: { appid: null, checked_at: now.toISOString() } }, now), false);
+});
+
+test('a match that only lacks its ProtonDB rating just asks ProtonDB', async () => {
+  const { update } = await import('./steam.mjs');
+  const asked = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    asked.push(String(url));
+    return Response.json({ tier: 'gold' });
+  };
+  const steam = { appid: 504230, name: 'Celeste', assets: { portrait: 'p', hero: 'h', logo: 'l' }, checked_at: '2026-10-01T00:00:00Z' };
+  let result;
+  try { result = await update({ title: 'Celeste [GOG]', steam }); } finally { globalThis.fetch = realFetch; }
+  assert.deepEqual(asked, ['https://www.protondb.com/api/v1/reports/summaries/504230.json']);
+  assert.equal(result.protondb, 'gold');
+  assert.equal(result.assets.portrait, 'p', 'the rest is kept');
 });
 
 test('releases never looked up come before lookups that keep failing', async () => {

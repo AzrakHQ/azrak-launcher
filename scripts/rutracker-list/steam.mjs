@@ -192,6 +192,17 @@ export function due(topic, now, retry = false) {
     || (retry && Object.values(steam.assets || {}).some(url => url == null));
 }
 
+/** Look a topic up (again), or for a match that only lacks its ProtonDB rating (ProtonDB was
+ * unreachable then), just ask ProtonDB: a full lookup takes seconds, the rating a fraction. */
+export async function update(topic, now = new Date(), { console_ = false } = {}) {
+  const steam = topic.steam;
+  if (!console_ && steam?.appid && !steam.partial && !('protondb' in steam)) {
+    const rating = await protondb(steam.appid);
+    return rating === undefined ? steam : { ...steam, protondb: rating };
+  }
+  return lookup(topic.title, now, console_ ? { exact: true, ratings: false } : {});
+}
+
 /** Releases never looked up first, then the oldest checks: lookups that keep failing (a
  * `partial` match whose artwork server keeps erroring) must not take every day's slots. */
 export function lookupOrder(topics) {
@@ -219,15 +230,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     await rename(temporary, path);
   };
   for (const topic of todo) {
+    const ratingOnly = topic.steam?.appid && !('protondb' in topic.steam);
     try {
-      topic.steam = await lookup(topic.title, now, console_ ? { exact: true, ratings: false } : {});
+      topic.steam = await update(topic, now, { console_ });
     } catch (error) {
       console.log(`Stopping: ${error.message}`);
       break;
     }
     if (topic.steam.appid) found++;
     if (++done % 25 === 0) { await save(); console.log(`${done}/${todo.length} looked up, ${found} on Steam`); }
-    await sleep(1600);
+    await sleep(ratingOnly ? 300 : 1600);
   }
   await save();
   console.log(`${platform.label}: ${done} looked up, ${found} found on Steam`);
