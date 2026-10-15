@@ -226,6 +226,12 @@ pub fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
     era * 146097 + doe - 719468
 }
 
+/// Whether the launcher runs as the whole session (started by ps5-launcher-session), where
+/// there is no desktop behind it to return to.
+pub fn standalone_session() -> bool {
+    std::env::var_os("PS5_LAUNCHER_SESSION").is_some_and(|v| v == "1")
+}
+
 pub fn fmt_duration(secs: f64) -> String {
     let s = secs.max(0.0) as u64;
     if s < 60 {

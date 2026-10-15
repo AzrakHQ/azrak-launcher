@@ -1,0 +1,5 @@
+#!/bin/sh
+# What an AppImage runs: the launcher inside it. The libraries it loads while it runs (libarchive,
+# libmpv, ALSA) and the tools it starts (xdotool, xrandr) come from the system.
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "$HERE/usr/bin/ps5-launcher" "$@"

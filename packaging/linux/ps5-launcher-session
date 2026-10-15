@@ -1,0 +1,34 @@
+#!/bin/sh
+# Runs PS5 Launcher as the whole session, with no desktop behind it. Display managers list it as
+# the "PS5 Launcher" session (see ps5-launcher-session.desktop); from a text console, run it
+# directly: ps5-launcher-session
+#
+# It starts gamescope, which shows the launcher full screen, and the launcher opens the games in
+# the same gamescope. Everything runs on X11 (through gamescope's XWayland): the launcher
+# switches between itself and a game with xdotool, and lists displays with xrandr.
+set -u
+
+log="${XDG_CACHE_HOME:-$HOME/.cache}/ps5-launcher-session.log"
+mkdir -p "$(dirname "$log")"
+exec >>"$log" 2>&1
+echo "$(date -Is) session starting"
+
+# A copy in ~/.local/bin (from install.sh) wins: the launcher can update that one by itself.
+bin="$HOME/.local/bin/ps5-launcher"
+[ -x "$bin" ] || bin=/usr/bin/ps5-launcher
+
+# Tells the launcher nothing is behind it: its menu then offers Restart and Shut down, not Quit.
+export PS5_LAUNCHER_SESSION=1
+
+if ! command -v gamescope >/dev/null 2>&1; then
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        echo "gamescope is not installed: running the launcher in the current desktop"
+        exec "$bin"
+    fi
+    echo "gamescope is not installed, and there is no desktop to run in: install gamescope"
+    exit 1
+fi
+
+# The launcher and the games open X11 windows, even when a Wayland socket is around.
+exec gamescope -f -- env -u WAYLAND_DISPLAY \
+    SDL_VIDEO_DRIVER=x11 SDL_VIDEODRIVER=x11 QT_QPA_PLATFORM=xcb GDK_BACKEND=x11 "$bin"

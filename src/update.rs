@@ -21,6 +21,9 @@ pub const REPO: &str = match option_env!("PS5_LAUNCHER_REPO") {
 const ASSET: &str = "ps5-launcher-linux-x86_64.tar.gz";
 #[cfg(target_os = "macos")]
 const ASSET: &str = "ps5-launcher-macos-universal.zip";
+/// The release file an AppImage updates itself from.
+#[cfg(target_os = "linux")]
+const ASSET_APPIMAGE: &str = "ps5-launcher-linux-x86_64.AppImage";
 const CHECK_INTERVAL: f64 = 6.0 * 3600.0;
 
 #[derive(Clone, Debug)]
@@ -58,6 +61,23 @@ pub fn refresh_menu_icon() {
         .status();
 }
 
+/// The AppImage file this launcher runs from, if it is one. An AppImage mounts itself and runs the
+/// program inside the mount, so the program's own path is read-only: the file to replace on an
+/// update is the one named by the `APPIMAGE` variable.
+#[cfg(target_os = "linux")]
+fn appimage_path() -> Option<PathBuf> {
+    std::env::var_os("APPIMAGE").map(PathBuf::from).filter(|p| p.is_file())
+}
+
+/// The release file to download: the AppImage when running as one, else the archive.
+fn asset_name() -> &'static str {
+    #[cfg(target_os = "linux")]
+    if appimage_path().is_some() {
+        return ASSET_APPIMAGE;
+    }
+    ASSET
+}
+
 pub fn current_version() -> String {
     std::env::var("PS5_LAUNCHER_PRETEND_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
 }
@@ -74,11 +94,12 @@ pub fn latest_release() -> Result<Release, String> {
     let v = http_json(&format!("https://api.github.com/repos/{REPO}/releases/latest"))?;
     let tag = v["tag_name"].as_str().ok_or("no releases found")?;
     let assets = v["assets"].as_array().cloned().unwrap_or_default();
-    let asset = assets.iter().find(|a| a["name"] == ASSET).ok_or_else(|| format!("this release has no {} build yet", if cfg!(target_os = "macos") { "macOS" } else { "Linux" }))?;
+    let wanted = asset_name();
+    let asset = assets.iter().find(|a| a["name"] == wanted).ok_or_else(|| format!("this release has no {} build yet", if cfg!(target_os = "macos") { "macOS" } else { "Linux" }))?;
     let mut sha256 = asset["digest"].as_str().and_then(|d| d.strip_prefix("sha256:")).unwrap_or("").to_string();
     if sha256.is_empty() {
         // Older releases: a separate .sha256 file.
-        if let Some(u) = assets.iter().find(|a| a["name"] == format!("{ASSET}.sha256")).and_then(|a| a["browser_download_url"].as_str()) {
+        if let Some(u) = assets.iter().find(|a| a["name"] == format!("{wanted}.sha256")).and_then(|a| a["browser_download_url"].as_str()) {
             if let Ok(b) = crate::util::http_get(u) {
                 sha256 = String::from_utf8_lossy(&b).split_whitespace().next().unwrap_or("").to_string();
             }
@@ -124,9 +145,11 @@ pub fn replaceable_exe() -> Result<PathBuf, String> {
     }
     #[cfg(not(target_os = "macos"))]
     {
+        // An AppImage replaces its own file, which sits in a folder the user chose.
+        let exe = appimage_path().unwrap_or(exe);
         let dir = exe.parent().ok_or("no install folder")?;
         if !writable(dir) {
-            return Err(format!("{} is not writable (installed system-wide? re-run the install command with sudo)", dir.display()));
+            return Err(format!("{} is not writable (installed by a package or system-wide? update it with your package manager, or re-run install.sh with sudo)", dir.display()));
         }
         Ok(exe)
     }
@@ -163,7 +186,10 @@ pub fn install(rel: &Release, exe: &Path, progress: &dyn Fn(String, f32)) -> Res
     let cleanup = || {
         let _ = std::fs::remove_dir_all(&work);
     };
-    let archive = work.join(ASSET);
+    let archive = work.join(asset_name());
+    // Running from an AppImage: the download is the new AppImage itself, not an archive.
+    #[cfg(not(target_os = "macos"))]
+    let appimage = appimage_path().is_some_and(|p| p == exe);
     let last = std::cell::Cell::new(101u64);
     let res = crate::kyty::download_file(&rel.url, rel.size, &rel.sha256, &archive, &|done, total| {
         let pct = if total > 0 { done * 100 / total } else { 0 };
@@ -186,7 +212,9 @@ pub fn install(rel: &Release, exe: &Path, progress: &dyn Fn(String, f32)) -> Res
         (ok, new_app, bin)
     };
     #[cfg(not(target_os = "macos"))]
-    let (ok, new_item, new_bin) = {
+    let (ok, new_item, new_bin) = if appimage {
+        (true, archive.clone(), archive.clone())
+    } else {
         let ok = Command::new("tar").arg("-xzf").arg(&archive).arg("-C").arg(&work).status().is_ok_and(|s| s.success());
         let bin = work.join("ps5-launcher-linux-x86_64").join("ps5-launcher");
         (ok, bin.clone(), bin)
@@ -196,7 +224,9 @@ pub fn install(rel: &Release, exe: &Path, progress: &dyn Fn(String, f32)) -> Res
         return Err("could not unpack the update".into());
     }
     // The new binary must run here and report the expected version.
-    let out = Command::new(&new_bin).arg("--version").env_remove("PS5_LAUNCHER_PRETEND_VERSION").output();
+    let _ = std::fs::set_permissions(&new_bin, std::fs::Permissions::from_mode(0o755));
+    // For an AppImage, extract-and-run: the machine may lack FUSE, and the file is only being tried.
+    let out = Command::new(&new_bin).arg("--version").env_remove("PS5_LAUNCHER_PRETEND_VERSION").env("APPIMAGE_EXTRACT_AND_RUN", "1").output();
     let reported = out.ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
     if !reported.ends_with(&rel.version) {
         cleanup();

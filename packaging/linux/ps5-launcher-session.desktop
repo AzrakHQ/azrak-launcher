@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=PS5 Launcher
+Comment=PS5 Launcher as the whole session, without a desktop
+Exec=/usr/bin/ps5-launcher-session
+DesktopNames=PS5-Launcher

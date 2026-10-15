@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=PS5 Launcher
+GenericName=Game Launcher
+Comment=PlayStation 5 style game launcher
+Exec=ps5-launcher
+Icon=ps5-launcher
+Terminal=false
+Categories=Game;
+Keywords=ps5;playstation;kyty;emulator;games;
+StartupWMClass=ps5-launcher

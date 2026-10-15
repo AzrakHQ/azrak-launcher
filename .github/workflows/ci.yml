@@ -59,6 +59,39 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  # The packages built from the Linux binary above, one job and one artifact for each, so a wrong
+  # file list or dependency fails here and not when a release is made.
+  linux-packages:
+    name: linux-packages (${{ matrix.format }})
+    needs: linux
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        format: [deb, rpm, archlinux, appimage]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ps5-launcher-linux-x86_64
+      - run: tar -xzf ps5-launcher-linux-x86_64.tar.gz
+      - id: version
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/linux-packages
+        with:
+          binary: ps5-launcher
+          version: ${{ steps.version.outputs.version }}
+          format: ${{ matrix.format }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ps5-launcher-${{ matrix.format }}
+          path: dist/packages/*
+          if-no-files-found: error
+          retention-days: 3
+
   macos:
     name: macos (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
@@ -133,7 +166,7 @@ jobs:
   # One stable name to require in branch protection.
   ci:
     if: always()
-    needs: [linux, macos, macos-bundle]
+    needs: [linux, linux-packages, macos, macos-bundle]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

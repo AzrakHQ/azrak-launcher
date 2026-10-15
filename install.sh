@@ -102,19 +102,8 @@ cd "$HERE"
 mkdir -p "$BIN_DIR" "$APPS_DIR" "$ICON_DIR"
 install -m 755 "$BIN_SRC" "$BIN_DIR/$APP"
 install -m 644 "assets/$APP.svg" "$ICON_DIR/$APP.svg"
-cat > "$APPS_DIR/$APP.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=PS5 Launcher
-GenericName=Game Launcher
-Comment=PlayStation 5 style game launcher
-Exec=$BIN_DIR/$APP
-Icon=$APP
-Terminal=false
-Categories=Game;
-Keywords=ps5;playstation;kyty;emulator;games;
-StartupWMClass=$APP
-EOF
+# The same menu entry the Linux packages install, with the full path of the binary.
+sed "s|^Exec=.*|Exec=$BIN_DIR/$APP|" "packaging/linux/$APP.desktop" > "$APPS_DIR/$APP.desktop"
 ok "Binary      $BIN_DIR/$APP"
 ok "Menu entry  $APPS_DIR/$APP.desktop"
 if [ "$AUTOSTART" = 1 ]; then

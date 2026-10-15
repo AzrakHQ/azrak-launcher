@@ -1,0 +1,81 @@
+# Builds the Linux packages (deb, rpm, Arch) with nfpm: https://nfpm.goreleaser.com
+#
+#   VERSION=1.15.0 BINARY=target/release/ps5-launcher nfpm package -f packaging/linux/nfpm.yaml -p deb -t dist/
+#
+# Run it from the repository root. The binary is the prebuilt release binary; nothing is compiled.
+# The launcher loads libarchive, libmpv and ALSA while it runs, so those are listed here
+# even though the binary does not link them.
+name: ps5-launcher
+arch: amd64
+platform: linux
+version: ${VERSION}
+version_schema: semver
+section: games
+priority: optional
+maintainer: PS5 Launcher <https://github.com/MohamedAliRashad/ps5-launcher>
+homepage: https://github.com/MohamedAliRashad/ps5-launcher
+license: Apache-2.0
+description: |
+  PS5-style game launcher.
+  Browse PS5 and PS4 games, download and install them, and play them with the KytyPS5 and
+  shadPS4 emulators. Works in a desktop (KDE, GNOME and others) and, with gamescope, as its own
+  session without a desktop: choose "PS5 Launcher" at the login screen.
+
+contents:
+  - src: ${BINARY}
+    dst: /usr/bin/ps5-launcher
+    expand: true
+    file_info:
+      mode: 0755
+  - src: packaging/linux/ps5-launcher-session
+    dst: /usr/bin/ps5-launcher-session
+    file_info:
+      mode: 0755
+  - src: packaging/linux/ps5-launcher.desktop
+    dst: /usr/share/applications/ps5-launcher.desktop
+  - src: packaging/linux/ps5-launcher-session.desktop
+    dst: /usr/share/wayland-sessions/ps5-launcher.desktop
+  - src: assets/ps5-launcher.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/ps5-launcher.svg
+  - src: README.md
+    dst: /usr/share/doc/ps5-launcher/README.md
+
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.35)
+      - libfontconfig1
+      - libxkbcommon0
+      - libarchive13 | libarchive13t64
+      - xdotool
+      - x11-xserver-utils
+    recommends:
+      - gamescope
+      - libmpv2
+      - yt-dlp
+      - libasound2 | libasound2t64
+  rpm:
+    depends:
+      - glibc >= 2.35
+      - fontconfig
+      - libxkbcommon
+      - libarchive
+      - xdotool
+      - xrandr
+    recommends:
+      - gamescope
+      - mpv-libs
+      - yt-dlp
+      - alsa-lib
+  archlinux:
+    depends:
+      - fontconfig
+      - libxkbcommon
+      - libarchive
+      - xdotool
+      - xorg-xrandr
+    suggests:
+      - gamescope
+      - mpv
+      - yt-dlp
+      - alsa-lib

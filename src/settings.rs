@@ -323,8 +323,9 @@ impl App {
         }
 
         header(&mut rows, "");
-        if crate::system::on_os() {
-            // The launcher is the whole screen here: quitting it would only start it again.
+        if crate::system::on_os() || util::standalone_session() {
+            // The launcher is the whole screen here (PS5 Launcher OS, or its own session): quitting
+            // it would only start it again, or leave nothing behind it.
             rows.push((SId::Restart, row(4, "Restart")));
             let mut r = row(4, "Shut down");
             r.danger = true;

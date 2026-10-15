@@ -1,0 +1,72 @@
+name: Linux packages
+description: Build the deb, rpm and Arch packages (nfpm) and the AppImage from a built binary, all or one format
+inputs:
+  binary:
+    description: Path of the release binary
+    required: true
+  version:
+    description: Package version, without a leading v (for example 1.15.0)
+    required: true
+  output:
+    description: Folder the packages are written to
+    default: dist/packages
+  format:
+    description: all, or one of deb, rpm, archlinux, appimage
+    default: all
+runs:
+  using: composite
+  steps:
+    - name: Install nfpm
+      if: inputs.format != 'appimage'
+      shell: bash
+      env:
+        # Pinned with its checksum. Dependabot does not follow this, so update both by hand.
+        NFPM_VERSION: 2.47.0
+        NFPM_SHA256: 0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783
+      run: |
+        curl -fsSL -o "$RUNNER_TEMP/nfpm.tar.gz" \
+          "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+        echo "$NFPM_SHA256  $RUNNER_TEMP/nfpm.tar.gz" | sha256sum -c -
+        tar -xzf "$RUNNER_TEMP/nfpm.tar.gz" -C "$RUNNER_TEMP" nfpm
+    - name: Build the packages
+      if: inputs.format != 'appimage'
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        BINARY: ${{ inputs.binary }}
+        OUTPUT: ${{ inputs.output }}
+        FORMAT: ${{ inputs.format }}
+      run: |
+        mkdir -p "$OUTPUT"
+        packagers=(deb rpm archlinux)
+        [ "$FORMAT" = all ] || packagers=("$FORMAT")
+        for packager in "${packagers[@]}"; do
+          "$RUNNER_TEMP/nfpm" package -f packaging/linux/nfpm.yaml -p "$packager" -t "$OUTPUT"
+        done
+        ls -la "$OUTPUT"
+    - name: Build the AppImage
+      if: inputs.format == 'all' || inputs.format == 'appimage'
+      shell: bash
+      env:
+        BINARY: ${{ inputs.binary }}
+        OUTPUT: ${{ inputs.output }}
+      run: packaging/linux/build-appimage.sh "$BINARY" "$OUTPUT"
+    - name: Check the packages
+      if: inputs.format != 'appimage'
+      shell: bash
+      env:
+        OUTPUT: ${{ inputs.output }}
+      run: |
+        sudo apt-get install -y --no-install-recommends rpm >/dev/null
+        packaging/linux/check-packages.sh "$OUTPUT"
+    - name: Check the AppImage
+      if: inputs.format == 'all' || inputs.format == 'appimage'
+      shell: bash
+      env:
+        OUTPUT: ${{ inputs.output }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        # The AppImage starts and reports the version. Extract-and-run: the runner may lack FUSE.
+        reported=$(APPIMAGE_EXTRACT_AND_RUN=1 "$OUTPUT/ps5-launcher-linux-x86_64.AppImage" --version)
+        echo "AppImage: $reported"
+        case "$reported" in *"$VERSION") ;; *) echo "the AppImage reports the wrong version" >&2; exit 1 ;; esac

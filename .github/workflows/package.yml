@@ -58,14 +58,23 @@ jobs:
           mkdir -p "dist/$NAME/assets"
           cp target/release/ps5-launcher install.sh README.md "dist/$NAME/"
           cp assets/ps5-launcher.svg "dist/$NAME/assets/"
+          mkdir -p "dist/$NAME/packaging/linux"
+          cp packaging/linux/ps5-launcher.desktop "dist/$NAME/packaging/linux/"
           node scripts/package-licenses.mjs "dist/$NAME" --allow-upstream
           tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
           (cd dist && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
           ls -la dist
+      - id: version
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/linux-packages
+        with:
+          binary: target/release/ps5-launcher
+          version: ${{ steps.version.outputs.version }}
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" "dist/$NAME.tar.gz" "dist/$NAME.tar.gz.sha256" --clobber
+        run: |
+          gh release upload "$TAG" "dist/$NAME.tar.gz" "dist/$NAME.tar.gz.sha256" dist/packages/* --clobber
 
   # One universal app bundle (Apple Silicon + Intel).
   macos-universal:

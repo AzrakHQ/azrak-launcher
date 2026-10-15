@@ -36,6 +36,44 @@ sudo apt install xdotool mpv libarchive13
 
 To uninstall: `./ps5-launcher-linux-x86_64/install.sh --uninstall`
 
+### Or install a package
+
+Each release has a package for your distribution (download it from the
+[Releases page](https://github.com/MohamedAliRashad/ps5-launcher/releases/latest)). It adds PS5
+Launcher to the app menu of KDE, GNOME and other desktops, and pulls in the libraries it needs.
+
+```bash
+sudo apt install ./ps5-launcher_*_amd64.deb           # Ubuntu, Debian, Mint
+sudo dnf install ./ps5-launcher-*.x86_64.rpm          # Fedora
+sudo pacman -U ps5-launcher-*-x86_64.pkg.tar.zst      # Arch
+```
+
+The package manager updates a packaged launcher, not the launcher itself.
+
+### Or use the AppImage
+
+One file that runs on most distributions, with nothing to install. Download
+`ps5-launcher-linux-x86_64.AppImage` from the Releases page, then:
+
+```bash
+chmod +x ps5-launcher-linux-x86_64.AppImage && ./ps5-launcher-linux-x86_64.AppImage
+```
+
+Most distributions need FUSE 2 for AppImages (`sudo apt install libfuse2` on Ubuntu; without it,
+run it as `APPIMAGE_EXTRACT_AND_RUN=1 ./ps5-launcher-linux-x86_64.AppImage`). Install the helpers
+from above (`xdotool`, `mpv`, `libarchive`) on the system. An AppImage updates itself: it
+replaces its own file, so keep it in a folder you can write to.
+
+### Or run it as the whole screen, with no desktop
+
+The package also adds a login session called **PS5 Launcher**. Install
+[gamescope](https://github.com/ValveSoftware/gamescope) (`sudo dnf install gamescope`, `sudo pacman -S gamescope`;
+Ubuntu 24.04 does not ship it), log out, and choose **PS5 Launcher** at the login screen. The
+launcher then fills the screen and is the only thing running, like a game console. On a PC
+without a desktop, run `ps5-launcher-session` from a text console. In this session Settings
+offers **Restart** and **Shut down**. To log in to it by itself, see
+[packaging/linux/README.md](packaging/linux/README.md).
+
 ## macOS
 
 macOS 11 or later, Apple Silicon or Intel. KytyPS5's macOS build is x86-64 (with its own copy of MoltenVK for Vulkan), so on Apple Silicon it runs through
