@@ -362,10 +362,11 @@ dropped; players need no account for any artwork.
 
 **Installing** ([installer.rs](../src/installer.rs) `install_pc`) unpacks the release's archives,
 or copies the folder. Those are the archives at its top or in a folder at its top (each volume
-set, `game.rar` + `game.r00`… or `game.part1.rar`…, as one). An archive is unpacked when it
-holds something that starts a game (a program, AppImage or script, read by its first bytes while
-inspecting it), or when nothing beside it could; otherwise it's the game's data and is copied as
-it is (`data.tar` next to `game.x86_64`, or next to the `start.sh` that reads it). GOG Linux installers (a shell script with a zip appended) are read
+set, `game.rar` + `game.r00`… or `game.part1.rar`…, as one). What sits beside an archive
+decides: nothing that could start the game, it's the release's packaging (unpacked); a program
+(native, `.exe`, AppImage), it's the game's data (copied as it is, helper scripts in it or not);
+only a start script, it's unpacked if it holds a program (read by first bytes while inspecting
+it: the script starts it), else it's the data the script reads. GOG Linux installers (a shell script with a zip appended) are read
 as that zip by libarchive; the script never runs. Symlinks in archives are kept only when they
 stay inside the game (relative, not climbing above its folder); others fail the install.
 Torrents drop the executable flag, so every ELF program, `#!` script and AppImage is made
