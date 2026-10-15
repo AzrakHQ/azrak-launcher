@@ -13,10 +13,8 @@ on:
         description: Build the installer ISO and attach it to the latest release
         type: boolean
         default: true
-  # After a launcher release is packaged, so the image seeds the new version.
-  workflow_run:
-    workflows: [Release]
-    types: [completed]
+  # Called by release.yml once a launcher release is published, so the image seeds the new version.
+  workflow_call:
   schedule:
     - cron: "30 5 * * *"
 
@@ -30,7 +28,6 @@ concurrency:
 
 jobs:
   image:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -139,7 +136,8 @@ jobs:
     needs: image
     # Only when asked or after a release: the ISO installs the current image, so it doesn't
     # need rebuilding with every image update.
-    if: github.event_name == 'workflow_run' || (github.event_name == 'workflow_dispatch' && inputs.iso)
+    # A called workflow sees the caller's event, so "push" here means a release was just published.
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.iso)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

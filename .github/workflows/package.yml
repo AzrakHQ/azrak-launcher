@@ -1,0 +1,101 @@
+name: Package
+
+# Builds the release binaries for a tag and attaches them to its (draft) release.
+# Called by release.yml; it can also be run by hand to rebuild the files of a release made after this
+# workflow was added (it needs the helper actions and scripts that older commits don't have).
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      ref:
+        description: Commit to build
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v1.13.0)
+        required: true
+        type: string
+      ref:
+        description: Commit or tag to build
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag }}
+  # The built app checks this repository for updates (a fork follows its own releases).
+  PS5_LAUNCHER_REPO: ${{ github.repository }}
+
+jobs:
+  linux-x86_64:
+    # Ubuntu 22.04 (glibc 2.35) so the binary runs on most distros from the last few years.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      NAME: ps5-launcher-linux-x86_64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - uses: ./.github/actions/rust-setup
+        with:
+          cache-key: release
+      - run: cargo test --release --locked
+      - run: cargo build --release --locked
+      - name: Package
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node --test scripts/package-licenses.test.mjs
+          mkdir -p "dist/$NAME/assets"
+          cp target/release/ps5-launcher install.sh README.md "dist/$NAME/"
+          cp assets/ps5-launcher.svg "dist/$NAME/assets/"
+          node scripts/package-licenses.mjs "dist/$NAME" --allow-upstream
+          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+          (cd dist && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
+          ls -la dist
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "dist/$NAME.tar.gz" "dist/$NAME.tar.gz.sha256" --clobber
+
+  # One universal app bundle (Apple Silicon + Intel).
+  macos-universal:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      - uses: ./.github/actions/rust-setup
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          cache-key: macos-release
+      - run: brew install libarchive sevenzip librsvg
+      - run: cargo test --release --locked --target aarch64-apple-darwin
+      - name: Build both architectures
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+      - name: Bundle
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          packaging/macos/bundle.sh \
+            target/aarch64-apple-darwin/release/ps5-launcher \
+            target/x86_64-apple-darwin/release/ps5-launcher \
+            dist
+          ls -la dist
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/ps5-launcher-macos-universal.zip dist/ps5-launcher-macos-universal.zip.sha256 --clobber

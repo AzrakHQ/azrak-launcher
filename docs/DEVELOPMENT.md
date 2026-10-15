@@ -367,6 +367,23 @@ Not verified on real hardware, so check these first when something misbehaves on
 Forks can build with `PS5_LAUNCHER_REPO=owner/name` to follow their own releases (the release
 workflow sets it to the repository it runs in).
 
+## Releases
+
+Releases are automated with [Release Please](https://github.com/googleapis/release-please)
+(`.github/release-please-config.json`, `.github/release-please-manifest.json`, `.github/workflows/release.yml`, `package.yml`).
+
+1. Write commit messages (or squash-merge titles) as [Conventional Commits](https://www.conventionalcommits.org):
+   `fix:` bumps the patch version, `feat:` the minor, and `feat!:` or a `BREAKING CHANGE:` footer the major.
+2. Release Please keeps a release pull request open on `main` with the new version in
+   `Cargo.toml` / `Cargo.lock` and the `CHANGELOG.md` entry.
+3. Merging it creates a draft release and tag. The same workflow builds the Linux tarball and the
+   universal macOS app, attaches them with their `.sha256` files, and then publishes the release.
+   The launcher's updater only ever sees published releases, so they always have their binaries.
+
+One-time repository setting: *Settings → Actions → General → Allow GitHub Actions to create and
+approve pull requests*. Checks don't run on the release pull request itself (GitHub doesn't start
+workflows from the workflow token's events); the release workflow runs the tests before it builds.
+
 ## Tests
 
 `cargo test --offline` runs the launcher unit tests; this is a binary crate,

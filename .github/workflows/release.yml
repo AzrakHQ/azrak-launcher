@@ -1,50 +1,65 @@
 name: Release
 
-# Builds on Ubuntu 22.04 (glibc 2.35) so the binary runs on most distros from the last few years,
-# and attaches a ready-to-install archive to the published GitHub release.
+# Release Please keeps a release pull request open on main. It collects the Conventional Commit
+# messages since the last release, bumps the version in Cargo.toml / Cargo.lock and writes
+# CHANGELOG.md. Merging that pull request creates a *draft* release and tag; package.yml then
+# builds the Linux and macOS binaries and attaches them, and only then is the release published.
+# The app's self-updater reads the latest published release, so it never sees one without binaries.
+#
+# Packaging is a called workflow, not an `on: release` one, because GitHub doesn't start workflows
+# from events its own workflow token causes.
 on:
-  release:
-    types: [published]
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Release tag to build and upload to (e.g. v1.0.0)
-        required: true
+  push:
+    branches: [main]
 
 permissions:
   contents: write
+  pull-requests: write
+  packages: write   # for os.yml, which pushes the OS images
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  linux-x86_64:
-    runs-on: ubuntu-22.04
-    env:
-      TAG: ${{ github.event.release.tag_name || inputs.tag }}
-      NAME: ps5-launcher-linux-x86_64
+  release-please:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      created: ${{ steps.rp.outputs.release_created }}
+      tag: ${{ steps.rp.outputs.tag_name }}
+      sha: ${{ steps.rp.outputs.sha }}
     steps:
-      - uses: actions/checkout@v5
+      - id: rp
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          ref: ${{ env.TAG }}
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install system packages
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev
-      - uses: Swatinem/rust-cache@v2
-      - name: Test
-        run: cargo test --release --locked
-      - name: Build
-        run: cargo build --release --locked
-      - name: Package
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          node --test scripts/package-licenses.test.mjs
-          mkdir -p "dist/$NAME/assets"
-          cp target/release/ps5-launcher install.sh README.md "dist/$NAME/"
-          cp assets/ps5-launcher.svg "dist/$NAME/assets/"
-          node scripts/package-licenses.mjs "dist/$NAME" --allow-upstream
-          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
-          (cd dist && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
-          ls -la dist
-      - name: Upload to the release
+          # Pull requests opened with the default token don't start CI. To get checks on the
+          # release pull request, add a personal access token (or GitHub App token) as the
+          # RELEASE_PLEASE_TOKEN secret.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: .github/release-please-config.json
+          manifest-file: .github/release-please-manifest.json
+
+  package:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    uses: ./.github/workflows/package.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag }}
+      ref: ${{ needs.release-please.outputs.sha }}
+
+  publish:
+    needs: [release-please, package]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" "dist/$NAME.tar.gz" "dist/$NAME.tar.gz.sha256" --clobber
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "${{ needs.release-please.outputs.tag }}" --draft=false
+
+  # The OS image and ISO take the Linux tarball of the release that was just published.
+  os:
+    needs: publish
+    uses: ./.github/workflows/os.yml

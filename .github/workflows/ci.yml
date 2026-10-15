@@ -1,18 +1,143 @@
 name: CI
 
+# Pull requests and main. Checks use the `ci` profile (see Cargo.toml): release optimization
+# without LTO, which removes the link step that dominates a warm-cache build. The release
+# workflow builds the full release profile.
+#
+# Each platform is built and unit-tested natively, then the binary is run (`--version`). macOS
+# also bundles the two architectures into a universal app. Runners have no GPU or controller, so
+# nothing here opens a window or plays a game.
+# No path filters: the `ci` job below is a required check, and a filtered-out workflow would leave
+# it pending forever on a docs-only pull request. The dependency cache keeps those runs cheap.
 on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Explicit bash enables pipefail, so a failing cargo isn't hidden by `| tee`.
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  build:
+  linux:
     runs-on: ubuntu-22.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install system packages
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --locked
-      - run: cargo test --release --locked
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/rust-setup
+      - run: cargo build --profile ci --locked 2>&1 | tee build.log
+      - run: cargo test --profile ci --locked 2>&1 | tee test.log
+      - run: node --test scripts/package-licenses.test.mjs
+      - name: Smoke test the binary
+        run: scripts/smoke-test.sh target/ci/ps5-launcher
+      - if: failure()
+        uses: ./.github/actions/report-failures
+        with:
+          logs: build.log test.log
+      # Packed as a tarball so the download keeps the executable bit and has a recognisable type.
+      - name: Pack the binary
+        run: tar -czf ps5-launcher-linux-x86_64.tar.gz -C target/ci ps5-launcher
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ps5-launcher-linux-x86_64
+          path: ps5-launcher-linux-x86_64.tar.gz
+          if-no-files-found: error
+          retention-days: 3
+
+  macos:
+    name: macos (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Each architecture is tested on a runner of its own kind, not under emulation.
+          - { target: aarch64-apple-darwin, runner: macos-14 }
+          - { target: x86_64-apple-darwin, runner: macos-15-intel }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/rust-setup
+        with:
+          targets: ${{ matrix.target }}
+          cache-key: macos-${{ matrix.target }}
+      - run: cargo build --profile ci --locked --target ${{ matrix.target }} 2>&1 | tee build.log
+      - name: Install tools the tests use
+        run: brew install libarchive sevenzip
+      - run: cargo test --profile ci --locked --target ${{ matrix.target }} 2>&1 | tee test.log
+      - name: Smoke test the binary
+        run: scripts/smoke-test.sh target/${{ matrix.target }}/ci/ps5-launcher
+      - if: failure()
+        uses: ./.github/actions/report-failures
+        with:
+          logs: build.log test.log
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ps5-launcher-${{ matrix.target }}
+          path: target/${{ matrix.target }}/ci/ps5-launcher
+          if-no-files-found: error
+          retention-days: 3
+
+  macos-bundle:
+    needs: macos
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The app icon is made from the SVG with rsvg-convert (iconutil ships with macOS).
+      - run: brew install librsvg
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: ps5-launcher-*-apple-darwin
+          path: bin
+      - name: Bundle the universal app and check it
+        run: |
+          chmod +x bin/*/ps5-launcher
+          SKIP_LICENSES=1 packaging/macos/bundle.sh \
+            bin/ps5-launcher-aarch64-apple-darwin/ps5-launcher \
+            bin/ps5-launcher-x86_64-apple-darwin/ps5-launcher \
+            dist
+          app="dist/ps5-launcher-macos-universal/PS5 Launcher.app/Contents/MacOS/ps5-launcher"
+          lipo -archs "$app" | grep -q arm64
+          lipo -archs "$app" | grep -q x86_64
+          test -f "dist/ps5-launcher-macos-universal/PS5 Launcher.app/Contents/Resources/ps5-launcher.icns"
+          scripts/smoke-test.sh "$app"
+      # The app is zipped with ditto, which keeps its permissions (a plain artifact zip would drop
+      # the executable bit). Download the artifact, unzip it once, then unzip this file.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: PS5-Launcher-macos-universal-app
+          path: dist/ps5-launcher-macos-universal.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  # One stable name to require in branch protection.
+  ci:
+    if: always()
+    needs: [linux, macos, macos-bundle]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Every job passed
+        run: |
+          echo '${{ toJSON(needs.*.result) }}'
+          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = false ]

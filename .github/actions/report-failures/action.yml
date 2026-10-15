@@ -1,0 +1,20 @@
+name: Report failures
+description: Copy compiler errors and failed tests from build logs into annotations, so they show without opening the job log.
+inputs:
+  logs:
+    description: Space-separated log files
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        for f in ${{ inputs.logs }}; do
+          [ -f "$f" ] || continue
+          # Colour codes would hide line starts from the pattern. grep exits 1 on no match; that's fine.
+          msg=$(sed $'s/\x1b\\[[0-9;]*m//g' "$f" | grep -E -B1 -A12 '^error|panicked at|^---- ' | head -c 30000 || true)
+          [ -n "$msg" ] || continue
+          msg="${msg//'%'/'%25'}"; msg="${msg//$'\n'/'%0A'}"; msg="${msg//$'\r'/'%0D'}"
+          echo "::error title=$f::$msg"
+        done
+        exit 0

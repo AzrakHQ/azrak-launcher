@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "rust",
+      "package-name": "ps5-launcher",
+      "include-component-in-tag": false,
+      "draft": true,
+      "bump-minor-pre-major": false,
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}
