@@ -131,7 +131,9 @@ which answer plain requests: the forum's Atom feed (`feed.rutracker.cc/atom/f/<f
 titles of new and re-uploaded releases from the last 1–4 weeks) and the API
 (`api.rutracker.cc/v1/static/pvc/f/<forum>`, every release's hash, size and peers).
 [api.mjs](api.mjs) applies only the API to an existing catalog. Topics the API no longer lists
-are dropped, unless it answered for under 80% of the catalog. Then
+are dropped, unless it answered for under 80% of the catalog. A new topic has no details (its
+page isn't read), so it borrows the game's facts (title ID, genre, developer, cover) from another
+release of the same game; it's marked `borrowed`, and the browser collector still reads its own. Then
 `translate.mjs --from-original` translates the new strings, and
 [publish-catalog.sh](publish-catalog.sh) pushes everything to the `catalog` branch the launcher
 downloads. [.github/workflows/catalog.yml](../../.github/workflows/catalog.yml) runs these daily.

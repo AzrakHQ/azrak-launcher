@@ -25,6 +25,8 @@ pub fn req_file(p: &std::path::Path, w: u32) -> ImgReq {
 }
 
 const COVER_CROP: f32 = 0.0; // RuTracker artwork has no uniform banner to crop.
+/// `bg_key` while the backdrop is plain (the game has no artwork).
+const NO_BACKDROP: &str = "-";
 
 fn yt_art(id: &str) -> Option<ImgReq> {
     (!id.is_empty()).then(|| req_url(&format!("https://i.ytimg.com/vi/{id}/maxresdefault.jpg"), 1920, 0.0)).flatten()
@@ -440,7 +442,18 @@ impl App {
     /// Crossfade the backdrop to `req`, with a stand-in image (usually already on disk) to show
     /// while `req` downloads.
     pub fn want_background_or(&mut self, req: Option<ImgReq>, force: bool, standin: Option<ImgReq>) {
-        let Some(r) = req else { return };
+        // No background art (or it can't be downloaded): its cover, else a plain backdrop, never
+        // the previous game's art.
+        let usable = |r: Option<ImgReq>| r.filter(|r| !self.images.has_failed(&r.key));
+        let (req, standin) = match usable(req) { Some(r) => (Some(r), standin), None => (usable(standin), None) };
+        let Some(r) = req else {
+            if self.bg_key != NO_BACKDROP {
+                self.images.cancel_unless(|j| j.prio != prio::HERO || j.max_w < 1000);
+                self.bg_standin = None;
+                self.apply_bg(NO_BACKDROP.into(), Image::default());
+            }
+            return;
+        };
         if r.key == self.bg_key && !force {
             return;
         }
@@ -505,6 +518,13 @@ impl App {
         if self.bg_pending.as_deref() == Some(key) {
             if let Some(img) = self.images.get(key) {
                 self.apply_bg(key.to_string(), img);
+            } else if self.images.has_failed(key) {
+                // The background couldn't be downloaded: keep the cover standing in for it, or
+                // go plain rather than leave the previous game's art.
+                self.bg_pending = None;
+                if !self.bg_key.is_empty() {
+                    self.apply_bg(NO_BACKDROP.into(), Image::default());
+                }
             }
         }
         if let Some(i) = self.tile_keys.iter().position(|k| k == key) {

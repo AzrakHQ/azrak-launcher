@@ -350,3 +350,21 @@ test('a miss searched under an older cleaned name is looked up again', async () 
   assert.equal(due({ title, steam: { appid: null, query: 'Mafia III: Definitive Edition (v.build 25654741', checked_at } }, now), true);
   assert.equal(due({ title, steam: { appid: null, query: 'Mafia III: Definitive Edition', checked_at } }, now), false);
 });
+
+test('a release without details borrows the game facts of another release of the same game', async () => {
+  const { borrowDetails } = await import('./refresh.mjs');
+  const donor = { id: '6910307', title: '[PS5] Little Nightmares Enhanced Complete Edition [EUR / RUS / ENG / v01.004.000 / Retail / FPKG]',
+    url: 'https://rutracker.net/forum/viewtopic.php?t=6910307', game_info_status: 'available',
+    game_info: { source_url: 'https://rutracker.net/forum/viewtopic.php?t=6910307', title_id: 'PPSA10737', genre: 'Horror, Puzzle',
+      developer: 'Tarsier Studios', image_urls: ['https://example.org/cover.jpg'], version: 'v01.004.000', region: 'EUR', format: 'PKG (FPKG)',
+      interface_languages: 'Русский, Английский', fields: { 'Регион': 'EUR' } } };
+  const fresh = { id: '6921989', title: '[PS5] Little Nightmares Enhanced Complete Edition [RUS / EUR / 01.004 / Retail / exfat] [10.1 GB]',
+    url: 'https://rutracker.net/forum/viewtopic.php?t=6921989', game_info: null, game_info_status: 'not_collected' };
+  const other = { id: '1', title: '[PS5] Little Nightmares II [EUR]', url: 'u', game_info: null, game_info_status: 'not_collected' };
+  assert.equal(borrowDetails([donor, fresh, other]), 1);
+  assert.deepEqual(fresh.game_info, { source_url: 'https://rutracker.net/forum/viewtopic.php?t=6921989', borrowed_from: '6910307',
+    title_id: 'PPSA10737', genre: 'Horror, Puzzle', developer: 'Tarsier Studios', image_urls: ['https://example.org/cover.jpg'] });
+  assert.equal(fresh.game_info_status, 'borrowed', 'the collector still reads its own details');
+  assert.equal(other.game_info, null, 'another game');
+  assert.equal(borrowDetails([donor, fresh, other]), 0, 'only once');
+});
