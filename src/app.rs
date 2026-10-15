@@ -581,6 +581,8 @@ impl App {
     }
 
     pub fn set_catalog(&mut self, games: Vec<Game>) {
+        let downloaded: HashSet<i64> = self.downloads.snapshot().iter().map(|job| job.topic).collect();
+        let games: Vec<Game> = games.into_iter().filter(|g| listed(g, &downloaded)).collect();
         let today = (util::now_secs() / 86400.0) as i64;
         let mut out = Vec::with_capacity(games.len());
         for g in games {
@@ -2828,6 +2830,12 @@ fn emulator_version(platform: crate::platform::Platform, kyty: &std::path::Path)
     }
 }
 
+/// Whether the Library lists a release. PS5 PKG packages can't be installed (KytyPS5 runs
+/// extracted games), so they aren't, except one you're downloading or have downloaded.
+fn listed(g: &Game, downloaded: &HashSet<i64>) -> bool {
+    !g.is_pkg() || downloaded.contains(&g.id)
+}
+
 /// Finds the catalog release an installed game is: a PC game by the topic it was installed from,
 /// a PlayStation game by title ID, else by name, on the same platform only (a PC and a PS5
 /// game of the same name are different games).
@@ -2864,6 +2872,16 @@ impl CatalogIndex {
 mod catalog_index_tests {
     use super::*;
     use crate::platform::Platform;
+
+    #[test]
+    fn ps5_pkg_releases_are_not_listed_unless_downloaded() {
+        let release = |id: i64, title: &str, platform: Platform| crate::catalog::Game { id, title: title.into(), platform, ..Default::default() };
+        let none = HashSet::new();
+        assert!(!listed(&release(1, "[PS5] Diablo II: Resurrected [EUR / v01.039.000 / Retail / FPKG] [35.21 GB]", Platform::Ps5), &none));
+        assert!(listed(&release(2, "[PS5] Stray [EUR / folder]", Platform::Ps5), &none));
+        assert!(listed(&release(3, "[PS4] Firewatch [EUR / PKG]", Platform::Ps4), &none), "PS4 PKGs install");
+        assert!(listed(&release(1, "[PS5] Diablo II: Resurrected [FPKG]", Platform::Ps5), &HashSet::from([1])), "already downloaded");
+    }
 
     #[test]
     fn installed_games_match_releases_of_their_own_platform() {
