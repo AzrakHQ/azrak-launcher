@@ -1,7 +1,7 @@
 //! Game sessions: launch, detect, stop and switch between games and the launcher (Steam-style).
 //! Any kyty_emulator process is detected, including ones started outside the launcher.
 
-use crate::config::Config;
+use crate::config::{Config, VIDEO_OUT_MODES};
 use crate::library::LocalGame;
 use crate::util::{atomic_write, cache_dir, config_dir, now_secs};
 use serde::{Deserialize, Serialize};
@@ -301,6 +301,33 @@ fn parse_ps_line(line: &str) -> Option<(u32, f64, &str)> {
     Some((pid.parse().ok()?, parse_etime(etime)?, command.trim_start()))
 }
 
+/// The command line KytyPS5 gets for a game. The window size (--screen-width and --screen-height)
+/// only sizes the window; --video-out-resolution is what the game is told its screen is. Extra
+/// arguments come last, so they can override the rest.
+fn kyty_args(cfg: &Config, game: &str) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "--game".into(),
+        game.to_string(),
+        "--screen-width".into(),
+        cfg.width.to_string(),
+        "--screen-height".into(),
+        cfg.height.to_string(),
+        "--present-mode".into(),
+        cfg.present_mode.clone(),
+        "--video-out-resolution".into(),
+        // A value the launcher does not know (a hand-edited settings file) falls back to the default.
+        VIDEO_OUT_MODES.iter().find(|(k, _)| *k == cfg.video_out).map_or(VIDEO_OUT_MODES[0].0, |(k, _)| *k).to_string(),
+    ];
+    if cfg.fullscreen {
+        args.push("--fullscreen".into());
+    }
+    if cfg.amd_cpu {
+        args.push("--amd-cpu".into());
+    }
+    args.extend(shell_split(&cfg.extra_args));
+    args
+}
+
 /// The game path from an emulator's command line; None unless it is the emulator running a game.
 /// `ps` joins the arguments with spaces, so a path containing spaces ends at the next " --" option.
 #[cfg(any(target_os = "macos", test))]
@@ -487,23 +514,7 @@ impl Sessions {
             return Err(format!("Emulator not found or not executable:\n{}", cfg.emulator_path().display()));
         }
         let emu = if ps4 { cfg.shad_path() } else { cfg.emulator_path() };
-        let mut args: Vec<String> = vec![
-            "--game".into(),
-            game.path.to_string_lossy().into_owned(),
-            "--screen-width".into(),
-            cfg.width.to_string(),
-            "--screen-height".into(),
-            cfg.height.to_string(),
-            "--present-mode".into(),
-            cfg.present_mode.clone(),
-        ];
-        if cfg.fullscreen {
-            args.push("--fullscreen".into());
-        }
-        if cfg.amd_cpu {
-            args.push("--amd-cpu".into());
-        }
-        args.extend(shell_split(&cfg.extra_args));
+        let mut args = kyty_args(&cfg, &game.path.to_string_lossy());
         if ps4 {
             // shadPS4: game folder and fullscreen; its other settings live in its own config.
             args = vec!["-g".into(), game.path.to_string_lossy().into_owned(), "-f".into(), cfg.fullscreen.to_string()];
@@ -786,7 +797,8 @@ pub fn log_tail(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{emulator_error, emulator_game, game_folder, parse_etime, parse_ps_line};
+    use super::{emulator_error, emulator_game, game_folder, kyty_args, parse_etime, parse_ps_line};
+    use crate::config::Config;
 
     #[test]
     fn emulator_error_reads_the_reason_without_the_source_location() {
@@ -833,6 +845,28 @@ mod tests {
         assert_eq!(parse_ps_line("1 1-00:00:01 /sbin/launchd"), Some((1, 86401.0, "/sbin/launchd")));
         assert_eq!(parse_ps_line("not a ps line"), None);
         assert_eq!(parse_ps_line(""), None);
+    }
+
+    #[test]
+    fn kyty_gets_the_video_out_resolution_and_extra_arguments_last() {
+        let mut cfg = Config::default();
+        let args = kyty_args(&cfg, "/g/PPSA1");
+        let at = args.iter().position(|a| a == "--video-out-resolution").expect("always passed");
+        assert_eq!(args[at + 1], "Title", "the default is what a PS5 reports for the game");
+        // The window size is separate from what the game is told.
+        assert!(args.windows(2).any(|w| w == ["--screen-width", "1920"]));
+        for (mode, value) in [("FullHd", "FullHd"), ("Uhd", "Uhd")] {
+            cfg.video_out = mode.into();
+            let args = kyty_args(&cfg, "/g/PPSA1");
+            let at = args.iter().position(|a| a == "--video-out-resolution").unwrap();
+            assert_eq!(args[at + 1], value);
+        }
+        cfg.video_out = "Bogus".into();
+        let args = kyty_args(&cfg, "/g/PPSA1");
+        let at = args.iter().position(|a| a == "--video-out-resolution").unwrap();
+        assert_eq!(args[at + 1], "Title", "an unknown value falls back to the default");
+        cfg.extra_args = "--tessellation".into();
+        assert_eq!(kyty_args(&cfg, "/g/PPSA1").last().map(String::as_str), Some("--tessellation"));
     }
 
     #[test]

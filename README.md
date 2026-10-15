@@ -258,6 +258,23 @@ try the next one.
 - **Unlike console games**, which run inside an emulator, PC games run with your user's access
   to your files. Only install releases you trust.
 
+## Settings worth knowing
+
+- **Game output resolution** (PS5 games, under **Show advanced settings**): the screen resolution
+  the game is told it runs on, and the size it renders at.
+  - **Game default:** what a PS5 reports for that game (4K or 1080p). The most accurate.
+  - **1080p (Full HD):** the fastest. Games that pick 4K by default run much faster.
+  - **4K (Ultra HD):** the sharpest and the slowest.
+
+  The **Resolution** setting is the window size only. The game's picture is scaled to fit the
+  window.
+- **Your own emulator builds:** under **Settings → Show advanced settings**, set **KytyPS5 location**
+  or **shadPS4 location**. The launcher then runs your build and does not install or update that
+  emulator. **Switch to official builds** on its update row goes back to the one the launcher
+  manages.
+- **Updates:** **Update automatically** covers the launcher, shadPS4 and KytyPS5.
+  **Go back to the previous shadPS4 / KytyPS5** undoes an update that broke a game.
+
 ## Help
 
 - **A game closes right away:** check its tag, then **Options → View emulator log**.

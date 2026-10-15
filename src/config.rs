@@ -28,6 +28,9 @@ pub struct Config {
     pub width: u32,
     pub height: u32,
     pub present_mode: String,
+    /// What the emulator tells a PS5 game its screen is: "Title" (what a PS5 reports for that
+    /// game), "FullHd" or "Uhd". Passed as --video-out-resolution.
+    pub video_out: String,
     pub amd_cpu: bool,
     pub extra_args: String,
     pub sounds: bool,
@@ -64,6 +67,7 @@ impl Default for Config {
             width: 1920,
             height: 1080,
             present_mode: "Mailbox".into(),
+            video_out: "Title".into(),
             amd_cpu: false,
             extra_args: String::new(),
             sounds: true,
@@ -80,6 +84,9 @@ impl Default for Config {
 }
 
 pub const RESOLUTIONS: [(u32, u32); 5] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440), (3840, 2160)];
+/// The values of --video-out-resolution and the names Settings shows for them.
+pub const VIDEO_OUT_MODES: [(&str, &str); 3] =
+    [("Title", "Game default"), ("FullHd", "1080p (Full HD)"), ("Uhd", "4K (Ultra HD)")];
 pub const PRESENT_MODES: [(&str, &str); 3] =
     [("Mailbox", "Mailbox (low latency)"), ("Fifo", "Fifo (V-Sync)"), ("Immediate", "Immediate (uncapped)")];
 
