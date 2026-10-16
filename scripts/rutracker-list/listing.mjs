@@ -28,8 +28,11 @@ export function readListing({ forumId = '546', tag = 'PS5' } = {}) {
     // A release is a topic with a torrent. In the console forums most titles start with the
     // console's tag, but not all ("[PS4/PS5] …", tags further along): the tag alone missed a
     // fifth of the PS4 forum. Rules and discussion threads have no torrent.
-    const released = Boolean(row?.querySelector('.vf-col-tor a.dl-stub'))
-      || (tag !== null && title.toUpperCase().startsWith(`[${tag.toUpperCase()}]`));
+    // Releases the launcher can't play (VR, retro re-releases, homebrew): the same rule as
+    // UNPLAYABLE in platforms.mjs (this function runs in the browser on its own).
+    const unplayable = /^\s*\[[^\]]*\b(?:VR|Move|homebrew|classics?|classis|PSP|PSX|PS2|PS1|SNES|Saturn)\b[^\]]*\]/i.test(title);
+    const released = !unplayable && (Boolean(row?.querySelector('.vf-col-tor a.dl-stub'))
+      || (tag !== null && title.toUpperCase().startsWith(`[${tag.toUpperCase()}]`)));
     if (url.origin !== base.origin || url.pathname !== '/forum/viewtopic.php'
         || !/^\d+$/.test(id || '') || !released) {
       skipped++;

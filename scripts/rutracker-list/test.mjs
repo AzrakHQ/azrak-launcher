@@ -370,3 +370,13 @@ test('a release without details borrows the game facts of another release of the
   assert.equal(other.game_info, null, 'another game');
   assert.equal(borrowDetails([donor, fresh, other]), 0, 'only once');
 });
+
+test('releases the launcher cannot play are left out by their tag', async () => {
+  const { UNPLAYABLE } = await import('./platforms.mjs');
+  for (const title of ['[PS VR Only] GORN [USA]', '[PS4 VR] Dreams', '[PS VR+PS Move] Job Simulator', '[PS4 Exclusive VR Only] Blood & Truth',
+    '[PS4 PS2 Classics] God of War [NTSC-U]', '[PS4 PS2 Classis] Star Wars', '[PSP-PS4] LocoRoco', '[PS4 PSX Classics] Ape Escape', '[PS4 homebrew] Store'])
+    assert.ok(UNPLAYABLE.test(title), title);
+  for (const title of ['[PS4] Firewatch [EUR]', '[PS4 Exclusive] God of War III (3) Remastered [EUR]', '[PS4 Exclusive PlayLink] That\'s You!',
+    'My Friend Peppa Pig [EUR/RUS]', '[PS5] Ghost of Tsushima', '[PS4] Vampyr [EUR]', '[PS4] Moving Out [EUR]'])
+    assert.ok(!UNPLAYABLE.test(title), title);
+});
