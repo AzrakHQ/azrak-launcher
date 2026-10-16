@@ -139,7 +139,7 @@ pub fn open(url: &str, frame: impl Fn(slint::SharedPixelBuffer<slint::Rgba8Pixel
         for (k, v) in [
             ("vo", "libmpv"), ("hwdec", "no"), ("terminal", "no"), ("osc", "no"), ("ytdl", "no"),
             ("input-default-bindings", "no"), ("input-vo-keyboard", "no"), ("keep-open", "no"),
-            ("audio-client-name", "PS5 Launcher"), ("cache", "yes"), ("idle", "yes"),
+            ("audio-client-name", "Azrak Launcher"), ("cache", "yes"), ("idle", "yes"),
         ] {
             (lib.set_option_string)(mpv, cstr(k).as_ptr(), cstr(v).as_ptr());
         }

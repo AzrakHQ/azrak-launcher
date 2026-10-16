@@ -12,7 +12,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Written into an installed PC game's folder; the Library finds PC games by it.
-pub const MANIFEST: &str = ".ps5-launcher-game.json";
+pub const MANIFEST: &str = ".azrak-game.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

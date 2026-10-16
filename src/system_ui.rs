@@ -1,4 +1,4 @@
-//! Settings → SYSTEM, on PS5 Launcher OS only: internet, controllers and headsets, sound output,
+//! Settings → SYSTEM, on AzrakOS only: internet, controllers and headsets, sound output,
 //! system updates, restart and shut down. Slow tools run off the UI thread; Settings shows what
 //! they last reported and refreshes every few seconds while it's open.
 

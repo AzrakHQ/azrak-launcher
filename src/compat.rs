@@ -1,5 +1,5 @@
 //! KytyPS5 compatibility reports from the community list (kytyps5.github.io), by title ID.
-//! Same data KytyPS5's own launcher uses. Cached in ~/.cache/ps5-launcher/compatibility.json.
+//! Same data KytyPS5's own launcher uses. Cached in ~/.cache/azrak/compatibility.json.
 
 use crate::util::{atomic_write, cache_dir, http_get};
 use std::collections::HashMap;

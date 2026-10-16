@@ -12,7 +12,7 @@ import { promisify } from 'node:util';
 const exec = promisify(execCallback);
 const script = fileURLToPath(import.meta.url);
 const root = resolve(dirname(script), '..');
-const binary = resolve(process.argv[2] || join(root, 'target/release/ps5-launcher'));
+const binary = resolve(process.argv[2] || join(root, 'target/release/azrak'));
 if (process.env.PS5_DOWNLOAD_TEST_ISOLATED !== '1') {
   const result = spawnSync('unshare', ['--user', '--map-root-user', '--net', 'xvfb-run', '-a',
     '-s', '-screen 0 1920x1080x24', process.execPath, script, binary], {
@@ -22,7 +22,7 @@ if (process.env.PS5_DOWNLOAD_TEST_ISOLATED !== '1') {
   process.exit(result.status ?? 1);
 }
 const artifacts = await mkdtemp(join(tmpdir(), 'ps5-download-ui-'));
-const config = join(artifacts, 'config/ps5-launcher');
+const config = join(artifacts, 'config/azrak');
 const store = join(config, 'transfers');
 const base = join(artifacts, 'downloads');
 const installRoot = join(artifacts, 'library');
@@ -32,7 +32,7 @@ await writeFile(join(config, 'config.json'), JSON.stringify({ sounds: false, gam
 const hash1 = 'a'.repeat(40), hash2 = 'b'.repeat(40), catalogHash = 'c'.repeat(40);
 const folder = join(base, `torrent-${hash1}`);
 await mkdir(folder, { recursive: true });
-await writeFile(join(folder, '.ps5-launcher-owned'), hash1);
+await writeFile(join(folder, '.azrak-owned'), hash1);
 const payload = join(folder, 'generated-ui-fixture.bin');
 await writeFile(payload, Buffer.alloc(128 * 1024, 42));
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -41,7 +41,7 @@ const completed = join(base, `torrent-${catalogHash}`);
 const fixture = join(artifacts, 'generated-game');
 await mkdir(join(fixture, 'Game/sce_sys'), { recursive: true });
 await mkdir(completed, { recursive: true });
-await writeFile(join(completed, '.ps5-launcher-owned'), catalogHash);
+await writeFile(join(completed, '.azrak-owned'), catalogHash);
 await writeFile(join(fixture, 'Game/sce_sys/param.json'), JSON.stringify({ titleId: 'PPSA12345', contentVersion: '1.10',
   localizedParameters: { defaultLanguage: 'en-US', 'en-US': { titleName: 'Generated consent fixture' } } }));
 const gameBytes = Buffer.alloc(8 * 1024 * 1024, 42); // Non-executable pattern, never launched.
@@ -108,7 +108,7 @@ try {
     function done(error) { clearTimeout(timer); child.stderr.off('data', check); child.off('exit', exit); error ? reject(error) : resolve(); }
     child.stderr.on('data', check); child.once('exit', exit); check();
   });
-  const { stdout } = await exec('xdotool', ['search', '--sync', '--onlyvisible', '--name', '^PS5 Launcher$']);
+  const { stdout } = await exec('xdotool', ['search', '--sync', '--onlyvisible', '--name', '^Azrak Launcher$']);
   await exec('xdotool', ['windowfocus', '--sync', stdout.trim().split('\n')[0]]);
   await key('ctrl+d');
   const panel = await shot('transfers');

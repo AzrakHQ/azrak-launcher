@@ -1,7 +1,7 @@
 //! PS4 PKG packages, extracted with the ShadPs4Plus PKG Extractor (GPL-2.0): the PKG code shadPS4
 //! itself shipped until 0.8, as a standalone command-line tool. It is downloaded the first time a
 //! PKG release is installed and checked against a pinned SHA-256, then kept under
-//! ~/.local/share/ps5-launcher/pkg-extractor.
+//! ~/.local/share/azrak/pkg-extractor.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -41,7 +41,7 @@ pub fn ensure() -> Result<PathBuf, String> {
     if let Some(tool) = TEST_TOOL.with(|t| t.borrow().clone()) {
         return Ok(tool);
     }
-    if let Some(path) = std::env::var_os("PS5_LAUNCHER_PKG_EXTRACTOR").filter(|p| !p.is_empty()) {
+    if let Some(path) = std::env::var_os("AZRAK_PKG_EXTRACTOR").filter(|p| !p.is_empty()) {
         return Ok(PathBuf::from(path));
     }
     let tool = tool();
@@ -49,7 +49,7 @@ pub fn ensure() -> Result<PathBuf, String> {
         return Ok(tool);
     }
     if cfg!(test) {
-        return Err("no PKG extractor in unit tests (set PS5_LAUNCHER_PKG_EXTRACTOR)".into());
+        return Err("no PKG extractor in unit tests (set AZRAK_PKG_EXTRACTOR)".into());
     }
     install()
 }
@@ -95,7 +95,7 @@ struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Result<Self, String> {
         static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!("ps5-launcher-pkg-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let dir = std::env::temp_dir().join(format!("azrak-pkg-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
         std::fs::create_dir_all(dir.join("user")).map_err(|e| format!("{}: {e}", dir.display()))?;
         Ok(Self(dir))
     }

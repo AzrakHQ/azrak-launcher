@@ -88,7 +88,7 @@ forum listing pages were visited. Exit 2 means partial/blocked. Partial results
 go to a separate `.partial.json` file, preserving any previous complete catalog.
 
 The dedicated browser profile lives in
-`~/.cache/ps5-launcher/rutracker-list-browser`. It may contain your session cookies;
+`~/.cache/azrak/rutracker-list-browser`. It may contain your session cookies;
 keep it private and do not commit or share it. Only one collector can use that
 profile at a time. The tool requests pages sequentially with a 1.5-second delay
 and stops on access failures instead of retrying aggressively.

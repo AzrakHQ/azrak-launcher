@@ -592,7 +592,7 @@ impl App {
             return false;
         }
         let (w, h) = (s.width as f32 / sf, s.height as f32 / sf);
-        let user = std::env::var("PS5_LAUNCHER_SCALE").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
+        let user = std::env::var("AZRAK_SCALE").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(1.0);
         let k = ((w / 1920.0).min(h / 1080.0) * user).clamp(0.3, 4.0);
         if (k - self.scale).abs() < 0.001 {
             return false;

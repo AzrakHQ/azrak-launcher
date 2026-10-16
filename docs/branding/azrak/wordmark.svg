@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 120" width="496" height="120" role="img" aria-labelledby="title description">
+  <title id="title">AZRAK</title>
+  <desc id="description">An original geometric uppercase Azrak wordmark in ice white, with an electric-blue Z.</desc>
+  <defs>
+    <path id="letter-a" d="M0 120L28 0H52L80 120H56L50 96H30L24 120Z M32 72H48L40 38Z" fill-rule="evenodd"/>
+    <linearGradient id="ice" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="120">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d8e9f7"/>
+    </linearGradient>
+    <linearGradient id="electric" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="120">
+      <stop offset="0" stop-color="#b5e5ff"/>
+      <stop offset="0.45" stop-color="#65bdff"/>
+      <stop offset="1" stop-color="#327bff"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#ice)">
+    <use href="#letter-a"/>
+    <path transform="translate(104)" d="M4 0H72V24L36 96H72V120H0V96L36 24H4Z" fill="url(#electric)"/>
+    <path transform="translate(200)" d="M0 120V0H56L80 24V58L62 76L86 120H56L34 80H24V120Z M24 24V56H46L54 48V32L46 24Z" fill-rule="evenodd"/>
+    <use href="#letter-a" x="304"/>
+    <path transform="translate(408)" d="M0 0H24V48L56 0H84L44 60L88 120H58L24 74V120H0Z"/>
+  </g>
+</svg>

@@ -1,4 +1,4 @@
-//! PS5 Launcher: a fast, native PS5-style game launcher for Linux.
+//! Azrak Launcher: a fast, native console-style game launcher for Linux.
 
 mod app;
 mod audio;
@@ -36,6 +36,7 @@ mod library;
 mod library_layout;
 mod present;
 mod psn;
+mod rename;
 mod sessions;
 mod settings;
 mod util;
@@ -43,10 +44,10 @@ mod util;
 slint::include_modules!();
 
 const HELP: &str = "\
-PS5 Launcher — a PS5-style game launcher for Linux
+Azrak Launcher — a console-style game launcher for Linux
 
 USAGE:
-    ps5-launcher [OPTIONS]
+    azrak [OPTIONS]
 
 OPTIONS:
     --windowed          Open in a normal window instead of fullscreen
@@ -58,7 +59,7 @@ OPTIONS:
 ";
 
 fn main() {
-    // `--supports gamescope`: exit 0 when this launcher can run in PS5 Launcher OS's Gamescope
+    // `--supports gamescope`: exit 0 when this launcher can run in AzrakOS's Gamescope
     // session (it tags its window so Gamescope shows it). Older releases reject the option, so the
     // OS session and the image build can tell.
     if std::env::args().nth(1).as_deref() == Some("--supports") {
@@ -82,11 +83,11 @@ fn main() {
                     eprintln!("--catalog requires a JSON file path");
                     std::process::exit(2);
                 };
-                std::env::set_var("PS5_LAUNCHER_CATALOG_PATH", path);
+                std::env::set_var("AZRAK_CATALOG_PATH", path);
             }
             "--sync" => force_sync = true,
             "--version" | "-V" => {
-                println!("ps5-launcher {}", env!("CARGO_PKG_VERSION"));
+                println!("azrak {}", env!("CARGO_PKG_VERSION"));
                 return;
             }
             "-h" | "--help" => {
@@ -99,6 +100,8 @@ fn main() {
             }
         }
     }
+    // An install from before the rename (PS5 Launcher) moves over first.
+    rename::migrate();
     if force_sync {
         // Keep the last-known-good cache if an external snapshot is invalid.
         if let Err(error) = catalog::sync(&|message| eprintln!("{message}")) {

@@ -1,8 +1,8 @@
 [package]
-name = "ps5-launcher"
+name = "azrak"
 version = "1.16.2"
 edition = "2021"
-description = "A fast, native PS5-style game launcher for Linux"
+description = "Azrak Launcher: a fast, native console-style game launcher for Linux"
 rust-version = "1.92"
 
 [dependencies]

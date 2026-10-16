@@ -6,7 +6,7 @@ import { AboutSlint, Palette } from "std-widgets.slint";
 
 export { S, Theme, Zone }
 
-// Notification card (PS5-style): icon tile, title, message. Slides in from the right.
+// Notification card: icon tile, title, message. Slides in from the right.
 component Toast inherits Rectangle {
     in property <ToastData> data;
     callback clicked();
@@ -131,7 +131,7 @@ component HeroView inherits Rectangle {
 }
 
 export component AppWindow inherits Window {
-    title: "PS5 Launcher";
+    title: "Azrak Launcher";
     icon: @image-url("../assets/icons/app-icon.svg");
     background: Theme.bg;
     default-font-family: "Inter";
@@ -1289,7 +1289,7 @@ export component AppWindow inherits Window {
                                         alignment: center;
                                         spacing: (4px * S.k);
                                         horizontal-stretch: 1;
-                                        Text { text: "PS5 Launcher"; font-size: (19px * S.t); font-weight: 600; color: Theme.text; }
+                                        Text { text: "Azrak Launcher"; font-size: (19px * S.t); font-weight: 600; color: Theme.text; }
                                         Text { text: "Version " + root.app-version + " · Linux"; font-size: (15px * S.t); color: Theme.text3; }
                                         Text { text: "PS5 games on KytyPS5 · PS4 games on shadPS4"; font-size: (15px * S.t); color: Theme.text3; }
                                     }
@@ -1579,7 +1579,7 @@ export component AppWindow inherits Window {
                     }
                 }
                 Rectangle { height: (24px * S.k); }
-                Text { text: "PS5 LAUNCHER"; font-size: (19px * S.k); font-weight: 600; letter-spacing: (3px * S.k); color: Theme.text2; horizontal-alignment: center; }
+                Text { text: "AZRAK LAUNCHER"; font-size: (19px * S.k); font-weight: 600; letter-spacing: (3px * S.k); color: Theme.text2; horizontal-alignment: center; }
                 Rectangle { height: (18px * S.k); }
                 if root.boot-first: Text {
                     text: "Welcome";
@@ -1589,7 +1589,7 @@ export component AppWindow inherits Window {
                     horizontal-alignment: center;
                 }
                 if root.boot-first: Text {
-                    text: "Setting up your PS5 launcher";
+                    text: "Setting up Azrak Launcher";
                     font-size: (23px * S.k);
                     color: Theme.text2;
                     horizontal-alignment: center;

@@ -32,10 +32,10 @@ struct Source {
 
 // The PC catalogs aren't built in: they arrive with the daily published catalog.
 const SOURCES: [Source; 4] = [
-    Source { platform: Platform::Ps5, url: SOURCE, file: "ps5-topics.json", cache: "catalog-rutracker.json", env: "PS5_LAUNCHER_CATALOG_PATH", bundled: BUNDLED },
-    Source { platform: Platform::Ps4, url: PS4_SOURCE, file: "ps4-topics.json", cache: "catalog-rutracker-ps4.json", env: "PS5_LAUNCHER_PS4_CATALOG_PATH", bundled: BUNDLED_PS4 },
-    Source { platform: Platform::Pc, url: LINUX_SOURCE, file: "linux-topics.json", cache: "catalog-rutracker-linux.json", env: "PS5_LAUNCHER_LINUX_CATALOG_PATH", bundled: &[] },
-    Source { platform: Platform::Pc, url: WINE_SOURCE, file: "wine-topics.json", cache: "catalog-rutracker-wine.json", env: "PS5_LAUNCHER_WINE_CATALOG_PATH", bundled: &[] },
+    Source { platform: Platform::Ps5, url: SOURCE, file: "ps5-topics.json", cache: "catalog-rutracker.json", env: "AZRAK_CATALOG_PATH", bundled: BUNDLED },
+    Source { platform: Platform::Ps4, url: PS4_SOURCE, file: "ps4-topics.json", cache: "catalog-rutracker-ps4.json", env: "AZRAK_PS4_CATALOG_PATH", bundled: BUNDLED_PS4 },
+    Source { platform: Platform::Pc, url: LINUX_SOURCE, file: "linux-topics.json", cache: "catalog-rutracker-linux.json", env: "AZRAK_LINUX_CATALOG_PATH", bundled: &[] },
+    Source { platform: Platform::Pc, url: WINE_SOURCE, file: "wine-topics.json", cache: "catalog-rutracker-wine.json", env: "AZRAK_WINE_CATALOG_PATH", bundled: &[] },
 ];
 
 /// A PC release's Steam app (from the published catalog: scripts/rutracker-list/steam.mjs).
@@ -236,13 +236,13 @@ fn override_path(src: &Source) -> Option<PathBuf> {
 fn data_path(src: &Source) -> PathBuf {
     std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| {
         std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/tmp")).join(".local/share")
-    }).join("ps5-launcher/rutracker").join(src.file)
+    }).join(crate::util::APP_NAME).join("rutracker").join(src.file)
 }
 
 /// The catalog the daily workflow publishes (.github/workflows/catalog.yml): new releases and
 /// fresh seeder counts without a launcher update.
 fn remote_base() -> String {
-    std::env::var("PS5_LAUNCHER_CATALOG_URL").unwrap_or_else(|_| format!("https://raw.githubusercontent.com/{}/catalog/", crate::update::REPO))
+    std::env::var("AZRAK_CATALOG_URL").unwrap_or_else(|_| format!("https://raw.githubusercontent.com/{}/catalog/", crate::update::REPO))
 }
 
 /// Download published catalogs that differ from the local ones, into the data folder. A file is

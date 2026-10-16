@@ -52,14 +52,14 @@ def shoot(size: str, n: int, out: Path, binary: Path, game: Path | None):
     disp = f":{90 + n}"
     work = Path(tempfile.mkdtemp(prefix="ps5-ui-"))
     home = work / "home"
-    (home / ".config/ps5-launcher").mkdir(parents=True)
+    (home / ".config/azrak").mkdir(parents=True)
     seed_cache(home)
     install_game(home / "Games", game)
     # A stand-in emulator that exits at once: screenshots must never start a real game.
     fake = work / "kyty_emulator"
     fake.write_text("#!/bin/sh\nexit 0\n")
     fake.chmod(0o755)
-    (home / ".config/ps5-launcher/config.json").write_text(json.dumps(
+    (home / ".config/azrak/config.json").write_text(json.dumps(
         {"game_dirs": ["~/Games"], "sounds": False, **NO_UPDATES, "emulator": str(fake)}))
     # No browsers or players may pop up; pretend to be an old version so the update notification shows.
     stubs = work / "stubs"
@@ -68,7 +68,7 @@ def shoot(size: str, n: int, out: Path, binary: Path, game: Path | None):
         (stubs / tool).write_text("#!/bin/sh\nexit 0\n")
         (stubs / tool).chmod(0o755)
     env = {**os.environ, "DISPLAY": disp, "HOME": str(home), "PATH": f"{stubs}:{os.environ['PATH']}",
-           "PS5_LAUNCHER_PRETEND_VERSION": "1.3.0"}
+           "AZRAK_PRETEND_VERSION": "1.3.0"}
     for k in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"):
         env.pop(k, None)
     procs = [subprocess.Popen(["Xvfb", disp, "-screen", "0", f"{w}x{h}x24", "+extension", "GLX", "-noreset"],
@@ -105,7 +105,7 @@ def shoot(size: str, n: int, out: Path, binary: Path, game: Path | None):
 
 def main():
     sizes = sys.argv[1:] or SIZES
-    binary = ROOT / "target/release/ps5-launcher"
+    binary = ROOT / "target/release/azrak"
     out = ROOT / "dist/ui-matrix"
     out.mkdir(parents=True, exist_ok=True)
     game = Path(os.environ["DEMO_GAME"]) if os.environ.get("DEMO_GAME") else None

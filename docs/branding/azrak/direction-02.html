@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Azrak / Fold</title>
+  <style>
+    @font-face { font-family: Inter; src: url("../../../assets/fonts/Inter-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+    @font-face { font-family: Inter; src: url("../../../assets/fonts/Inter-Medium.ttf") format("truetype"); font-weight: 500; font-display: swap; }
+    :root { --bg: #05070f; --text: #f5f7fb; --secondary: #b9c3da; --muted: #7d88a3; --blue: #0a6cff; --line: #ffffff1c; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: Inter, sans-serif; font-size: 14px; line-height: 1.5; letter-spacing: 0; }
+    .sheet { max-width: 1280px; margin: auto; padding: 32px 48px; }
+    header { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; padding-bottom: 24px; border-bottom: 1px solid var(--line); }
+    h1 { margin: 0; font-size: 19px; font-weight: 500; }
+    h1 span { color: #65bdff; }
+    .edition { color: var(--muted); font-size: 12px; }
+    .comparison { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 24px 0 30px; border-bottom: 1px solid var(--line); }
+    .direction { min-width: 0; padding: 0 22px; }
+    .direction:first-child { padding-left: 0; }
+    .direction:last-child { padding-right: 0; }
+    .direction + .direction { border-left: 1px solid var(--line); }
+    h2 { margin: 0; font-size: 12px; font-weight: 400; color: var(--secondary); }
+    .direction:first-child h2 { color: var(--muted); }
+    .stage { display: grid; place-items: center; height: 320px; }
+    .stage img { width: 272px; height: 272px; max-width: 100%; object-fit: contain; }
+    .stage .bare { width: 224px; height: 224px; }
+    .proofs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; margin-top: 24px; }
+    .proof { min-width: 0; }
+    h3 { color: var(--muted); font-weight: 400; font-size: 11px; margin: 0 0 12px; }
+    .sample { display: flex; align-items: center; justify-content: center; gap: 20px; height: 154px; background: #0c1220; }
+    .sample > img { width: 100px; height: 100px; }
+    .paper { background: #edf0f5; }
+    .black { filter: brightness(0); }
+    .white { filter: brightness(0) invert(1); }
+    .size { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; min-height: 80px; gap: 14px; font-size: 10px; color: var(--muted); }
+    .size img { display: block; flex-shrink: 0; }
+    .s24 { width: 24px; height: 24px; }
+    .s32 { width: 32px; height: 32px; }
+    .s48 { width: 48px; height: 48px; }
+    .names { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-top: 28px; }
+    .name { display: flex; align-items: center; justify-content: center; min-width: 0; gap: 14px; padding: 24px 12px; }
+    .name + .name { border-left: 1px solid var(--line); }
+    .name img { width: 50px; height: 50px; flex: 0 0 50px; }
+    .name p { margin: 0; font-size: 20px; font-weight: 500; }
+    .name p span { color: #65bdff; }
+    footer { display: flex; justify-content: space-between; gap: 18px; padding-top: 22px; color: var(--muted); font-size: 11px; }
+    a { color: var(--secondary); text-underline-offset: 4px; }
+    a:focus-visible { outline: 2px solid #65bdff; outline-offset: 5px; }
+    @media (max-width: 1000px) {
+      .sheet { padding: 28px; }
+      .direction { padding: 0 16px; }
+      .stage { height: 270px; }
+      .stage img { width: 224px; height: 224px; }
+      .stage .bare { width: 192px; height: 192px; }
+      .proofs { gap: 16px; }
+      .name { gap: 8px; padding: 22px 8px; }
+      .name img { width: 40px; height: 40px; flex-basis: 40px; }
+      .name p { font-size: 17px; }
+    }
+    @media (max-width: 700px) {
+      .sheet { padding: 24px 22px; }
+      header { align-items: center; }
+      .edition { font-size: 10px; text-align: right; }
+      .comparison { grid-template-columns: minmax(0, 1fr); padding: 0; }
+      .direction, .direction:first-child, .direction:last-child { padding: 22px 0 12px; }
+      .direction + .direction { border-left: 0; border-top: 1px solid var(--line); }
+      .stage { height: 266px; }
+      .stage img { width: 242px; height: 242px; }
+      .stage .bare { width: 204px; height: 204px; }
+      .proofs { grid-template-columns: minmax(0, 1fr); gap: 22px; }
+      .names { grid-template-columns: minmax(0, 1fr); }
+      .name { justify-content: flex-start; gap: 16px; padding: 18px 10px; }
+      .name + .name { border-left: 0; border-top: 1px solid var(--line); }
+      .name p { font-size: 20px; }
+      footer { flex-direction: column; gap: 12px; }
+    }
+    @media print {
+      body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .sheet { padding: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="sheet">
+    <header><h1>Azrak<span>HQ</span></h1><div class="edition">02 / FOLD<br>16 October 2026</div></header>
+    <section class="comparison" aria-label="Previous initials and new single-symbol direction">
+      <div class="direction"><h2>01 / PREVIOUS AZ</h2><div class="stage"><img src="logo.svg" alt="Previous separate AZ initials in the original chassis"></div></div>
+      <div class="direction"><h2>02 / FOLD</h2><div class="stage"><img src="logo-02.svg" alt="New split A-shaped Fold symbol in the original chassis"></div></div>
+      <div class="direction"><h2>02 / WITHOUT CHASSIS</h2><div class="stage"><img class="bare" src="symbol-02.svg" alt="Standalone Fold symbol in ice white and electric blue"></div></div>
+    </section>
+    <section class="proofs" aria-label="Flat monochrome and actual-size proofs">
+      <div class="proof"><h3>ONE COLOR / BLACK</h3><div class="sample paper"><img class="black" src="symbol-02.svg" alt="Flat black Fold silhouette without gradients or chassis"></div></div>
+      <div class="proof"><h3>ONE COLOR / WHITE</h3><div class="sample"><img class="white" src="symbol-02.svg" alt="Flat white Fold silhouette without gradients or chassis"></div></div>
+      <div class="proof"><h3>ACTUAL SIZE / PX</h3><div class="sample"><div class="size"><img class="s24" src="symbol-02.svg" alt="Fold at 24 pixels"><span>24</span></div><div class="size"><img class="s32" src="symbol-02.svg" alt="Fold at 32 pixels"><span>32</span></div><div class="size"><img class="s48" src="symbol-02.svg" alt="Fold at 48 pixels"><span>48</span></div></div></div>
+    </section>
+    <section class="names" aria-label="Product and organization lockups">
+      <div class="name"><img src="symbol-02.svg" alt=""><p>Azrak Launcher</p></div>
+      <div class="name"><img src="symbol-02.svg" alt=""><p>Azrak<span>OS</span></p></div>
+      <div class="name"><img src="symbol-02.svg" alt=""><p>Azrak<span>HQ</span></p></div>
+    </section>
+    <footer><span>Azrak / Fold study</span><div><a href="symbol-02.svg">Symbol SVG</a> &middot; <a href="logo-02.svg">Chassis SVG</a> &middot; <a href="index.html">Previous study</a></div></footer>
+  </main>
+</body>
+</html>

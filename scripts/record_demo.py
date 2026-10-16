@@ -51,10 +51,10 @@ class Session:
         self.work = work
         self.home = work / "home"
         self.log_path = work / "launcher.log"
-        self.binary = work / "bin" / "ps5-launcher"  # copied: keeps the demo away from real installs
+        self.binary = work / "bin" / "azrak"  # copied: keeps the demo away from real installs
         self.binary.parent.mkdir(parents=True)
         shutil.copy2(binary, self.binary)
-        cfg = self.home / ".config" / "ps5-launcher"
+        cfg = self.home / ".config" / "azrak"
         cfg.mkdir(parents=True)
         # The first-launch scene shows KytyPS5 downloading; shadPS4 would join it, so it stays off.
         (cfg / "config.json").write_text(json.dumps({"game_dirs": ["~/Games/PS5"], "sounds": False, "shad_auto_update": False}))
@@ -267,7 +267,7 @@ def scene_tour(s: Session, out: Path, has_game: bool):
         s.key("Down", gap=0.42)
     time.sleep(2.4)
     s.key("Escape", gap=1.2)
-    s.cap("PS5 Launcher", "Works with a keyboard, a mouse or a controller. Install it with one command; see the README.")
+    s.cap("Azrak Launcher", "Works with a keyboard, a mouse or a controller. Install it with one command; see the README.")
     time.sleep(4.5)
     return s.stop()
 
@@ -439,7 +439,7 @@ def encode_loop(loop: Path, out: Path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--binary", type=Path, default=ROOT / "target" / "release" / "ps5-launcher")
+    ap.add_argument("--binary", type=Path, default=ROOT / "target" / "release" / "azrak")
     ap.add_argument("--game", type=Path, help="an installed game folder (with sce_sys/param.json) to show as installed")
     ap.add_argument("--out", type=Path, default=ROOT / "dist" / "demo")
     ap.add_argument("--keep", action="store_true", help="keep the temporary work folder")
@@ -454,17 +454,17 @@ def main():
     if args.game and not (args.game / "sce_sys" / "param.json").is_file():
         sys.exit(f"not a game folder: {args.game}")
 
-    work = Path(tempfile.mkdtemp(prefix="ps5-launcher-demo-"))
+    work = Path(tempfile.mkdtemp(prefix="azrak-demo-"))
     log("work folder:", work)
     s = Session(args.binary, args.game, work)
     if args.loop_only:
         try:
-            real = Path.home() / ".cache/ps5-launcher"
-            shutil.copytree(real, s.home / ".cache/ps5-launcher", ignore=shutil.ignore_patterns(*CACHE_SKIP))
+            real = Path.home() / ".cache/azrak"
+            shutil.copytree(real, s.home / ".cache/azrak", ignore=shutil.ignore_patterns(*CACHE_SKIP))
             fake = work / "kyty_emulator"                     # never start a real game
             fake.write_text("#!/bin/sh\nexit 0\n")
             fake.chmod(0o755)
-            cfg = s.home / ".config/ps5-launcher/config.json"
+            cfg = s.home / ".config/azrak/config.json"
             c = json.loads(cfg.read_text())
             c.update({"emulator": str(fake), "kyty_auto_update": False, "app_auto_update": False, "shad_auto_update": False})
             cfg.write_text(json.dumps(c))
@@ -489,7 +489,7 @@ def main():
         ev1, m1 = s.events, s.marks
         # The demo can't run real games on a virtual display: swap in a stand-in "emulator"
         # that just waits, so Play / Playing / Stop can be shown.
-        emu = s.home / ".local/share/ps5-launcher/kyty/current/kyty_emulator"
+        emu = s.home / ".local/share/azrak/kyty/current/kyty_emulator"
         if emu.exists():
             emu.unlink()
             emu.write_text('#!/bin/bash\nexec -a "$0" sleep 3600\n')

@@ -1,7 +1,7 @@
 //! KytyPS5 auto-updater.
 //!
 //! KytyPS5 publishes prebuilt Linux builds on GitHub Releases. The launcher can manage its own
-//! copy under ~/.local/share/ps5-launcher/kyty:
+//! copy under ~/.local/share/azrak/kyty:
 //!
 //!   versions/<tag>/     one extracted release per folder
 //!   current -> versions/<tag>
@@ -213,7 +213,8 @@ fn link_data_dirs(version_dir: &Path) -> Result<(), String> {
                 std::fs::remove_dir_all(&link).map_err(|e| e.to_string())?;
             }
         }
-        std::os::unix::fs::symlink(&shared, &link).map_err(|e| e.to_string())?;
+        // Relative (versions/<tag>/<dir> → data/<dir>), so the launcher's folder can move.
+        std::os::unix::fs::symlink(Path::new("../../data").join(d), &link).map_err(|e| e.to_string())?;
     }
     Ok(())
 }

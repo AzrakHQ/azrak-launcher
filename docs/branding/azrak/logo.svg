@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title description">
-  <title id="title">PS5 Launcher — P5 chassis emblem</title>
-  <desc id="description">An original geometric P5 monogram in ice white and electric blue, set inside an asymmetrically chamfered navy chassis.</desc>
+  <title id="title">Azrak - AZ chassis emblem</title>
+  <desc id="description">An ice-white A and electric-blue Z inside the launcher's original asymmetrically chamfered chassis.</desc>
   <defs>
     <linearGradient id="chassis" gradientUnits="userSpaceOnUse" x1="36" y1="16" x2="214" y2="244">
       <stop offset="0" stop-color="#1b2b43"/>
@@ -26,16 +26,10 @@
       <stop offset="1" stop-color="#327bff"/>
     </linearGradient>
   </defs>
-
-  <!-- Unequal corner cuts suggest a machined console, not a rounded app tile. -->
   <path d="M56 12H224L244 32V200L200 244H32L12 224V56Z" fill="url(#chassis)" stroke="url(#rim)" stroke-width="2" stroke-linejoin="round"/>
   <path d="M56 14H223L242 33V199L199 242H33L14 223V57Z" fill="url(#ambient)"/>
   <path d="M16 57L57 16H222" fill="none" stroke="#e2f2ff" stroke-opacity="0.20" stroke-width="2"/>
-
-  <!-- Hand-built letterforms: 24-unit stems and an open 20-unit centre seam. -->
-  <path d="M56 68H106L124 86V122L106 140H80V188H56Z M80 92V116H96L100 112V96L96 92Z" fill="url(#ice)" fill-rule="evenodd"/>
-  <path d="M144 68H204V92H168V112H186L204 130V170L186 188H140V164H174L180 158V142L174 136H144Z" fill="url(#electric)"/>
-
-  <!-- A single lower bevel catches blue light; no blur filters or ornament. -->
+  <path d="M44 188L72 68H96L124 188H100L94 164H74L68 188Z M76 140H92L84 106Z" fill="url(#ice)" fill-rule="evenodd"/>
+  <path d="M144 68H212V92L176 164H212V188H140V164L176 92H144Z" fill="url(#electric)"/>
   <path d="M200 237L237 200" fill="none" stroke="#4b9bff" stroke-opacity="0.55" stroke-width="3"/>
 </svg>

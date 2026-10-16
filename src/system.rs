@@ -1,4 +1,4 @@
-//! The console side of PS5 Launcher OS: there is no desktop to fall back to, so the launcher
+//! The console side of AzrakOS: there is no desktop to fall back to, so the launcher
 //! itself connects to Wi-Fi, pairs controllers, picks the sound output, restarts, shuts down and
 //! reports system updates. Everything goes through the standard tools (NetworkManager, BlueZ,
 //! PipeWire, systemd, rpm-ostree); on an ordinary desktop none of it is shown.
@@ -7,11 +7,12 @@ use std::path::Path;
 use std::process::Command;
 
 /// Written into the OS image (built in github.com/AzrakHQ/azrak-os).
-const MARKER: &str = "/usr/lib/ps5-launcher-os/release";
+pub const MARKER: &str = "/usr/lib/azrak-os/release";
 
-/// Running on PS5 Launcher OS (or pretending to, for screenshots: `PS5_LAUNCHER_OS=1`).
+/// Running on AzrakOS (or pretending to, for screenshots: `AZRAK_OS=1`). Also on a PS5 Launcher
+/// OS image that hasn't updated to AzrakOS yet.
 pub fn on_os() -> bool {
-    std::env::var_os("PS5_LAUNCHER_OS").is_some_and(|v| v == "1") || Path::new(MARKER).exists()
+    std::env::var_os("AZRAK_OS").is_some_and(|v| v == "1") || Path::new(MARKER).exists() || Path::new(crate::rename::OLD_OS_MARKER).exists()
 }
 
 /// Run a system tool and wait at most `seconds` (some wait forever for missing hardware, e.g.

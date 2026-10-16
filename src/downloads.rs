@@ -20,7 +20,7 @@ use tokio::task::{AbortHandle, Id, JoinError, JoinSet};
 
 const MAX_JOBS: usize = 32;
 const MAX_METADATA: u64 = 16 * 1024 * 1024;
-const MARKER: &str = ".ps5-launcher-owned";
+pub const MARKER: &str = ".azrak-owned";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum State { Resolving, Ready, Checking, Downloading, Paused, Complete, Failed, Cancelled }
@@ -292,6 +292,7 @@ fn owned_folder(job: &Job) -> Result<PathBuf> {
         Ok(metadata) => {
             ensure!(metadata.is_dir() && !metadata.file_type().is_symlink(), "Transfer folder is not a regular directory");
             ensure!(metadata.uid() == unsafe { libc::geteuid() }, "Transfer folder belongs to another user");
+            crate::rename::adopt_marker(&folder);
             let marker = std::fs::symlink_metadata(folder.join(MARKER)).context("Missing ownership marker")?;
             ensure!(marker.is_file() && !marker.file_type().is_symlink() && marker.nlink() == 1
                 && marker.uid() == unsafe { libc::geteuid() } && marker.len() == job.key.len() as u64,

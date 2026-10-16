@@ -3,7 +3,7 @@
 //!
 //! Sony's public PlayStation App catalog API returns the same assets the PS5 shows: square
 //! tile icon (MASTER), game hub background, transparent title logo, portrait cover,
-//! screenshots, trailer, star rating. Cached in ~/.cache/ps5-launcher/psn.json (v1 format).
+//! screenshots, trailer, star rating. Cached in ~/.cache/azrak/psn.json (v1 format).
 
 use crate::util::{atomic_write, cache_dir, clean_multiline, http_json, now_secs};
 use serde::{Deserialize, Serialize};

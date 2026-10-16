@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub const APP_NAME: &str = "ps5-launcher";
+pub const APP_NAME: &str = "azrak";
 pub const USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36";
 

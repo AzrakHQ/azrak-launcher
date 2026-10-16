@@ -37,7 +37,7 @@ if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 200
     || !Number.isFinite(verificationSeconds) || verificationSeconds < 0 || verificationSeconds > 600) {
   throw new Error('max-pages must be 1–200 and verification-timeout must be 0–600 seconds');
 }
-const profile = resolve(homedir(), '.cache/ps5-launcher/rutracker-list-browser');
+const profile = resolve(homedir(), '.cache/azrak/rutracker-list-browser');
 const pages = [];
 const pending = new Set([platform.source]);
 const visited = new Set();

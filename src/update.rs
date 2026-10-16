@@ -1,4 +1,4 @@
-//! PS5 Launcher self-update from its own GitHub releases.
+//! Azrak Launcher self-update from its own GitHub releases.
 //!
 //! The launcher checks at start and every 6 hours. A newer release is downloaded in the
 //! background, verified (SHA-256 from GitHub), test-run, and swapped in place of the running
@@ -13,7 +13,7 @@ use std::process::Command;
 use std::time::Duration;
 
 pub const REPO: &str = "AzrakHQ/azrak";
-const ASSET: &str = "ps5-launcher-linux-x86_64.tar.gz";
+const ASSET: &str = "azrak-linux-x86_64.tar.gz";
 const CHECK_INTERVAL: f64 = 6.0 * 3600.0;
 
 #[derive(Clone, Debug)]
@@ -24,12 +24,15 @@ pub struct Release {
     pub sha256: String,
 }
 
-/// Version of the running binary. `PS5_LAUNCHER_PRETEND_VERSION` exists for testing updates.
+/// Version of the running binary. `AZRAK_PRETEND_VERSION` exists for testing updates.
+/// The menu icon install.sh puts in place.
+pub const ICON: &[u8] = include_bytes!("../assets/azrak.svg");
+
 /// Put the current menu icon in place of an older one. Automatic updates replace only the
 /// binary, so without this an updated launcher keeps the icon of the version first installed.
 /// Only an icon that install.sh put in the user's data folder is touched.
 pub fn refresh_menu_icon() {
-    const ICON: &[u8] = include_bytes!("../assets/ps5-launcher.svg");
+
     let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| crate::util::expand_home("~/.local/share"));
     let hicolor = data.join("icons").join("hicolor");
     let path = hicolor.join("scalable").join("apps").join(format!("{}.svg", crate::util::APP_NAME));
@@ -52,7 +55,7 @@ pub fn refresh_menu_icon() {
 }
 
 pub fn current_version() -> String {
-    std::env::var("PS5_LAUNCHER_PRETEND_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
+    std::env::var("AZRAK_PRETEND_VERSION").unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
 }
 
 fn parse(v: &str) -> Vec<u64> {
@@ -103,7 +106,7 @@ pub fn replaceable_exe() -> Result<PathBuf, String> {
 pub fn install(rel: &Release, exe: &Path, progress: &dyn Fn(String, f32)) -> Result<(), String> {
     let dir = exe.parent().ok_or("no install folder")?;
     // Work next to the binary so the final rename stays on one filesystem.
-    let work = dir.join(".ps5-launcher-update");
+    let work = dir.join(".azrak-update");
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
     let cleanup = || {
@@ -115,22 +118,22 @@ pub fn install(rel: &Release, exe: &Path, progress: &dyn Fn(String, f32)) -> Res
         let pct = if total > 0 { done * 100 / total } else { 0 };
         if pct != last.get() {
             last.set(pct);
-            progress(format!("Downloading PS5 Launcher {} · {pct}%", rel.version), pct as f32 / 100.0);
+            progress(format!("Downloading Azrak Launcher {} · {pct}%", rel.version), pct as f32 / 100.0);
         }
     });
     if let Err(e) = res {
         cleanup();
         return Err(e);
     }
-    progress(format!("Installing PS5 Launcher {}…", rel.version), 1.0);
+    progress(format!("Installing Azrak Launcher {}…", rel.version), 1.0);
     let ok = Command::new("tar").arg("-xzf").arg(&archive).arg("-C").arg(&work).status().is_ok_and(|s| s.success());
-    let new_bin = work.join("ps5-launcher-linux-x86_64").join("ps5-launcher");
+    let new_bin = work.join("azrak-linux-x86_64").join("azrak");
     if !ok || !new_bin.is_file() {
         cleanup();
         return Err("could not unpack the update".into());
     }
     // The new binary must run here and report the expected version.
-    let out = Command::new(&new_bin).arg("--version").env_remove("PS5_LAUNCHER_PRETEND_VERSION").output();
+    let out = Command::new(&new_bin).arg("--version").env_remove("AZRAK_PRETEND_VERSION").output();
     let reported = out.ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
     if !reported.ends_with(&rel.version) {
         cleanup();
@@ -138,13 +141,13 @@ pub fn install(rel: &Release, exe: &Path, progress: &dyn Fn(String, f32)) -> Res
     }
     let _ = std::fs::set_permissions(&new_bin, std::fs::Permissions::from_mode(0o755));
     // Keep the old binary for a manual rollback, then swap atomically.
-    let _ = std::fs::copy(exe, dir.join("ps5-launcher.previous"));
-    let staged = dir.join(".ps5-launcher.new");
+    let _ = std::fs::copy(exe, dir.join("azrak.previous"));
+    let staged = dir.join(".azrak.new");
     std::fs::rename(&new_bin, &staged).map_err(|e| e.to_string())?;
     let r = std::fs::rename(&staged, exe).map_err(|e| e.to_string());
     cleanup();
     r?;
-    crate::log!("PS5 Launcher updated to {}", rel.version);
+    crate::log!("Azrak Launcher updated to {}", rel.version);
     Ok(())
 }
 
@@ -204,10 +207,10 @@ impl App {
                             if auto || manual {
                                 app.app_update_install(rel);
                             } else {
-                                app.toast_app("Update available", &format!("PS5 Launcher {} can be installed from Settings.", rel.version), 0);
+                                app.toast_app("Update available", &format!("Azrak Launcher {} can be installed from Settings.", rel.version), 0);
                             }
                         } else if manual {
-                            app.toast_app("PS5 Launcher is up to date", &format!("You have the latest version, {}.", current_version()), 1);
+                            app.toast_app("Azrak Launcher is up to date", &format!("You have the latest version, {}.", current_version()), 1);
                         }
                     }
                     Err(e) => {
@@ -234,7 +237,7 @@ impl App {
             Err(e) => {
                 crate::log!("launcher update {} available, not installed: {e}", rel.version);
                 self.upd.error = format!("Can't update automatically: {e}");
-                self.toast_app("Update available", &format!("PS5 Launcher {} can't install automatically: {e}.", rel.version), 0);
+                self.toast_app("Update available", &format!("Azrak Launcher {} can't install automatically: {e}.", rel.version), 0);
                 self.kyty_refresh_settings();
                 return;
             }
@@ -264,7 +267,7 @@ impl App {
                 match res {
                     Ok(()) => {
                         app.upd.installed = Some(rel.version.clone());
-                        app.toast_app("Update ready", &format!("PS5 Launcher {} starts the next time you open it. To switch now, choose Settings → Updates → PS5 Launcher.", rel.version), 1);
+                        app.toast_app("Update ready", &format!("Azrak Launcher {} starts the next time you open it. To switch now, choose Settings → Updates → Azrak Launcher.", rel.version), 1);
                     }
                     Err(e) => {
                         crate::log!("launcher update failed: {e}");
@@ -284,7 +287,7 @@ impl App {
             return;
         }
         let Ok(exe) = std::env::current_exe() else { return };
-        // current_exe() of a replaced binary reads "…/ps5-launcher (deleted)": use the path itself.
+        // current_exe() of a replaced binary reads "…/azrak (deleted)": use the path itself.
         let exe = PathBuf::from(exe.to_string_lossy().trim_end_matches(" (deleted)"));
         // Drop --monitor: after a display change the saved setting must win.
         let mut args: Vec<String> = Vec::new();
@@ -300,7 +303,7 @@ impl App {
         self.installer.shutdown();
         self.downloads.shutdown();
         use std::os::unix::process::CommandExt;
-        let err = Command::new(&exe).args(&args).env_remove("PS5_LAUNCHER_PRETEND_VERSION").exec();
+        let err = Command::new(&exe).args(&args).env_remove("AZRAK_PRETEND_VERSION").exec();
         let (seed, vpn) = { let c = self.cfg.lock().unwrap(); (c.seed_after_download, c.download_vpn()) };
         self.downloads = crate::downloads::Manager::load(seed, vpn);
         self.installer = crate::installer::Manager::load();

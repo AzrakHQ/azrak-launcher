@@ -1,4 +1,4 @@
-//! User settings, stored in ~/.config/ps5-launcher/config.json (same format as v1).
+//! User settings, stored in ~/.config/azrak/config.json (same format as v1).
 
 use crate::util::{atomic_write, config_dir, expand_home};
 use serde::{Deserialize, Serialize};
@@ -28,7 +28,7 @@ pub struct Config {
     pub kyty_auto_update: bool,
     /// Install shadPS4 in the background and keep it on the latest official release.
     pub shad_auto_update: bool,
-    /// Install new PS5 Launcher releases automatically (applied on the next start).
+    /// Install new Azrak Launcher releases automatically (applied on the next start).
     pub app_auto_update: bool,
     /// Download (and seed) only through a VPN; stop when it isn't connected.
     pub vpn_only: bool,
@@ -42,9 +42,9 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             emulator: String::new(),
-            game_dirs: vec!["~/Games/PS5".into()],
-            download_dir: "~/Downloads/PS5".into(),
-            install_dir: "~/Games/PS5".into(),
+            game_dirs: vec!["~/Games/Azrak".into()],
+            download_dir: "~/Downloads/Azrak".into(),
+            install_dir: "~/Games/Azrak".into(),
             seed_after_download: true,
             library_compact: false,
             fullscreen: true,

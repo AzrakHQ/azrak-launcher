@@ -1,5 +1,5 @@
 //! shadPS4, the PS4 emulator, managed like KytyPS5: the official Linux build from GitHub
-//! Releases, kept under ~/.local/share/ps5-launcher/shadps4:
+//! Releases, kept under ~/.local/share/azrak/shadps4:
 //!
 //!   versions/<tag>/squashfs-root/   one unpacked release per folder (AppImage contents)
 //!   current -> versions/<tag>

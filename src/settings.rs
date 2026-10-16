@@ -9,7 +9,7 @@ use crate::SettingData;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SId {
     Header,
-    // System (PS5 Launcher OS only; see system_ui.rs)
+    // System (AzrakOS only; see system_ui.rs)
     Internet,
     WifiNet(u16),
     BtPair,
@@ -155,15 +155,15 @@ impl App {
         rows.push((SId::Downloads, r));
 
         header(&mut rows, "UPDATES");
-        // PS5 Launcher
+        // Azrak Launcher
         let cur = crate::update::current_version();
         let latest = self.upd.latest.as_ref().map(|r| r.version.clone());
-        let mut r = row(4, "PS5 Launcher");
+        let mut r = row(4, "Azrak Launcher");
         r.hint = "This app".into();
         let (value, kind) = if let Some(v) = &self.upd.installed {
             (format!("Restart to finish · {v}"), 3)
         } else if self.upd.busy {
-            (self.upd.progress.replace("Downloading PS5 Launcher ", ""), 0)
+            (self.upd.progress.replace("Downloading Azrak Launcher ", ""), 0)
         } else if self.upd.checking {
             ("Checking…".to_string(), 0)
         } else if self.app_update_available() {
@@ -320,7 +320,7 @@ impl App {
             r.danger = true;
             rows.push((SId::ShutDown, r));
         } else {
-            let mut r = row(4, "Quit PS5 Launcher");
+            let mut r = row(4, "Quit Azrak Launcher");
             r.value = "Ctrl+Q".into();
             r.danger = true;
             rows.push((SId::Quit, r));

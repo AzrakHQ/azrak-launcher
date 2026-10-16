@@ -13,7 +13,7 @@ import { promisify } from 'node:util';
 const execFile = promisify(execFileCallback);
 const script = fileURLToPath(import.meta.url);
 const root = resolve(dirname(script), '..');
-const binary = resolve(process.argv[2] || join(root, 'target/release/ps5-launcher'));
+const binary = resolve(process.argv[2] || join(root, 'target/release/azrak'));
 
 if (process.env.PS5_CATALOG_TEST_ISOLATED !== '1') {
   const result = spawnSync('unshare', [
@@ -76,7 +76,7 @@ async function screenshot(name) {
 
 async function launch(name, profile, catalog, capture = false) {
   const base = join(artifacts, profile);
-  const config = join(base, 'config/ps5-launcher');
+  const config = join(base, 'config/azrak');
   await mkdir(config, { recursive: true });
   await writeFile(join(config, 'config.json'), JSON.stringify({
     sounds: false, kyty_auto_update: false, app_auto_update: false, game_dirs: [],
@@ -94,7 +94,7 @@ async function launch(name, profile, catalog, capture = false) {
   const closed = new Promise(resolve => child.once('close', resolve));
   try {
     await waitForHome(child, () => logs);
-    const { stdout } = await execFile('xdotool', ['search', '--sync', '--onlyvisible', '--name', '^PS5 Launcher$'], { timeout: 10_000 });
+    const { stdout } = await execFile('xdotool', ['search', '--sync', '--onlyvisible', '--name', '^Azrak Launcher$'], { timeout: 10_000 });
     const window = stdout.trim().split('\n')[0];
     await execFile('xdotool', ['windowfocus', '--sync', window]);
     await execFile('xdotool', ['key', 'Tab']);
@@ -113,7 +113,7 @@ async function launch(name, profile, catalog, capture = false) {
   }
 }
 
-const cachePath = join(artifacts, 'retention/cache/ps5-launcher/catalog-rutracker.json');
+const cachePath = join(artifacts, 'retention/cache/azrak/catalog-rutracker.json');
 await launch('valid-import', 'retention', bundled, true);
 const goodBytes = await readFile(cachePath);
 const cache = JSON.parse(goodBytes);
@@ -137,7 +137,7 @@ for (const [name, path] of [['invalid-retains-cache', broken], ['missing-retains
 }
 await launch('invalid-falls-back-to-bundle', 'fresh', broken, true);
 await launch('zero-and-unknown', 'peer-profile', peers, true);
-const peerCache = JSON.parse(await readFile(join(artifacts, 'peer-profile/cache/ps5-launcher/catalog-rutracker.json')));
+const peerCache = JSON.parse(await readFile(join(artifacts, 'peer-profile/cache/azrak/catalog-rutracker.json')));
 assert.equal(peerCache.games[0].seeders, null);
 assert.equal(peerCache.games[1].seeders, 0);
 assert.equal(peerCache.games[0].leechers, null);

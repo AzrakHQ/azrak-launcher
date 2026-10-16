@@ -54,6 +54,6 @@ mod tests {
     }
     #[test]
     fn desktop_and_native_logo_stay_identical() {
-        assert_eq!(include_bytes!("../assets/ps5-launcher.svg").as_slice(), include_bytes!("../assets/icons/app-icon.svg").as_slice());
+        assert_eq!(include_bytes!("../assets/azrak.svg").as_slice(), include_bytes!("../assets/icons/app-icon.svg").as_slice());
     }
 }

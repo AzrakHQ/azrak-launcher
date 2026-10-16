@@ -1,13 +1,15 @@
-# PS5 Launcher
+<p align="center"><img src="assets/azrak.svg" width="128" alt="Azrak"></p>
 
-A PS5-style home screen for Linux. Browse PS5 and PS4 games with their official artwork, download
+# Azrak Launcher
+
+A console-style home screen for Linux. Browse PS5, PS4 and PC games with their official artwork, download
 and install them, and play them with the [KytyPS5](https://github.com/KytyPS5/KytyPS5) (PS5) and
 [shadPS4](https://github.com/shadps4-emu/shadPS4) (PS4) emulators, using a controller, keyboard or
 mouse.
 
-![PS5 Launcher: the Home screen, a Game Hub, then the Library filtered to PS4 games and a PS4 game's Hub](docs/demo/demo-loop.webp)
+![Azrak Launcher: the Home screen, a Game Hub, then the Library filtered to PS4 games and a PS4 game's Hub](docs/demo/demo-loop.webp)
 
-- **Your games on a PS5-style Home screen**, with official backgrounds, logos and trailers that
+- **Your games on a console-style Home screen**, with official backgrounds, logos and trailers that
   play right in the launcher.
 - **A Library of 400+ PS5 games** with search, genre filters and sorting. New releases show up
   by themselves: the list is updated daily.
@@ -24,21 +26,21 @@ You need 64-bit Linux: Ubuntu 22.04+, Debian 12+, Fedora 36+, Mint 21+, Arch or 
 Open a terminal and run:
 
 ```bash
-curl -fsSL https://github.com/AzrakHQ/azrak/releases/latest/download/ps5-launcher-linux-x86_64.tar.gz | tar xz && ./ps5-launcher-linux-x86_64/install.sh
+curl -fsSL https://github.com/AzrakHQ/azrak/releases/latest/download/azrak-linux-x86_64.tar.gz | tar xz && ./azrak-linux-x86_64/install.sh
 ```
 
-**PS5 Launcher** is now in your app menu. For trailers, switching between a game and the
+**Azrak Launcher** is now in your app menu. For trailers, switching between a game and the
 launcher, and installing from archives, also run (Ubuntu, Debian, Mint):
 
 ```bash
 sudo apt install xdotool mpv libarchive13
 ```
 
-To uninstall: `./ps5-launcher-linux-x86_64/install.sh --uninstall`
+To uninstall: `./azrak-linux-x86_64/install.sh --uninstall`
 
 ## Or turn a spare PC into a console
 
-**PS5 Launcher OS** makes a PC start straight into the launcher, like a console. It's
+**AzrakOS** makes a PC start straight into the launcher, like a console. It's
 [Bazzite](https://bazzite.gg), a gaming Linux, with the launcher built in. The launcher, its
 emulators and the system all keep themselves up to date. It's built in
 [AzrakHQ/azrak-os](https://github.com/AzrakHQ/azrak-os).
@@ -51,11 +53,11 @@ emulators and the system all keep themselves up to date. It's built in
 
 **Installing erases the disk you pick.**
 
-1. Download [ps5-launcher-os-x86_64.iso](https://github.com/AzrakHQ/azrak-os/releases/latest/download/ps5-launcher-os-x86_64.iso)
+1. Download [azrak-os-x86_64.iso](https://github.com/AzrakHQ/azrak-os/releases/latest/download/azrak-os-x86_64.iso)
    and write it to the USB stick with [balenaEtcher](https://etcher.balena.io) or
    [Fedora Media Writer](https://fedoraproject.org/workstation/download).
 2. Start the PC from the USB stick (press F12, F11, F8 or Esc while it starts) and choose
-   **Install PS5 Launcher OS**.
+   **Install AzrakOS**.
 3. In the installer, choose your language, then on the summary screen:
    - **Network & Host Name:** connect to Wi-Fi if you have no cable.
    - **Installation Destination:** pick the disk and press **Done**. Leave **Encrypt my data**
@@ -72,16 +74,16 @@ emulators and the system all keep themselves up to date. It's built in
    from the USB stick again, choose **Troubleshooting → Enroll the Secure Boot key again**, and
    the blue screen comes back.
 
-The PC now starts straight into PS5 Launcher, and it picks the NVIDIA version of the system by
+The PC now starts straight into Azrak Launcher, and it picks the NVIDIA version of the system by
 itself when it finds an NVIDIA graphics card. To get to the desktop, quit the launcher
 (**Settings → Quit**); it opens again at the next start or from the app menu.
 
 ## Getting started
 
-1. Open **PS5 Launcher** from your app menu, or run this in a terminal:
+1. Open **Azrak Launcher** from your app menu, or run this in a terminal:
 
    ```bash
-   ps5-launcher
+   azrak
    ```
 
    The first launch downloads artwork and KytyPS5, which takes about a minute.
@@ -165,8 +167,8 @@ try the next one.
 
 - **A game closes right away:** check its tag, then **Options → View emulator log**.
 - **Resume or Stop doesn't work:** install `xdotool`.
-- **Wrong screen:** change **Settings → Display**. For a window, run `ps5-launcher --windowed`.
-- **Too big or too small:** run `PS5_LAUNCHER_SCALE=1.15 ps5-launcher` (bigger number, bigger UI).
+- **Wrong screen:** change **Settings → Display**. For a window, run `azrak --windowed`.
+- **Too big or too small:** run `AZRAK_SCALE=1.15 azrak` (bigger number, bigger UI).
 - **A new KytyPS5 broke a game:** **Settings → Roll back to previous KytyPS5**.
 
 Still stuck? [Open an issue](https://github.com/AzrakHQ/azrak/issues).
@@ -174,7 +176,7 @@ Developers: see the [developer guide](docs/DEVELOPMENT.md).
 
 ---
 
-PS5 Launcher is an unofficial fan project, not affiliated with or endorsed by Sony Interactive
+Azrak Launcher is an unofficial fan project, not affiliated with or endorsed by Sony Interactive
 Entertainment. "PlayStation" and "PS5" are trademarks of Sony Interactive Entertainment. Game
 artwork and information belong to their owners. Use only games you own.
 

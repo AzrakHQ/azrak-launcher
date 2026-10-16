@@ -189,7 +189,7 @@ fn tidy(name: &str) -> String {
 
 /// Read this PC. Takes up to a few seconds (the graphics check); call off the UI thread.
 pub fn detect() -> Specs {
-    if let Some(specs) = std::env::var("PS5_LAUNCHER_PRETEND_PC").ok().and_then(|s| pretend(&s)) {
+    if let Some(specs) = std::env::var("AZRAK_PRETEND_PC").ok().and_then(|s| pretend(&s)) {
         return specs;
     }
     let cpuinfo = std::fs::read_to_string("/proc/cpuinfo").unwrap_or_default();
@@ -242,7 +242,7 @@ fn parse_cpu(text: &str) -> Specs {
     specs
 }
 
-/// Runs `ps5-launcher --probe-gpu` and reads its lines. `None` when it crashed or hung.
+/// Runs `azrak --probe-gpu` and reads its lines. `None` when it crashed or hung.
 fn probe_gpus() -> Option<Vec<Gpu>> {
     let exe = std::env::current_exe().ok()?;
     let mut child = std::process::Command::new(exe).arg("--probe-gpu")
@@ -361,7 +361,7 @@ unsafe fn vulkan_devices() -> Vec<Probed> {
     // and then the emulators' requirements are reported as unknown.
     let mut instance: Handle = std::ptr::null_mut();
     for api in [(1 << 22) | (1 << 12), 1 << 22] {
-        let app = AppInfo { s_type: 0, next: std::ptr::null(), app: c"ps5-launcher".as_ptr(), app_version: 1, engine: std::ptr::null(), engine_version: 0, api };
+        let app = AppInfo { s_type: 0, next: std::ptr::null(), app: c"azrak".as_ptr(), app_version: 1, engine: std::ptr::null(), engine_version: 0, api };
         let info = InstanceInfo { s_type: 1, next: std::ptr::null(), flags: 0, app: &app, layers: 0, layer_names: std::ptr::null(), exts: 0, ext_names: std::ptr::null() };
         if create(&info, std::ptr::null(), &mut instance) == 0 && !instance.is_null() {
             break;

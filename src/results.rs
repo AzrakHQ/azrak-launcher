@@ -1,4 +1,4 @@
-//! Your own KytyPS5 results, saved on this PC in ~/.config/ps5-launcher/results.json.
+//! Your own KytyPS5 results, saved on this PC in ~/.config/azrak/results.json.
 //! A result becomes the game's tag here right away, and is shared with the community list
 //! (KytyPS5's game status reports) in batches, from Settings.
 

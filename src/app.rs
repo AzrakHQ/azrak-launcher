@@ -252,7 +252,7 @@ pub struct App {
     net_checking: bool,
     net_watch: slint::Timer,
     net_retry: NetRetry,
-    /// Settings → SYSTEM on PS5 Launcher OS.
+    /// Settings → SYSTEM on AzrakOS.
     pub sys: crate::system_ui::SysUi,
     /// This PC's processor, memory and graphics (read in the background at start).
     pub pc: Option<crate::pc::Specs>,
@@ -462,7 +462,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
     let tick = slint::Timer::default();
     tick.start(slint::TimerMode::Repeated, Duration::from_secs(1), || with_app(|app| app.tick()));
     with_app(|app| app.tick());
-    // Under Gamescope (PS5 Launcher OS) the launcher's window is only shown once it's tagged.
+    // Under Gamescope (AzrakOS) the launcher's window is only shown once it's tagged.
     for ms in [300, 1000, 3000] {
         slint::Timer::single_shot(Duration::from_millis(ms), || { std::thread::spawn(crate::sessions::claim_screen); });
     }
@@ -474,8 +474,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
             app.start_enrich();
         }
         // New releases are published daily; a launcher left open for days still picks them up.
-        // PS5_LAUNCHER_CATALOG_INTERVAL (seconds): for testing reloads while something is open.
-        let every = std::env::var("PS5_LAUNCHER_CATALOG_INTERVAL").ok().and_then(|s| s.parse::<f64>().ok()).filter(|s| *s >= 1.0)
+        // AZRAK_CATALOG_INTERVAL (seconds): for testing reloads while something is open.
+        let every = std::env::var("AZRAK_CATALOG_INTERVAL").ok().and_then(|s| s.parse::<f64>().ok()).filter(|s| *s >= 1.0)
             .unwrap_or(crate::catalog::CATALOG_TTL);
         app.catalog_timer.start(slint::TimerMode::Repeated, Duration::from_secs_f64(every),
             || with_app(|app| app.start_sync(false)));
@@ -772,7 +772,7 @@ impl App {
 
     // ------------------------------------------------------------------ background jobs
 
-    /// Downloads that failed because the network wasn't up yet (on PS5 Launcher OS the launcher
+    /// Downloads that failed because the network wasn't up yet (on AzrakOS the launcher
     /// starts with the PC, often before the network) are retried as soon as it is, instead of
     /// waiting hours for the next scheduled check.
     pub fn net_watch_start(&mut self) {

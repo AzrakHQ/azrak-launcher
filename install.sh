@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PS5 Launcher installer: installs the launcher and adds it to your app menu.
+# Azrak Launcher installer: installs the launcher and adds it to your app menu.
 # In a release download it installs the included binary; in a source checkout it builds first.
 #
 #   ./install.sh               install for the current user (no sudo)
@@ -8,7 +8,9 @@
 #   PREFIX=/usr/local sudo -E ./install.sh   system-wide install
 set -euo pipefail
 
-APP=ps5-launcher
+APP=azrak
+# The name before Azrak: an older install is replaced (the launcher moves its settings itself).
+OLD=ps5-launcher
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
@@ -39,8 +41,10 @@ distro_hint() {
 }
 
 uninstall() {
-    bold "Removing PS5 Launcher"
-    rm -f "$BIN_DIR/$APP" "$APPS_DIR/$APP.desktop" "$ICON_DIR/$APP.svg" "$AUTOSTART_DIR/$APP.desktop"
+    bold "Removing Azrak Launcher"
+    for name in "$APP" "$OLD"; do
+        rm -f "$BIN_DIR/$name" "$BIN_DIR/$name.previous" "$APPS_DIR/$name.desktop" "$ICON_DIR/$name.svg" "$AUTOSTART_DIR/$name.desktop"
+    done
     command -v update-desktop-database >/dev/null && update-desktop-database "$APPS_DIR" 2>/dev/null || true
     ok "Removed. Settings and cache are kept in ~/.config/$APP and ~/.cache/$APP (delete them to reset)."
 }
@@ -55,13 +59,13 @@ for arg in "$@"; do
     esac
 done
 
-[ "$(uname -s)" = "Linux" ] || die "PS5 Launcher runs on Linux only."
+[ "$(uname -s)" = "Linux" ] || die "Azrak Launcher runs on Linux only."
 
 # Release archives ship a prebuilt binary next to this script: nothing to compile.
 PREBUILT="$HERE/$APP"
 if [ -f "$PREBUILT" ] && [ ! -f "$HERE/Cargo.toml" ]; then
     bold "1/2  Checking the prebuilt binary"
-    "$PREBUILT" --version >/dev/null 2>&1 || die "The prebuilt binary does not run on this system (it needs glibc 2.35+, e.g. Ubuntu 22.04 or newer). Build from source instead: https://github.com/MohamedAliRashad/ps5-launcher#build-from-source"
+    "$PREBUILT" --version >/dev/null 2>&1 || die "The prebuilt binary does not run on this system (it needs glibc 2.35+, e.g. Ubuntu 22.04 or newer). Build from source instead: https://github.com/AzrakHQ/azrak#build-from-source"
     ok "$("$PREBUILT" --version)"
     BIN_SRC="$PREBUILT"
     STEP="2/2"
@@ -100,19 +104,22 @@ fi
 bold "$STEP  Installing"
 cd "$HERE"
 mkdir -p "$BIN_DIR" "$APPS_DIR" "$ICON_DIR"
+# An install from before the rename: its binary, menu entry and icon go (settings move on first start).
+[ -e "$AUTOSTART_DIR/$OLD.desktop" ] && AUTOSTART=1
+rm -f "$BIN_DIR/$OLD" "$BIN_DIR/$OLD.previous" "$APPS_DIR/$OLD.desktop" "$ICON_DIR/$OLD.svg" "$AUTOSTART_DIR/$OLD.desktop"
 install -m 755 "$BIN_SRC" "$BIN_DIR/$APP"
 install -m 644 "assets/$APP.svg" "$ICON_DIR/$APP.svg"
 cat > "$APPS_DIR/$APP.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=PS5 Launcher
+Name=Azrak Launcher
 GenericName=Game Launcher
-Comment=PlayStation 5 style game launcher
+Comment=Console-style game launcher for Linux
 Exec=$BIN_DIR/$APP
 Icon=$APP
 Terminal=false
 Categories=Game;
-Keywords=ps5;playstation;kyty;emulator;games;
+Keywords=azrak;ps5;ps4;playstation;kyty;shadps4;emulator;games;
 StartupWMClass=$APP
 EOF
 ok "Binary      $BIN_DIR/$APP"
@@ -137,4 +144,4 @@ case ":$PATH:" in
     *) warn "$BIN_DIR is not in your PATH; start it from the app menu or run $BIN_DIR/$APP" ;;
 esac
 echo
-bold "Done! Start PS5 Launcher from your app menu, or run:  $APP"
+bold "Done! Start Azrak Launcher from your app menu, or run:  $APP"

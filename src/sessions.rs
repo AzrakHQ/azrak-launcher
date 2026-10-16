@@ -76,7 +76,7 @@ fn active_window_pid() -> u32 {
     xdotool(&["getactivewindow", "getwindowpid"]).parse().unwrap_or(0)
 }
 
-// ------------------------------------------------------------------ Gamescope (PS5 Launcher OS)
+// ------------------------------------------------------------------ Gamescope (AzrakOS)
 //
 // Gamescope has no window manager to activate windows. In its Steam mode (`gamescope -e`, as on
 // SteamOS) each window carries a STEAM_GAME id, and the root window's

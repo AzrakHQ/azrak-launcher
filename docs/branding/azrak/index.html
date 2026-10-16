@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Azrak / Identity</title>
+  <style>
+    @font-face { font-family: Inter; src: url("../../../assets/fonts/Inter-Regular.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+    @font-face { font-family: Inter; src: url("../../../assets/fonts/Inter-Medium.ttf") format("truetype"); font-weight: 500; font-display: swap; }
+    :root {
+      --bg: #05070f;
+      --text: #f5f7fb;
+      --secondary: #b9c3da;
+      --muted: #7d88a3;
+      --accent: #0a6cff;
+      --line: #ffffff1c;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--text); background: var(--bg); font-family: Inter, sans-serif; font-size: 14px; line-height: 1.5; letter-spacing: 0; }
+    .sheet { max-width: 1280px; margin: auto; padding: 34px 56px 28px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
+    .organization { color: var(--text); font-weight: 500; font-size: 18px; }
+    .organization span { color: #65bdff; }
+    .edition { color: var(--muted); font-size: 12px; text-align: right; }
+    .identity { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); align-items: center; gap: 58px; min-height: 424px; padding: 34px 36px 40px; }
+    .emblem { display: block; width: 336px; max-width: 100%; height: auto; margin: auto; }
+    .name { min-width: 0; }
+    h1 { margin: 0; line-height: 1; }
+    .wordmark { display: block; width: 100%; max-width: 440px; height: auto; }
+    .descriptor { margin: 22px 0 0; color: var(--secondary); font-size: 24px; font-weight: 400; }
+    .accent-line { width: 52px; height: 3px; background: var(--accent); margin-top: 27px; }
+    .products { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+    .product { display: flex; align-items: center; justify-content: center; gap: 18px; padding: 24px 18px; min-width: 0; }
+    .product + .product { border-left: 1px solid var(--line); }
+    .product img { width: 60px; height: 60px; flex: 0 0 60px; }
+    .product h2 { margin: 0; font-weight: 500; font-size: 23px; line-height: 1.3; }
+    .product h2 span { color: #65bdff; }
+    .proofs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; margin-top: 24px; }
+    .proof { min-width: 0; }
+    h3 { margin: 0 0 10px; font-size: 11px; font-weight: 400; color: var(--muted); }
+    .sample { display: flex; align-items: center; justify-content: center; gap: 16px; min-height: 140px; background: #0a101e; }
+    .sample.light { background: #e9edf4; }
+    .sample.original { background: #0a101e; }
+    .sample > img { width: 96px; height: 96px; }
+    .sizes { padding: 12px; gap: 13px; }
+    .size { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 12px; min-height: 78px; color: var(--muted); font-size: 10px; }
+    .size img { display: block; flex-shrink: 0; }
+    .s24 { width: 24px; height: 24px; }
+    .s32 { width: 32px; height: 32px; }
+    .s48 { width: 48px; height: 48px; }
+    footer { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+    .swatches { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
+    .swatch { display: inline-flex; align-items: center; gap: 7px; }
+    .chip { width: 9px; height: 9px; display: inline-block; background: var(--chip); }
+    a { color: var(--secondary); text-decoration-color: var(--muted); text-underline-offset: 4px; }
+    a:focus-visible { outline: 2px solid #65bdff; outline-offset: 5px; }
+    @media (max-width: 1000px) {
+      .sheet { padding: 28px 30px; }
+      .identity { padding: 34px 0; gap: 32px; min-height: 360px; }
+      .emblem { width: 280px; }
+      .descriptor { font-size: 21px; }
+      .product h2 { font-size: 19px; }
+      .proofs { gap: 12px; }
+      .sizes { gap: 8px; padding: 8px; }
+    }
+    @media (max-width: 700px) {
+      .sheet { padding: 24px 22px; }
+      .identity { grid-template-columns: minmax(0, 1fr); gap: 32px; padding: 30px 0 34px; }
+      .emblem { width: 248px; }
+      .name { text-align: center; }
+      .wordmark { max-width: 300px; margin: auto; }
+      .descriptor { font-size: 20px; margin-top: 17px; }
+      .accent-line { margin: 22px auto 0; }
+      .products { grid-template-columns: minmax(0, 1fr); }
+      .product { justify-content: flex-start; padding: 20px 10px; gap: 16px; }
+      .product + .product { border-left: 0; border-top: 1px solid var(--line); }
+      .product img { width: 48px; height: 48px; flex-basis: 48px; }
+      .product h2 { font-size: 21px; }
+      .proofs { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 12px; }
+      .sample { min-height: 138px; }
+      .sizes { gap: 7px; padding: 4px; }
+      footer { flex-direction: column; align-items: flex-start; gap: 15px; }
+      .swatches { gap: 12px; font-size: 10px; }
+    }
+    @media print {
+      body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      .sheet { padding: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="sheet">
+    <header>
+      <div class="organization">Azrak<span>HQ</span></div>
+      <div class="edition">IDENTITY / 01<br>16 October 2026</div>
+    </header>
+    <section class="identity" aria-label="Azrak primary identity">
+      <img class="emblem" src="logo.svg" alt="Azrak AZ emblem in the original blue-and-white chamfered chassis">
+      <div class="name">
+        <h1><img class="wordmark" src="wordmark.svg" alt="AZRAK"></h1>
+        <p class="descriptor">Launcher</p>
+        <div class="accent-line" aria-hidden="true"></div>
+      </div>
+    </section>
+    <section class="products" aria-label="Product identities">
+      <div class="product"><img src="logo.svg" alt=""><h2>Azrak Launcher</h2></div>
+      <div class="product"><img src="logo.svg" alt=""><h2>Azrak<span>OS</span></h2></div>
+    </section>
+    <section class="proofs" aria-label="Original logo comparison and small-size checks">
+      <div class="proof"><h3>ORIGINAL / P5</h3><div class="sample original"><img src="../../../assets/ps5-launcher.svg" alt="Original P5 emblem for comparison"></div></div>
+      <div class="proof"><h3>AZRAK / LIGHT</h3><div class="sample light"><img src="logo.svg" alt="Azrak icon on a light background"></div></div>
+      <div class="proof"><h3>AZRAK / DARK</h3><div class="sample"><img src="logo.svg" alt="Azrak icon on a dark background"></div></div>
+      <div class="proof"><h3>ACTUAL SIZE / PX</h3><div class="sample sizes"><div class="size"><img class="s24" src="logo.svg" alt="Azrak at 24 pixels"><span>24</span></div><div class="size"><img class="s32" src="logo.svg" alt="Azrak at 32 pixels"><span>32</span></div><div class="size"><img class="s48" src="logo.svg" alt="Azrak at 48 pixels"><span>48</span></div></div></div>
+    </section>
+    <footer>
+      <div class="swatches"><span class="swatch"><i class="chip" style="--chip: #f5f7fb" aria-hidden="true"></i>Ice white</span><span class="swatch"><i class="chip" style="--chip: #0a6cff" aria-hidden="true"></i>Electric blue</span><span class="swatch"><i class="chip" style="--chip: #1b2b43" aria-hidden="true"></i>Original chassis</span></div>
+      <div><a href="logo.svg">Logo SVG</a> &middot; <a href="wordmark.svg">Wordmark SVG</a></div>
+    </footer>
+  </main>
+</body>
+</html>

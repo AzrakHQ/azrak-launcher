@@ -1,6 +1,6 @@
 //! Image loading: fetch → decode → resize → cache, on a priority thread pool.
 //!
-//! Two disk caches under ~/.cache/ps5-launcher:
+//! Two disk caches under ~/.cache/azrak:
 //!   img/<sha1[:2]>/<sha1(url)>   original downloads (same layout as v1)
 //!   thumbs/<sha1(key)>.qoi        decoded + resized pixels; QOI decodes ~10x faster than PNG
 //! A warm start therefore never touches the network or a JPEG/PNG decoder.
@@ -243,10 +243,10 @@ pub fn trim_thumbs() {
     }
 }
 
-pub static NO_ART: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("PS5_LAUNCHER_NO_ART").is_some());
+pub static NO_ART: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("AZRAK_NO_ART").is_some());
 
 pub static START: std::sync::LazyLock<std::time::Instant> = std::sync::LazyLock::new(std::time::Instant::now);
-pub static DEBUG: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("PS5_LAUNCHER_DEBUG").is_some());
+pub static DEBUG: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("AZRAK_DEBUG").is_some());
 
 fn load(job: &Job) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
     let t0 = std::time::Instant::now();

@@ -2,7 +2,7 @@
 """Automated UI audit: finds selected/highlighted elements that are cut off by their container.
 
 How it works:
-  * The launcher runs without artwork (PS5_LAUNCHER_NO_ART=1) under a real window manager on
+  * The launcher runs without artwork (AZRAK_NO_ART=1) under a real window manager on
     hidden X displays, so the only bright-white shapes on screen are interface elements:
     selected buttons, selected chips, menu items, the Start button.
   * The script walks the selection through every screen (Home, Library, Game Hub, menu,
@@ -133,20 +133,20 @@ def audit(size: str, n: int, out: Path, binary: Path, game: Path | None):
     disp = f":{70 + n}"
     work = Path(tempfile.mkdtemp(prefix="ps5-audit-"))
     home = work / "home"
-    (home / ".config/ps5-launcher").mkdir(parents=True)
+    (home / ".config/azrak").mkdir(parents=True)
     seed_cache(home)
     install_game(home / "Games", game)
     fake = work / "kyty_emulator"                     # never start a real game
     fake.write_text("#!/bin/sh\nexit 0\n")
     fake.chmod(0o755)
-    (home / ".config/ps5-launcher/config.json").write_text(json.dumps(
+    (home / ".config/azrak/config.json").write_text(json.dumps(
         {"game_dirs": ["~/Games"], "sounds": False, **NO_UPDATES, "emulator": str(fake)}))
     stubs = work / "stubs"
     stubs.mkdir()
     for tool in ("xdg-open", "mpv", "vlc", "firefox"):
         (stubs / tool).write_text("#!/bin/sh\nexit 0\n")
         (stubs / tool).chmod(0o755)
-    env = {**os.environ, "DISPLAY": disp, "HOME": str(home), "PS5_LAUNCHER_NO_ART": "1",
+    env = {**os.environ, "DISPLAY": disp, "HOME": str(home), "AZRAK_NO_ART": "1",
            "PATH": f"{stubs}:{os.environ['PATH']}"}
     for k in ("XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"):
         env.pop(k, None)
@@ -206,7 +206,7 @@ def main():
     game = Path(os.environ["DEMO_GAME"]) if os.environ.get("DEMO_GAME") else None
     problems = []
     for i, s in enumerate(sizes):
-        problems += audit(s, i, out, ROOT / "target/release/ps5-launcher", game)
+        problems += audit(s, i, out, ROOT / "target/release/azrak", game)
     (out / "report.txt").write_text("\n".join(problems) + "\n" if problems else "No problems found.\n")
     print("\n".join(problems) if problems else "No problems found.")
     sys.exit(1 if problems else 0)

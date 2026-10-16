@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Native Linux Library regression/evidence test. Run AFTER building the release binary:
-//   node scripts/test-library.mjs [path/to/ps5-launcher] [--full-hd]
+//   node scripts/test-library.mjs [path/to/azrak] [--full-hd]
 // No builds, real profiles, real game files, HTTP clients or torrent actions are used.
 // All artwork and game metadata below are authored fixtures, not retail payloads.
 import assert from 'node:assert/strict';
@@ -20,7 +20,7 @@ const inner = process.argv[2] === '--namespace';
 const args = inner ? process.argv.slice(5) : process.argv.slice(2);
 assert.ok(args.filter(arg => !arg.startsWith('--')).length <= 1, 'Supply at most one binary path');
 assert.ok(args.filter(arg => arg.startsWith('--')).every(arg => arg === '--full-hd'), 'Only --full-hd is supported');
-const binary = resolve(args.find(arg => !arg.startsWith('--')) || join(root, 'target/release/ps5-launcher'));
+const binary = resolve(args.find(arg => !arg.startsWith('--')) || join(root, 'target/release/azrak'));
 const fullHD = args.includes('--full-hd');
 const normalize = text => text.replace(/\s+/g, ' ').trim();
 const sha1 = value => createHash('sha1').update(value).digest('hex');
@@ -89,8 +89,8 @@ async function test() {
   }
 
   const base = join(artifacts, 'profile');
-  const configDir = join(base, 'config/ps5-launcher');
-  const cacheDir = join(base, 'cache/ps5-launcher');
+  const configDir = join(base, 'config/azrak');
+  const cacheDir = join(base, 'cache/azrak');
   const configPath = join(configDir, 'config.json');
   const sourcePath = join(artifacts, 'catalog.json');
   const installRoot = join(base, 'generated-library');
@@ -288,7 +288,7 @@ async function test() {
     active = session;
     await waitLog(session, 'home screen shown');
     const { stdout } = await exec('xdotool', ['search', '--sync', '--onlyvisible', '--pid', String(child.pid),
-      '--name', '^PS5 Launcher$'], { timeout: 10_000, env });
+      '--name', '^Azrak Launcher$'], { timeout: 10_000, env });
     session.window = stdout.trim().split('\n')[0];
     assert.match(session.window, /^\d+$/);
     await resize(width, height);

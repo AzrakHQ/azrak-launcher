@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title description">
-  <title id="title">PS5 Launcher — P5 chassis emblem</title>
-  <desc id="description">An original geometric P5 monogram in ice white and electric blue, set inside an asymmetrically chamfered navy chassis.</desc>
+  <title id="title">Azrak Launcher</title>
+  <desc id="description">A split A-shaped white-and-blue Fold symbol inside the original chamfered launcher chassis.</desc>
   <defs>
     <linearGradient id="chassis" gradientUnits="userSpaceOnUse" x1="36" y1="16" x2="214" y2="244">
       <stop offset="0" stop-color="#1b2b43"/>
@@ -16,26 +16,20 @@
       <stop offset="0" stop-color="#1769ed" stop-opacity="0.18"/>
       <stop offset="1" stop-color="#1769ed" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="ice" gradientUnits="userSpaceOnUse" x1="56" y1="68" x2="118" y2="188">
+    <linearGradient id="ice" gradientUnits="userSpaceOnUse" x1="72" y1="60" x2="148" y2="196">
       <stop offset="0" stop-color="#ffffff"/>
       <stop offset="1" stop-color="#d8e9f7"/>
     </linearGradient>
-    <linearGradient id="electric" gradientUnits="userSpaceOnUse" x1="144" y1="68" x2="204" y2="188">
+    <linearGradient id="electric" gradientUnits="userSpaceOnUse" x1="116" y1="152" x2="208" y2="196">
       <stop offset="0" stop-color="#b5e5ff"/>
       <stop offset="0.45" stop-color="#65bdff"/>
       <stop offset="1" stop-color="#327bff"/>
     </linearGradient>
   </defs>
-
-  <!-- Unequal corner cuts suggest a machined console, not a rounded app tile. -->
   <path d="M56 12H224L244 32V200L200 244H32L12 224V56Z" fill="url(#chassis)" stroke="url(#rim)" stroke-width="2" stroke-linejoin="round"/>
   <path d="M56 14H223L242 33V199L199 242H33L14 223V57Z" fill="url(#ambient)"/>
   <path d="M16 57L57 16H222" fill="none" stroke="#e2f2ff" stroke-opacity="0.20" stroke-width="2"/>
-
-  <!-- Hand-built letterforms: 24-unit stems and an open 20-unit centre seam. -->
-  <path d="M56 68H106L124 86V122L106 140H80V188H56Z M80 92V116H96L100 112V96L96 92Z" fill="url(#ice)" fill-rule="evenodd"/>
-  <path d="M144 68H204V92H168V112H186L204 130V170L186 188H140V164H174L180 158V142L174 136H144Z" fill="url(#electric)"/>
-
-  <!-- A single lower bevel catches blue light; no blur filters or ornament. -->
+  <path d="M48 196L104 60H148L180 136H136L124 104L86 196Z" fill="url(#ice)"/>
+  <path d="M116 152H188L208 196H164L156 176H106Z" fill="url(#electric)"/>
   <path d="M200 237L237 200" fill="none" stroke="#4b9bff" stroke-opacity="0.55" stroke-width="3"/>
 </svg>

@@ -1,13 +1,13 @@
 # Developer guide
 
-How PS5 Launcher is built, tested and put together. If you only want to install and use the
+How Azrak Launcher is built, tested and put together. If you only want to install and use the
 launcher, see the [README](../README.md).
 
 ## Build from source
 
 ```bash
 git clone https://github.com/AzrakHQ/azrak.git
-cd ps5-launcher
+cd azrak
 ./install.sh
 ```
 
@@ -15,7 +15,7 @@ When run in a source checkout, the script:
 
 1. checks for Rust and offers to install it with [rustup](https://rustup.rs) (no `sudo`) if it's missing;
 2. builds an optimized release binary;
-3. installs it to `~/.local/bin/ps5-launcher` and adds **PS5 Launcher** to your app menu.
+3. installs it to `~/.local/bin/azrak` and adds **Azrak Launcher** to your app menu.
 
 A source build installed this way updates itself like a release build. A binary run straight
 from `target/release/` only tells you about new releases; update it with `git pull` and
@@ -45,8 +45,8 @@ Rust 1.92 build has not been certified. Use a current stable toolchain.
 
 ## Command-line options and startup
 
-- From your app menu, open **PS5 Launcher**.
-- From a terminal, run `ps5-launcher`.
+- From your app menu, open **Azrak Launcher**.
+- From a terminal, run `azrak`.
 
 | Flag | Effect |
 |---|---|
@@ -70,7 +70,7 @@ On a typical connection this takes about a minute. After that, the Game Hub art 
 other game downloads in the background, newest first. It takes about 3–4 minutes, with a small
 progress line at the bottom of the screen. Sony's image server takes about a second per image,
 so after this every Game Hub opens instantly instead of loading. The image cache ends up at
-about 500 MB in `~/.cache/ps5-launcher/`.
+about 500 MB in `~/.cache/azrak/`.
 
 Then it asks you to press **✕ / Enter** to start. You can skip the wait; anything left keeps
 downloading in the background.
@@ -131,11 +131,11 @@ catalogs whose SHA-256 changed (about 0.4 MB for PS5, 1.6 MB for PS4) into the d
 keeps a download only if it matches the checksum and imports cleanly. It never contacts
 RuTracker itself. New releases are announced ("5 new releases in the Library"). Their release
 details (genre, title ID, languages) arrive with the next browser collection, since topic pages
-need a person at the browser. `PS5_LAUNCHER_CATALOG_URL` points the launcher at another copy.
+need a person at the browser. `AZRAK_CATALOG_URL` points the launcher at another copy.
 Source precedence is:
 
-1. `--catalog <PATH>` or `PS5_LAUNCHER_CATALOG_PATH` (never replaced by a download);
-2. `$XDG_DATA_HOME/ps5-launcher/rutracker/ps5-topics.json` (normally under `~/.local/share`), where downloads go;
+1. `--catalog <PATH>` or `AZRAK_CATALOG_PATH` (never replaced by a download);
+2. `$XDG_DATA_HOME/azrak/rutracker/ps5-topics.json` (normally under `~/.local/share`), where downloads go;
 3. the generated snapshot in a source checkout, if present;
 4. the embedded English snapshot in [assets/rutracker/ps5-topics.json](../assets/rutracker/ps5-topics.json).
 
@@ -240,7 +240,7 @@ network behavior and validation limits.
 ## This PC (details)
 
 [src/pc.rs](../src/pc.rs) reads the processor and memory from `/proc`, and the graphics cards from
-Vulkan: `ps5-launcher --probe-gpu` loads `libvulkan.so.1`, lists each device's name, Vulkan
+Vulkan: `azrak --probe-gpu` loads `libvulkan.so.1`, lists each device's name, Vulkan
 version, type, device-local memory and whether it has the extensions and features each
 emulator refuses to start without, and exits. When that can't be checked, there's no verdict. It runs as a child process (10 s limit), so a
 broken driver can't crash or hang the launcher; if it fails, verdicts are left out rather than
@@ -262,7 +262,7 @@ discrete card beats a usable integrated one. The probe's feature reads were comp
 These are the README's requirements, not measurements: there's no per-game performance data, so
 a verdict covers the console, and the Game Hub adds **Not enough space** when the download
 folder can't hold the game. A console whose games won't start gets a one-time notice (per PC).
-To see other PCs' screens, set `PS5_LAUNCHER_PRETEND_PC`, e.g.
+To see other PCs' screens, set `AZRAK_PRETEND_PC`, e.g.
 `"Intel Core i7-3770;4;8;0;8;NVIDIA GeForce GTX 680,1.2,discrete,2,0,0"` (CPU; cores; threads;
 AVX2 0/1; RAM GB; GPUs as `name,vulkan,type,VRAM GB,PS5 ok,PS4 ok` separated by `|`).
 
@@ -380,7 +380,7 @@ executable, recognised by its first bytes. The game's folder is the payload, or 
 in it (GOG's `data/noarch`). [pcgame.rs](../src/pcgame.rs) then chooses what starts it, best
 first: a start script (`start`, `start.sh`…), an AppImage, a native program (64-bit preferred,
 named after the game, not crash handlers or bundled Wine/runtimes), a Windows `.exe` (not
-installers or redistributables). It writes `.ps5-launcher-game.json` (name, topic, launch target,
+installers or redistributables). It writes `.azrak-game.json` (name, topic, launch target,
 alternatives); the Library finds PC games by it (in a games folder, a folder in it, or one level
 deeper) and links them to their catalog entry by topic, else by name among PC releases only (a
 PC and a PS5 game of the same name are two games).
@@ -414,7 +414,7 @@ its official Linux builds from GitHub Releases.
   your own build folder isn't changed.
 
 To turn this off, disable **Settings → Update automatically** (it covers the launcher, KytyPS5 and shadPS4). Managed builds live
-in `~/.local/share/ps5-launcher/kyty/`.
+in `~/.local/share/azrak/kyty/`.
 
 ## PS4 games
 
@@ -434,7 +434,7 @@ A `Platform` (PS5 or PS4) travels with each installed game and catalog release
 - **PKG releases:** shadPS4 dropped its PKG installer in 0.8, so PS4 PKG releases are unpacked
   with the standalone [ShadPs4Plus PKG Extractor](https://github.com/AzaharPlus/shadPS4Plus/releases/tag/PKG_EXTRACTOR_1_0)
   (GPL-2.0, that same code), downloaded on first use with a pinned SHA-256 into
-  `~/.local/share/ps5-launcher/pkg-extractor` ([src/pkgx.rs](../src/pkgx.rs)). Each PKG is
+  `~/.local/share/azrak/pkg-extractor` ([src/pkgx.rs](../src/pkgx.rs)). Each PKG is
   classified (`--check-type`: game, update, DLC); the game and its update are extracted into
   the installer's stage, validated like a folder release, and published as `<game>` and
   `<game>-patch` (where shadPS4 looks for updates). DLC is extracted into a stage inside
@@ -458,7 +458,7 @@ A `Platform` (PS5 or PS4) travels with each installed game and catalog release
     loader skip it silently), and it prints `PKG write guard active` from inside the extractor:
     an extraction without that line is rejected.
   - **Tests:** a fake extractor (a shell script run in the same sandbox) covers game + update +
-    DLC, crashes, and a package writing outside its folder. `PS5_LAUNCHER_PKG_EXTRACTOR` points at
+    DLC, crashes, and a package writing outside its folder. `AZRAK_PKG_EXTRACTOR` points at
     a real extractor; with it and `PKG_FIXTURE`/`PKG_TITLE_ID`, `cargo test -- --ignored pkg_`
     runs the end-to-end tests against a real PKG.
 - **Updates in folder and archive releases:** a PS4 update shipped with the game (param.sfo
@@ -496,14 +496,24 @@ shoulders, Enter Options). The launcher only reports which controller is connect
 
 | Path | Contents |
 |---|---|
-| `~/.config/ps5-launcher/config.json` | Settings |
-| `~/.config/ps5-launcher/playtime.json` | Playtime per game |
-| `~/.config/ps5-launcher/results.json` | Your own KytyPS5 results per game, and which were shared |
-| `~/.cache/ps5-launcher/` | Catalog, artwork, decoded thumbnails, emulator logs (safe to delete) |
-| `~/.cache/ps5-launcher/catalog-rutracker.json` | Imported RuTracker release metadata and snapshot peer counts |
-| `~/.local/share/ps5-launcher/kyty/` | Managed KytyPS5 builds and their shared saves and caches (`data/`) |
+| `~/.config/azrak/config.json` | Settings |
+| `~/.config/azrak/playtime.json` | Playtime per game |
+| `~/.config/azrak/results.json` | Your own KytyPS5 results per game, and which were shared |
+| `~/.cache/azrak/` | Catalog, artwork, decoded thumbnails, emulator logs (safe to delete) |
+| `~/.cache/azrak/catalog-rutracker.json` | Imported RuTracker release metadata and snapshot peer counts |
+| `~/.local/share/azrak/kyty/` | Managed KytyPS5 builds and their shared saves and caches (`data/`) |
 
 ## Performance
+
+**From PS5 Launcher.** The project was called PS5 Launcher until v1.17. On its first start, an
+older install moves over ([src/rename.rs](../src/rename.rs), the only code that knows the old
+names): the `ps5-launcher` folders under `~/.config`, `~/.local/share` and `~/.cache` become
+`azrak`, the default `~/Games/PS5` and `~/Downloads/PS5` become `~/Games/Azrak` and
+`~/Downloads/Azrak`, every path saved in them is rewritten (settings, transfers, installs, play
+time, the emulators' state and links), download markers and PC game manifests get their new
+names, and an install.sh install gets the `azrak` binary, menu entry and icon. Releases also
+publish `ps5-launcher-linux-x86_64.tar.gz` (the same files, the binary also as `ps5-launcher`)
+for launchers that update from that name.
 
 - **Rendering:** the UI is drawn by the GPU through OpenGL. When nothing on screen moves, the
   launcher uses no CPU or GPU.
@@ -520,7 +530,7 @@ shoulders, Enter Options). The launcher only reports which controller is connect
 ## Building by hand and UI checks
 
 ```bash
-cargo build --release            # binary: target/release/ps5-launcher
+cargo build --release            # binary: target/release/azrak
 cargo test --release             # unit tests
 ```
 

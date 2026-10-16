@@ -15,8 +15,8 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-const OWNED: &str = ".ps5-launcher-owned";
-const STAGE_MARKER: &str = ".ps5-launcher-install-stage";
+const OWNED: &str = crate::downloads::MARKER;
+const STAGE_MARKER: &str = ".azrak-install-stage";
 const MAX_ENTRIES: usize = 100_000;
 const MAX_PATH: usize = 4096;
 const MAX_DEPTH: usize = 128;
@@ -100,7 +100,7 @@ impl Manager {
             let cancel = Arc::new(AtomicBool::new(false));
             let flag = cancel.clone();
             let core = self.core.clone();
-            let join = thread::Builder::new().name("ps5-installer".into()).spawn(move || {
+            let join = thread::Builder::new().name("azrak-installer".into()).spawn(move || {
                 while let Ok(req) = rx.recv() {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         install(&req, &flag, &|state, done, total| {
@@ -602,7 +602,7 @@ struct Stage { destination: Dir, dir: Dir, name: String, token: String }
 impl Stage {
     fn new(destination: Dir, key: &str) -> Result<Self> {
         let n = UNIQUE.fetch_add(1, Ordering::Relaxed);
-        let name = format!(".ps5-install-{}-{}-{n}", &key[..12], std::process::id());
+        let name = format!(".azrak-install-{}-{}-{n}", &key[..12], std::process::id());
         let cname = component(name.as_bytes())?;
         let r = unsafe { libc::mkdirat(destination.0.as_raw_fd(), cname.as_ptr(), 0o700) };
         ensure!(r == 0, "Create exclusive staging directory: {}", std::io::Error::last_os_error());
@@ -1283,7 +1283,7 @@ mod tests {
     }
     fn clean(req: &Request) {
         if req.destination.exists() {
-            assert!(!fs::read_dir(&req.destination).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".ps5-install")));
+            assert!(!fs::read_dir(&req.destination).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".azrak-install")));
         }
         assert_eq!(fs::read(req.source.join(OWNED)).unwrap(), KEY.as_bytes());
     }
@@ -1562,7 +1562,7 @@ mod tests {
             ("data/noarch/game/Celeste", &elf_program(), 0o755), ("data/noarch/gameinfo", b"Celeste\n1.4\n", 0o644),
             ("data/noarch/support/postinst.sh", b"#!/bin/sh\n", 0o755)]);
         // A script that would leave a trace if it ever ran.
-        let mut installer = b"#!/bin/sh\ntouch /tmp/ps5-launcher-gog-script-ran\nexit 0\n".to_vec();
+        let mut installer = b"#!/bin/sh\ntouch /tmp/azrak-gog-script-ran\nexit 0\n".to_vec();
         installer.resize(4096, b'#'); installer.extend(&data);
         fs::write(req.source.join("gog_celeste_1.4.sh"), &installer).unwrap();
         let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
@@ -1570,7 +1570,7 @@ mod tests {
         let m = manifest(&p);
         assert_eq!((m.launch.as_str(), m.kind, m.topic), ("start.sh", crate::pcgame::Kind::Script, 1));
         assert!(executable(&p.join("start.sh")) && executable(&p.join("game/Celeste")));
-        assert!(!Path::new("/tmp/ps5-launcher-gog-script-ran").exists());
+        assert!(!Path::new("/tmp/azrak-gog-script-ran").exists());
         assert_eq!(fs::read(req.source.join("gog_celeste_1.4.sh")).unwrap(), installer, "the download is kept as it was");
         clean(&req);
     }
@@ -1851,7 +1851,7 @@ mod tests {
     }
 
     /// End to end with a real PS4 PKG and the extractor (not in the repo):
-    /// PS5_LAUNCHER_PKG_EXTRACTOR=…/AppRun PKG_FIXTURE=…/game.pkg PKG_TITLE_ID=CUSA… cargo test -- --ignored pkg_release
+    /// AZRAK_PKG_EXTRACTOR=…/AppRun PKG_FIXTURE=…/game.pkg PKG_TITLE_ID=CUSA… cargo test -- --ignored pkg_release
     #[test]
     #[ignore]
     fn pkg_release_installs_extracted_game() {

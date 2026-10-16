@@ -121,7 +121,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const path = resolve(index >= 0 ? args[index + 1]
     : fileURLToPath(new URL(`../../dist/rutracker/${platform.key}-topics.json.ru-backup.json`, import.meta.url)));
   const get = async (url, as) => {
-    const response = await fetch(url, { signal: AbortSignal.timeout(60_000), headers: { 'User-Agent': 'ps5-launcher-catalog' } });
+    const response = await fetch(url, { signal: AbortSignal.timeout(60_000), headers: { 'User-Agent': 'azrak-catalog' } });
     if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
     return response[as]();
   };

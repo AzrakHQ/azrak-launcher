@@ -456,6 +456,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "azrak"
+version = "1.16.2"
+dependencies = [
+ "anyhow",
+ "data-encoding",
+ "fast_image_resize",
+ "flate2",
+ "html-escape",
+ "image",
+ "libc",
+ "libloading",
+ "librqbit",
+ "percent-encoding",
+ "qoi",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha1_smol",
+ "sha2",
+ "slint",
+ "slint-build",
+ "tempfile",
+ "tokio",
+ "ureq",
+ "url",
+]
+
+[[package]]
 name = "backon"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4514,34 +4542,6 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
-
-[[package]]
-name = "ps5-launcher"
-version = "1.16.2"
-dependencies = [
- "anyhow",
- "data-encoding",
- "fast_image_resize",
- "flate2",
- "html-escape",
- "image",
- "libc",
- "libloading",
- "librqbit",
- "percent-encoding",
- "qoi",
- "regex",
- "serde",
- "serde_json",
- "sha1_smol",
- "sha2",
- "slint",
- "slint-build",
- "tempfile",
- "tokio",
- "ureq",
- "url",
-]
 
 [[package]]
 name = "pulldown-cmark"

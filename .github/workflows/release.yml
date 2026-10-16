@@ -19,7 +19,10 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
-      NAME: ps5-launcher-linux-x86_64
+      NAME: azrak-linux-x86_64
+      # Launchers from before the rename (PS5 Launcher 1.16 and older) update from this name, with
+      # the binary at ps5-launcher-linux-x86_64/ps5-launcher; it moves them over on first start.
+      OLD_NAME: ps5-launcher-linux-x86_64
     steps:
       - uses: actions/checkout@v5
         with:
@@ -38,13 +41,21 @@ jobs:
         run: |
           node --test scripts/package-licenses.test.mjs
           mkdir -p "dist/$NAME/assets"
-          cp target/release/ps5-launcher install.sh README.md "dist/$NAME/"
-          cp assets/ps5-launcher.svg "dist/$NAME/assets/"
+          cp target/release/azrak install.sh README.md "dist/$NAME/"
+          cp assets/azrak.svg "dist/$NAME/assets/"
           node scripts/package-licenses.mjs "dist/$NAME" --allow-upstream
           tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
           (cd dist && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
+          # The same files for older launchers, the binary also by its old name (a hard link: the
+          # archive stores it once).
+          cp -a "dist/$NAME" "dist/$OLD_NAME"
+          ln "dist/$OLD_NAME/azrak" "dist/$OLD_NAME/ps5-launcher"
+          tar -C dist -czf "dist/$OLD_NAME.tar.gz" "$OLD_NAME"
+          (cd dist && sha256sum "$OLD_NAME.tar.gz" > "$OLD_NAME.tar.gz.sha256")
           ls -la dist
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$TAG" "dist/$NAME.tar.gz" "dist/$NAME.tar.gz.sha256" --clobber
+        run: |
+          gh release upload "$TAG" "dist/$NAME.tar.gz" "dist/$NAME.tar.gz.sha256" \
+            "dist/$OLD_NAME.tar.gz" "dist/$OLD_NAME.tar.gz.sha256" --clobber
