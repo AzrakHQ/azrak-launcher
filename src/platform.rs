@@ -23,6 +23,15 @@ impl Platform {
         }
     }
 
+    /// Colours of the platform's placeholder cover and console label: (top, bottom, ink), as RGB.
+    pub fn style(self) -> ((u8, u8, u8), (u8, u8, u8), (u8, u8, u8)) {
+        match self {
+            Platform::Ps5 => ((0x26, 0x30, 0x4f), (0x0e, 0x12, 0x22), (0xff, 0xff, 0xff)),
+            Platform::Ps4 => ((0x1b, 0x2d, 0x52), (0x0b, 0x12, 0x24), (0x8f, 0xc2, 0xff)),
+            Platform::Pc => ((0x1d, 0x3a, 0x2f), (0x0d, 0x17, 0x14), (0xff, 0xff, 0xff)),
+        }
+    }
+
     /// What runs this platform's games: its emulator, or "Linux" for PC games. When a platform
     /// has several emulators, the one that is used unless the user chose another.
     pub fn emulator(self) -> &'static str {

@@ -1,7 +1,20 @@
 //! KytyPS5, the PS5 emulator. The install, update and version logic is in `crate::kyty`.
 
-use super::{Emulator, ManagedStore, Release};
+use super::{Controls, Emulator, ManagedStore, Release, Setting, SettingKind};
 use crate::config::{Config, VIDEO_OUT_MODES};
+
+const RESOLUTION_CHOICES: &[(&str, &str)] =
+    &[("1280x720", "1280 × 720"), ("1600x900", "1600 × 900"), ("1920x1080", "1920 × 1080"), ("2560x1440", "2560 × 1440"), ("3840x2160", "3840 × 2160")];
+const VIDEO_OUT_CHOICES: &[(&str, &str)] = &VIDEO_OUT_MODES;
+const PRESENT_CHOICES: &[(&str, &str)] = &[("Mailbox", "Mailbox (low latency)"), ("Fifo", "Fifo (V-Sync)"), ("Immediate", "Immediate (uncapped)")];
+
+const SETTINGS: &[Setting] = &[
+    Setting { key: "resolution", label: "Resolution (PS5 games)", hint: "The size of the window. What the game is told is Game output resolution", kind: SettingKind::Choice(RESOLUTION_CHOICES), default: "1920x1080", advanced: true },
+    Setting { key: "video_out", label: "Game output resolution (PS5 games)", hint: "The screen resolution the game is told it runs on. The game renders at this size.", kind: SettingKind::Choice(VIDEO_OUT_CHOICES), default: "Title", advanced: true },
+    Setting { key: "present_mode", label: "Present mode (PS5 games)", hint: "Try V-Sync if the picture tears", kind: SettingKind::Choice(PRESENT_CHOICES), default: "Mailbox", advanced: true },
+    Setting { key: "amd_cpu", label: "AMD CPU patches (PS5 games)", hint: "Only for AMD processors", kind: SettingKind::Toggle, default: "false", advanced: true },
+    Setting { key: "extra_args", label: "Extra KytyPS5 arguments", hint: "For example --vblank-frequency 60 --tessellation", kind: SettingKind::Text, default: "", advanced: true },
+];
 use crate::platform::Platform;
 use crate::sessions::shell_split;
 use std::path::{Path, PathBuf};
@@ -95,6 +108,53 @@ impl Emulator for KytyPs5 {
 
     fn unavailable_message(&self, cfg: &Config) -> String {
         format!("Emulator not found or not executable:\n{}", self.path(cfg).display())
+    }
+
+    fn compat_page(&self) -> Option<&'static str> {
+        Some(crate::compat::LIST_PAGE)
+    }
+
+    fn controls(&self) -> Option<Controls> {
+        Some(Controls {
+            splash: &[("✕", "J"), ("△", "I"), ("□", "K"), ("○", "L"), ("Move", "W A S D"), ("D-pad", "Arrows"), ("Options", "Enter")],
+            columns: &[
+                &[("✕  Cross", "J"), ("○  Circle", "L"), ("□  Square", "K"), ("△  Triangle", "I"), ("D-pad", "Arrow keys"), ("Options", "Enter")],
+                &[("Left stick", "W  A  S  D"), ("Right stick", "T  F  G  H"), ("L1  /  R1", "Q  /  E"), ("L2  /  R2", "Z  /  C"),
+                  ("L3  /  R3", "Left Shift  /  Left Ctrl"), ("Touchpad", "Backspace  /  Tab")],
+            ],
+            note: "F7 turns the mouse into the right stick (press it again to release the mouse).",
+        })
+    }
+
+    fn settings(&self) -> &'static [Setting] {
+        SETTINGS
+    }
+
+    // These options predate the settings map, so they keep their original fields.
+    fn setting(&self, cfg: &Config, key: &str) -> String {
+        match key {
+            "resolution" => format!("{}x{}", cfg.width, cfg.height),
+            "video_out" => cfg.video_out.clone(),
+            "present_mode" => cfg.present_mode.clone(),
+            "amd_cpu" => cfg.amd_cpu.to_string(),
+            "extra_args" => cfg.extra_args.clone(),
+            _ => String::new(),
+        }
+    }
+
+    fn set_setting(&self, cfg: &mut Config, key: &str, value: String) {
+        match key {
+            "resolution" => {
+                if let Some((w, h)) = value.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?))) {
+                    (cfg.width, cfg.height) = (w, h);
+                }
+            }
+            "video_out" => cfg.video_out = value,
+            "present_mode" => cfg.present_mode = value,
+            "amd_cpu" => cfg.amd_cpu = value == "true",
+            "extra_args" => cfg.extra_args = value,
+            _ => {}
+        }
     }
 
     fn path_setting<'a>(&self, cfg: &'a Config) -> &'a str {

@@ -99,6 +99,9 @@ export global Zone {
 
 // dot: KytyPS5 compatibility level (0 none, 1 in-game, 2 menus, 3 boots, 4 doesn't boot, 5 untested)
 // stars: star rating out of 5 drawn as five stars (0 = none)
+/// One line of a keyboard layout: what it does and the keys that do it.
+export struct KeyRow { what: string, keys: string }
+export struct KeyColumn { rows: [KeyRow] }
 export struct ChipData { icon: string, text: string, gold: bool, dot: int, stars: float }
 export struct ActionData { id: string, label: string, icon: string, primary: bool, danger: bool, round: bool }
 export struct DownloadData {
@@ -143,6 +146,10 @@ export struct CardData {
     compat-level: int,
     // "PS4" / "PS5" when the Library has more than one console; empty otherwise.
     console: string,
+    // The platform's colours: the placeholder card's gradient and the console label's ink.
+    console-top: color,
+    console-bottom: color,
+    console-ink: color,
     image: image,
     loaded: bool,
     // Nothing to load (no artwork found, or its download failed): a placeholder with the name.
@@ -169,6 +176,8 @@ export struct HubData {
     // No artwork at all: the console's colours and name instead.
     no-art: bool,
     console: string,
+    console-top: color,
+    console-bottom: color,
     chips: [ChipData],
     age-icon: image,
     actions: [ActionData],

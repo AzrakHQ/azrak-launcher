@@ -17,6 +17,9 @@ pub struct Config {
     pub emulator_paths: BTreeMap<String, String>,
     /// Automatic updates of every other emulator, by emulator id (missing = on).
     pub emulator_auto_update: BTreeMap<String, bool>,
+    /// The options an emulator declares in `Emulator::settings`, as "<emulator id>.<key>" and
+    /// text. KytyPS5 and shadPS4 keep theirs in the older fields above.
+    pub emulator_settings: BTreeMap<String, String>,
     /// Which emulator runs a platform's games, by platform label ("PS4") and emulator id. A
     /// platform that isn't listed uses the first emulator registered for it.
     pub platform_emulators: BTreeMap<String, String>,
@@ -67,6 +70,7 @@ impl Default for Config {
             shad_emulator: String::new(),
             emulator_paths: BTreeMap::new(),
             emulator_auto_update: BTreeMap::new(),
+            emulator_settings: BTreeMap::new(),
             platform_emulators: BTreeMap::new(),
             games_dir: String::new(),
             game_dirs: vec!["~/Games/PS5".into()],
@@ -95,12 +99,9 @@ impl Default for Config {
     }
 }
 
-pub const RESOLUTIONS: [(u32, u32); 5] = [(1280, 720), (1600, 900), (1920, 1080), (2560, 1440), (3840, 2160)];
 /// The values of --video-out-resolution and the names Settings shows for them.
 pub const VIDEO_OUT_MODES: [(&str, &str); 3] =
     [("Title", "Game default"), ("FullHd", "1080p (Full HD)"), ("Uhd", "4K (Ultra HD)")];
-pub const PRESENT_MODES: [(&str, &str); 3] =
-    [("Mailbox", "Mailbox (low latency)"), ("Fifo", "Fifo (V-Sync)"), ("Immediate", "Immediate (uncapped)")];
 
 impl Config {
     pub fn path() -> PathBuf {

@@ -808,6 +808,9 @@ impl App {
                 rating: g.info.as_ref().and_then(|i| i.rating.as_ref()).map(|r| format!("{:.1}", r.score)).unwrap_or_default().into(),
                 badge: if g.local.is_some() { "Installed".into() } else if g.is_new { "New".into() } else { "".into() },
                 console: if self.mixed_consoles { g.g.platform.label().into() } else { "".into() },
+                console_top: color_of(g.g.platform.style().0),
+                console_bottom: color_of(g.g.platform.style().1),
+                console_ink: color_of(g.g.platform.style().2),
                 compat: compat.into(),
                 compat_level,
                 loaded: img.is_some(),
@@ -949,6 +952,8 @@ impl App {
         }
         h.no_art = !h.cover_loaded && cover.as_ref().is_none_or(|r| self.images.has_failed(&r.key));
         h.console = self.target_platform(t).label().into();
+        h.console_top = color_of(self.target_platform(t).style().0);
+        h.console_bottom = color_of(self.target_platform(t).style().1);
 
         // KytyPS5 status is in the facts grid below, so it isn't repeated as a chip here.
         let mut chips: Vec<ChipData> = Vec::new();
@@ -1062,16 +1067,18 @@ impl App {
             },
             _ => ("ON LINUX", "Native game".to_string(), 1),
         });
+        let target_platform = self.target_platform(t);
+        let emu_name = crate::emulator::selected(&self.cfg.lock().unwrap(), target_platform).map_or("Linux", |e| e.name()).to_uppercase();
+        let on_emu = format!("ON {emu_name}");
+        let on_emu_untested = format!("ON {emu_name} · LINUX UNTESTED");
         let summary = [
             match &ce {
                 _ if pc_game => ("", String::new()), // replaced by pc_runs below
                 Some(e) if e.mine => ("YOUR RESULT", e.status.meaning().to_string()),
                 Some(e) if e.on_linux => ("ON LINUX", e.status.meaning().to_string()),
                 Some(e) if e.windows.is_some() => ("ON WINDOWS · LINUX UNTESTED", e.status.meaning().to_string()),
-                Some(e) if ps4 => ("ON SHADPS4 · LINUX UNTESTED", e.status.meaning().to_string()),
-                Some(e) => ("ON KYTYPS5 · LINUX UNTESTED", e.status.meaning().to_string()),
-                None if ps4 => ("ON SHADPS4", "Not tested yet".to_string()),
-                None => ("ON KYTYPS5", "Not tested yet".to_string()),
+                Some(e) => (on_emu_untested.as_str(), e.status.meaning().to_string()),
+                None => (on_emu.as_str(), "Not tested yet".to_string()),
             },
             ("DOWNLOAD SIZE", g.map(|g| g.size.clone()).filter(|size| !size.is_empty()).unwrap_or_else(|| "Unknown".into())),
             if let Some(local) = t.local { ("INSTALLED VERSION", self.locals[local].l.version.clone()) }
@@ -1098,8 +1105,8 @@ impl App {
                 facts.push(("STARTS WITH", m.launch.clone()));
             }
         }
-        let details: Vec<Fact> = facts.into_iter().filter(|(k, v)| !v.is_empty()
-            && !matches!(*k, "SEEDERS · SNAPSHOT" | "LEECHERS · SNAPSHOT" | "OBSERVED · NOT LIVE" | "ON KYTYPS5" | "ON SHADPS4" | "SIZE" | "PUBLISHER" | "RELEASE" | "REGION"))
+        let details: Vec<Fact> = facts.into_iter().filter(|(k, v)| !v.is_empty() && *k != on_emu
+            && !matches!(*k, "SEEDERS · SNAPSHOT" | "LEECHERS · SNAPSHOT" | "OBSERVED · NOT LIVE" | "SIZE" | "PUBLISHER" | "RELEASE" | "REGION"))
             .map(|(k, v)| Fact { key: k.into(), value: v.into(), kind: 0 }).collect();
         h.details = model(vec![FactRow { items: model(details) }]);
 
@@ -1238,4 +1245,8 @@ pub fn truncate(s: &str, max: usize) -> String {
     }
     let cut: String = s.chars().take(max).collect();
     format!("{}…", cut.rsplit_once(' ').map(|x| x.0).unwrap_or(&cut))
+}
+
+fn color_of((r, g, b): (u8, u8, u8)) -> slint::Color {
+    slint::Color::from_rgb_u8(r, g, b)
 }

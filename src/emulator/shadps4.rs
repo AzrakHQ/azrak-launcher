@@ -1,6 +1,6 @@
 //! shadPS4, the PS4 emulator. The install, update and version logic is in `crate::shad`.
 
-use super::{Emulator, ManagedStore, Release};
+use super::{Controls, Emulator, ManagedStore, Release};
 use crate::config::Config;
 use crate::platform::Platform;
 use std::path::{Path, PathBuf};
@@ -55,6 +55,27 @@ impl Emulator for ShadPs4 {
 
     fn version_for(&self, cfg: &Config) -> String {
         if self.is_own(cfg) { "own build".into() } else { self.pretty(&self.store().load_state().installed) }
+    }
+
+    fn compat_page(&self) -> Option<&'static str> {
+        Some(crate::compat::SHAD_LIST_PAGE)
+    }
+
+    fn report_note(&self) -> &'static str {
+        "shadPS4 only accepts reports for games dumped from a copy you own, unmodified."
+    }
+
+    fn controls(&self) -> Option<Controls> {
+        Some(Controls {
+            splash: &[("✕", "N"), ("△", "C"), ("□", "V"), ("○", "B"), ("Move", "W A S D"), ("D-pad", "Arrows"), ("Options", "Enter")],
+            columns: &[
+                &[("✕  Cross", "N  (or keypad 2)"), ("○  Circle", "B  (or keypad 6)"), ("□  Square", "V  (or keypad 4)"),
+                  ("△  Triangle", "C  (or keypad 8)"), ("D-pad", "Arrow keys"), ("Options", "Enter")],
+                &[("Left stick", "W  A  S  D"), ("Right stick", "I  J  K  L"), ("L1  /  R1", "Q  /  U"), ("L2  /  R2", "E  /  O"),
+                  ("L3  /  R3", "X  /  M"), ("Touchpad", "Space")],
+            ],
+            note: "shadPS4 keeps its key layout in its own settings file; these are its defaults.",
+        })
     }
 
     fn path_setting<'a>(&self, cfg: &'a Config) -> &'a str {

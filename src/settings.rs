@@ -2,7 +2,6 @@
 
 use crate::app::*;
 use crate::audio::{self, Sound};
-use crate::config::{PRESENT_MODES, RESOLUTIONS, VIDEO_OUT_MODES};
 use crate::util;
 use crate::SettingData;
 
@@ -43,16 +42,13 @@ pub enum SId {
     EmuRollback(u8),
     // Launcher
     Display,
-    VideoOut,
     Sounds,
     Share,
     // Advanced
     Advanced,
     EmuPath(u8),
-    Resolution,
-    Present,
-    Amd,
-    Extra,
+    /// An option an emulator declares (`Emulator::settings`): emulator, option.
+    EmuSetting(u8, u8),
     Refresh,
     Quit,
 }
@@ -210,6 +206,12 @@ impl App {
         };
         rows.push((SId::Share, r));
 
+        let options = self.emu_setting_rows(&cfg, false);
+        if !options.is_empty() {
+            header(&mut rows, "EMULATORS");
+            rows.extend(options);
+        }
+
         header(&mut rows, "ADVANCED");
         let advanced = self.settings_advanced;
         let mut r = row(4, if advanced { "Hide advanced settings" } else { "Show advanced settings" });
@@ -217,27 +219,7 @@ impl App {
         rows.push((SId::Advanced, r));
         if advanced {
             rows.extend(self.emu_path_rows(&cfg));
-            let mut r = row(3, "Resolution (PS5 games)");
-            r.value = format!("{} × {}", cfg.width, cfg.height).into();
-            r.hint = "The size of the window. What the game is told is Game output resolution".into();
-            rows.push((SId::Resolution, r));
-            let mut r = row(3, "Game output resolution (PS5 games)");
-            r.value = VIDEO_OUT_MODES.iter().find(|(k, _)| *k == cfg.video_out).map(|(_, l)| *l).unwrap_or(VIDEO_OUT_MODES[0].1).into();
-            r.hint = "The screen resolution the game is told it runs on. The game renders at this size.".into();
-            rows.push((SId::VideoOut, r));
-            let mut r = row(3, "Present mode (PS5 games)");
-            r.value = PRESENT_MODES.iter().find(|(k, _)| *k == cfg.present_mode).map(|(_, l)| *l).unwrap_or(cfg.present_mode.as_str()).into();
-            r.hint = "Try V-Sync if the picture tears".into();
-            rows.push((SId::Present, r));
-            let mut r = row(2, "AMD CPU patches (PS5 games)");
-            r.on = cfg.amd_cpu;
-            r.hint = "Only for AMD processors".into();
-            rows.push((SId::Amd, r));
-            let mut r = row(1, "Extra KytyPS5 arguments");
-            r.value = cfg.extra_args.clone().into();
-            r.hint = "For example --vblank-frequency 60 --tessellation".into();
-            rows.push((SId::Extra, r));
-
+            rows.extend(self.emu_setting_rows(&cfg, true));
             let mut r = row(4, "Check for new releases");
             r.value = if self.syncing {
                 "Reloading…".into()
@@ -322,7 +304,7 @@ impl App {
         self.ui().set_settings_y(-(target - h * 0.4).clamp(0.0, max) * self.scale);
     }
 
-    fn save_cfg(&mut self, f: impl FnOnce(&mut crate::config::Config)) {
+    pub(crate) fn save_cfg(&mut self, f: impl FnOnce(&mut crate::config::Config)) {
         let mut c = self.cfg.lock().unwrap();
         f(&mut c);
         c.save();
@@ -346,27 +328,7 @@ impl App {
             return;
         }
         match id {
-            SId::Resolution => {
-                let cur = { let c = self.cfg.lock().unwrap(); (c.width, c.height) };
-                let pos = RESOLUTIONS.iter().position(|r| *r == cur).unwrap_or(2) as i32;
-                let (w, h) = RESOLUTIONS[(pos + dir).rem_euclid(RESOLUTIONS.len() as i32) as usize];
-                self.save_cfg(|c| {
-                    c.width = w;
-                    c.height = h;
-                });
-            }
-            SId::Present => {
-                let cur = self.cfg.lock().unwrap().present_mode.clone();
-                let pos = PRESENT_MODES.iter().position(|(k, _)| *k == cur).unwrap_or(0) as i32;
-                let next = PRESENT_MODES[(pos + dir).rem_euclid(PRESENT_MODES.len() as i32) as usize].0.to_string();
-                self.save_cfg(|c| c.present_mode = next);
-            }
-            SId::VideoOut => {
-                let cur = self.cfg.lock().unwrap().video_out.clone();
-                let pos = VIDEO_OUT_MODES.iter().position(|(k, _)| *k == cur).unwrap_or(0) as i32;
-                let next = VIDEO_OUT_MODES[(pos + dir).rem_euclid(VIDEO_OUT_MODES.len() as i32) as usize].0.to_string();
-                self.save_cfg(|c| c.video_out = next);
-            }
+            SId::EmuSetting(n, k) => self.emu_setting_change(n, k, dir),
             SId::Display => {
                 let names: Vec<String> = std::iter::once(String::new()).chain(self.monitors.iter().map(|m| m.name.clone())).collect();
                 let cur = self.cfg.lock().unwrap().monitor.clone();
@@ -397,11 +359,10 @@ impl App {
                 self.save_cfg(|c| c.seed_after_download = on);
                 self.push_downloads();
             }
-            SId::Fullscreen | SId::Amd | SId::ReturnOnExit | SId::Sounds | SId::AutoUpdate => {
+            SId::Fullscreen | SId::ReturnOnExit | SId::Sounds | SId::AutoUpdate => {
                 let on = dir > 0;
                 self.save_cfg(|c| match id {
                     SId::Fullscreen => c.fullscreen = on,
-                    SId::Amd => c.amd_cpu = on,
                     SId::ReturnOnExit => c.return_on_exit = on,
                     SId::AutoUpdate => {
                         c.app_auto_update = on;
@@ -430,12 +391,12 @@ impl App {
             return;
         }
         match id {
-            SId::EmuPath(_) | SId::Dirs | SId::Extra | SId::DownloadDir | SId::GamesDir => {
+            id if matches!(id, SId::EmuPath(_) | SId::Dirs | SId::DownloadDir | SId::GamesDir) || (matches!(id, SId::EmuSetting(..)) && self.settings_rows[i].kind == 1) => {
                 let cfg = self.cfg.lock().unwrap().clone();
                 let text = match id {
                     SId::EmuPath(n) => self.emu_path_text(n),
+                    SId::EmuSetting(n, k) => self.emu_setting_text(n, k),
                     SId::Dirs => cfg.game_dirs.join("; "),
-                    SId::Extra => cfg.extra_args,
                     SId::DownloadDir => cfg.downloads_dir,
                     SId::GamesDir => cfg.games_dir,
                     _ => String::new(),
@@ -446,11 +407,17 @@ impl App {
                 ui.set_edit_text(text.into());
                 ui.set_edit_index(i as i32);
             }
-            SId::Fullscreen | SId::Amd | SId::ReturnOnExit | SId::Sounds | SId::AutoUpdate | SId::SeedCompleted | SId::VpnOnly => {
+            SId::Fullscreen | SId::ReturnOnExit | SId::Sounds | SId::AutoUpdate | SId::SeedCompleted | SId::VpnOnly => {
                 let on = self.settings_rows[i].on;
                 self.settings_change(i, if on { -1 } else { 1 });
             }
-            SId::Resolution | SId::Present | SId::VideoOut | SId::Display => self.settings_change(i, 1),
+            SId::EmuSetting(..) => {
+                let on = self.settings_rows[i].on;
+                // A toggle flips; a choice moves on.
+                let dir = if self.settings_rows[i].kind == 2 && on { -1 } else { 1 };
+                self.settings_change(i, dir);
+            }
+            SId::Display => self.settings_change(i, 1),
             SId::AppUpdate => {
                 audio::play(Sound::Select);
                 if self.upd.installed.is_some() {
@@ -544,7 +511,7 @@ impl App {
                 let n = self.locals.len();
                 self.toast("Installed games rescanned", &format!("{n} game{} found.", if n == 1 { "" } else { "s" }), 1);
             }
-            SId::Extra => self.save_cfg(|c| c.extra_args = t),
+            SId::EmuSetting(n, k) => self.emu_setting_committed(n, k, t),
             SId::VpnAdd if !t.is_empty() => {
                 let file = util::expand_home(&t);
                 self.vpn_task("Adding…", move || crate::vpn::nm_import(&file).map(|name| ("VPN added and connected".to_string(), name)));

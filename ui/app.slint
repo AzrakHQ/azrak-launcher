@@ -1,4 +1,4 @@
-import { S, Theme, Icons, Zone, DownloadData, BootStep, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, ToastData, MenuItem, RunningData } from "theme.slint";
+import { S, Theme, Icons, Zone, DownloadData, BootStep, KeyRow, KeyColumn, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, ToastData, MenuItem, RunningData } from "theme.slint";
 import { FocusRing, Chip, Btn, Kicker, Badge, Switch, KeyCap, BackButton, Shimmer, Cover } from "widgets.slint";
 import { DownloadsSheet, DownloadConsent } from "downloads.slint";
 import { LibraryFilter, LibrarySortPicker } from "library.slint";
@@ -243,13 +243,19 @@ export component AppWindow inherits Window {
     in property <image> launch-bg;
     in property <image> launch-icon;
     in property <string> launch-name;
-    in property <string> launch-sub: "Starting with KytyPS5…";
+    in property <string> launch-sub;
     // Which controller the game will get; without one, the keyboard layout is shown.
     in property <string> launch-controller;
     in property <bool> launch-keyboard;
-    // PS4 games run on shadPS4, whose keyboard layout differs from KytyPS5's.
-    in property <bool> launch-ps4;
-    in property <bool> controls-ps4;
+    // Each emulator has its own keyboard layout (Emulator::controls): the keys shown while a game
+    // starts, and the tabs, columns and note of the Controls sheet.
+    in property <[KeyRow]> launch-keys;
+    in property <[string]> controls-tabs;
+    in-out property <int> controls-tab;
+    in property <[KeyColumn]> controls-columns;
+    in property <string> controls-note;
+    // "PS5 games on KytyPS5 · PS4 games on shadPS4", from the emulator registry.
+    in property <string> emulator-summary;
 
     in property <string> menu-title;
     in property <[MenuItem]> menu-items;
@@ -483,9 +489,7 @@ export component AppWindow inherits Window {
                                 Cover { source: c.image; loaded: c.loaded; }
                                 // No artwork for this game: its name, on the console's colours.
                                 if c.no-art: Rectangle {
-                                    background: c.console == "PC" ? @linear-gradient(160deg, #1d3a2f 0%, #0d1714 100%)
-                                        : c.console == "PS4" ? @linear-gradient(160deg, #1b2d52 0%, #0b1224 100%)
-                                        : @linear-gradient(160deg, #26304f 0%, #0e1222 100%);
+                                    background: @linear-gradient(160deg, c.console-top 0%, c.console-bottom 100%);
                                     Text {
                                         x: parent.width * 0.1;
                                         width: parent.width * 0.8;
@@ -506,7 +510,7 @@ export component AppWindow inherits Window {
                                     height: (22px * S.k);
                                     border-radius: (6px * S.k);
                                     background: #000000c4;
-                                    cl := Text { text: c.console; font-size: (12px * S.k); font-weight: 700; color: c.console == "PS4" ? #8fc2ff : #ffffff; }
+                                    cl := Text { text: c.console; font-size: (12px * S.k); font-weight: 700; color: c.console-ink; }
                                 }
                                 if c.compat != "": Rectangle {
                                     x: (10px * S.k);
@@ -931,9 +935,7 @@ export component AppWindow inherits Window {
                 Cover { source: root.hub.cover; loaded: root.hub.cover-loaded; }
                 // No artwork: the console's colours, as on the Library card (the name is beside it).
                 if root.hub.no-art: Rectangle {
-                    background: root.hub.console == "PC" ? @linear-gradient(160deg, #1d3a2f 0%, #0d1714 100%)
-                        : root.hub.console == "PS4" ? @linear-gradient(160deg, #1b2d52 0%, #0b1224 100%)
-                        : @linear-gradient(160deg, #26304f 0%, #0e1222 100%);
+                    background: @linear-gradient(160deg, root.hub.console-top 0%, root.hub.console-bottom 100%);
                     Text {
                         text: root.hub.console;
                         font-size: (64px * S.k);
@@ -1291,7 +1293,7 @@ export component AppWindow inherits Window {
                                         horizontal-stretch: 1;
                                         Text { text: "PS5 Launcher"; font-size: (19px * S.t); font-weight: 600; color: Theme.text; }
                                         Text { text: "Version " + root.app-version + " · Linux"; font-size: (15px * S.t); color: Theme.text3; }
-                                        Text { text: "PS5 games on KytyPS5 · PS4 games on shadPS4"; font-size: (15px * S.t); color: Theme.text3; }
+                                        Text { text: root.emulator-summary; font-size: (15px * S.t); color: Theme.text3; }
                                     }
                                     VerticalLayout {
                                         alignment: center;
@@ -1480,14 +1482,10 @@ export component AppWindow inherits Window {
                                 alignment: center;
                                 height: (30px * S.k);
                                 spacing: (8px * S.k);
-                                for k in (root.launch-ps4
-                                        ? [{ key: "N", what: "✕" }, { key: "C", what: "△" }, { key: "V", what: "□" }, { key: "B", what: "○" },
-                                           { key: "W A S D", what: "Move" }, { key: "Arrows", what: "D-pad" }, { key: "Enter", what: "Options" }]
-                                        : [{ key: "J", what: "✕" }, { key: "I", what: "△" }, { key: "K", what: "□" }, { key: "L", what: "○" },
-                                           { key: "W A S D", what: "Move" }, { key: "Arrows", what: "D-pad" }, { key: "Enter", what: "Options" }]): HorizontalLayout {
+                                for k in root.launch-keys: HorizontalLayout {
                                     spacing: (6px * S.k);
                                     padding-right: (10px * S.k);
-                                    KeyCap { text: k.key; }
+                                    KeyCap { text: k.keys; }
                                     Text { text: k.what; font-size: (16px * S.k); color: Theme.text2; vertical-alignment: center; }
                                 }
                             }
@@ -1852,12 +1850,12 @@ export component AppWindow inherits Window {
                     Text { text: "Keyboard controls in games"; font-size: (30px * S.k); font-weight: 600; color: Theme.text; }
                     Text { text: root.launch-controller; font-size: (17px * S.k); color: root.launch-keyboard ? Theme.text3 : Theme.ok; }
                     Rectangle { height: (6px * S.k); }
-                    // PS5 and PS4 games use different emulators, with different keys.
+                    // Every emulator has its own keys.
                     HorizontalLayout {
                         alignment: start;
                         spacing: (8px * S.k);
-                        for tab[i] in ["PS5 games · KytyPS5", "PS4 games · shadPS4"]: Rectangle {
-                            property <bool> on: (i == 1) == root.controls-ps4;
+                        for tab[i] in root.controls-tabs: Rectangle {
+                            property <bool> on: i == root.controls-tab;
                             width: tl.preferred-width + (28px * S.k);
                             height: (36px * S.k);
                             border-radius: (18px * S.k);
@@ -1868,33 +1866,11 @@ export component AppWindow inherits Window {
                         Text { text: "  ◂ ▸ to switch"; font-size: (15px * S.k); color: Theme.text3; vertical-alignment: center; }
                     }
                     Rectangle { height: (6px * S.k); }
-                    if root.controls-ps4: HorizontalLayout {
+                    HorizontalLayout {
                         spacing: (56px * S.k);
-                        for column in [
-                            [{ what: "✕  Cross", keys: "N  (or keypad 2)" }, { what: "○  Circle", keys: "B  (or keypad 6)" }, { what: "□  Square", keys: "V  (or keypad 4)" },
-                             { what: "△  Triangle", keys: "C  (or keypad 8)" }, { what: "D-pad", keys: "Arrow keys" }, { what: "Options", keys: "Enter" }],
-                            [{ what: "Left stick", keys: "W  A  S  D" }, { what: "Right stick", keys: "I  J  K  L" }, { what: "L1  /  R1", keys: "Q  /  U" },
-                             { what: "L2  /  R2", keys: "E  /  O" }, { what: "L3  /  R3", keys: "X  /  M" }, { what: "Touchpad", keys: "Space" }],
-                        ]: VerticalLayout {
+                        for column in root.controls-columns: VerticalLayout {
                             spacing: (12px * S.k);
-                            for row in column: HorizontalLayout {
-                                height: (30px * S.k);
-                                spacing: (16px * S.k);
-                                Text { text: row.what; width: (150px * S.k); font-size: (19px * S.k); color: Theme.text2; vertical-alignment: center; }
-                                KeyCap { text: row.keys; }
-                            }
-                        }
-                    }
-                    if !root.controls-ps4: HorizontalLayout {
-                        spacing: (56px * S.k);
-                        for column in [
-                            [{ what: "✕  Cross", keys: "J" }, { what: "○  Circle", keys: "L" }, { what: "□  Square", keys: "K" }, { what: "△  Triangle", keys: "I" },
-                             { what: "D-pad", keys: "Arrow keys" }, { what: "Options", keys: "Enter" }],
-                            [{ what: "Left stick", keys: "W  A  S  D" }, { what: "Right stick", keys: "T  F  G  H" }, { what: "L1  /  R1", keys: "Q  /  E" },
-                             { what: "L2  /  R2", keys: "Z  /  C" }, { what: "L3  /  R3", keys: "Left Shift  /  Left Ctrl" }, { what: "Touchpad", keys: "Backspace  /  Tab" }],
-                        ]: VerticalLayout {
-                            spacing: (12px * S.k);
-                            for row in column: HorizontalLayout {
+                            for row in column.rows: HorizontalLayout {
                                 height: (30px * S.k);
                                 spacing: (16px * S.k);
                                 Text { text: row.what; width: (150px * S.k); font-size: (19px * S.k); color: Theme.text2; vertical-alignment: center; }
@@ -1903,7 +1879,7 @@ export component AppWindow inherits Window {
                         }
                     }
                     Rectangle { height: (10px * S.k); }
-                    Text { text: root.controls-ps4 ? "shadPS4 keeps its key layout in its own settings file; these are its defaults." : "F7 turns the mouse into the right stick (press it again to release the mouse)."; font-size: (16px * S.k); color: Theme.text3; }
+                    Text { text: root.controls-note; font-size: (16px * S.k); color: Theme.text3; }
                     Text {
                         text: "Games play best with a controller: DualSense, DualShock 4, Xbox and most others work\nover USB or Bluetooth with no setup. Connect it before starting a game.";
                         font-size: (16px * S.k);

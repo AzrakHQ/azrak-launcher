@@ -125,5 +125,6 @@ fn main() {
 
     let ui = AppWindow::new().expect("could not create the window (is a graphical session running?)");
     ui.set_app_version(env!("CARGO_PKG_VERSION").into());
+    ui.set_emulator_summary(emulator::summary().into());
     app::run(ui, mons, target, windowed);
 }

@@ -12,7 +12,7 @@
 
 use crate::app::*;
 use crate::config::Config;
-use crate::emulator::{self, Emulator, Release};
+use crate::emulator::{self, Emulator, Release, Setting, SettingKind};
 use crate::settings::{row, SId};
 use crate::util;
 use crate::SettingData;
@@ -513,6 +513,60 @@ impl App {
             (r.hint, r.hint_kind) = if emu.runnable(cfg) { ("Found".into(), 1) } else { ("Nothing runnable at this path".into(), 2) };
             (SId::EmuPath(index_of(emu)), r)
         }).collect()
+    }
+
+    /// Every option the emulators declare, as rows (`advanced` picks the Advanced section).
+    pub fn emu_setting_rows(&self, cfg: &Config, advanced: bool) -> Vec<(SId, SettingData)> {
+        let mut rows = Vec::new();
+        for emu in each() {
+            for (k, s) in emu.settings().iter().enumerate().filter(|(_, s)| s.advanced == advanced) {
+                let value = emu.setting(cfg, s.key);
+                let mut r = row(match s.kind {
+                    SettingKind::Text => 1,
+                    SettingKind::Toggle => 2,
+                    SettingKind::Choice(_) => 3,
+                }, s.label);
+                r.hint = s.hint.into();
+                match s.kind {
+                    SettingKind::Text => r.value = value.into(),
+                    SettingKind::Toggle => r.on = value == "true",
+                    SettingKind::Choice(options) => r.value = options.iter().find(|(v, _)| *v == value).map_or(value.as_str(), |(_, name)| *name).to_string().into(),
+                }
+                rows.push((SId::EmuSetting(index_of(emu), k as u8), r));
+            }
+        }
+        rows
+    }
+
+    fn setting_of(n: u8, k: u8) -> Option<(Emu, &'static Setting)> {
+        let emu = nth(n)?;
+        Some((emu, emu.settings().get(k as usize)?))
+    }
+
+    /// The text to edit for a Text option.
+    pub fn emu_setting_text(&self, n: u8, k: u8) -> String {
+        Self::setting_of(n, k).map(|(emu, s)| emu.setting(&self.cfg.lock().unwrap(), s.key)).unwrap_or_default()
+    }
+
+    /// A toggle or choice moved by `dir` (a toggle: +1 on, -1 off).
+    pub fn emu_setting_change(&mut self, n: u8, k: u8, dir: i32) {
+        let Some((emu, s)) = Self::setting_of(n, k) else { return };
+        let current = emu.setting(&self.cfg.lock().unwrap(), s.key);
+        let next = match s.kind {
+            SettingKind::Toggle => (dir > 0).to_string(),
+            SettingKind::Choice(options) if !options.is_empty() => {
+                let pos = options.iter().position(|(v, _)| *v == current).unwrap_or(0) as i32;
+                options[(pos + dir).rem_euclid(options.len() as i32) as usize].0.to_string()
+            }
+            _ => return,
+        };
+        self.save_cfg(|c| emu.set_setting(c, s.key, next));
+    }
+
+    pub fn emu_setting_committed(&mut self, n: u8, k: u8, text: String) {
+        if let Some((emu, s)) = Self::setting_of(n, k) {
+            self.save_cfg(|c| emu.set_setting(c, s.key, text));
+        }
     }
 
     /// The text to edit for a location row.

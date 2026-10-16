@@ -25,6 +25,41 @@ pub use store::{ManagedStore, Release};
 /// How long after a check the launcher looks for a new release again.
 pub const CHECK_INTERVAL: f64 = 6.0 * 3600.0;
 
+/// How Settings edits an option.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingKind {
+    Toggle,
+    /// Typed text, e.g. extra command-line arguments.
+    Text,
+    /// One of these (value, name) pairs, cycled with left/right.
+    Choice(&'static [(&'static str, &'static str)]),
+}
+
+/// One option of an emulator. Settings builds its row from this; nothing else is needed.
+#[derive(Clone, Copy, Debug)]
+pub struct Setting {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub hint: &'static str,
+    pub kind: SettingKind,
+    /// The value when nothing was chosen ("true"/"false" for a toggle).
+    pub default: &'static str,
+    /// Shown only under Settings → Advanced.
+    pub advanced: bool,
+}
+
+/// The keyboard layout an emulator uses when no controller is connected. Shown while a game
+/// starts and on the Controls sheet.
+#[derive(Clone, Copy, Debug)]
+pub struct Controls {
+    /// While a game starts: (what, keys), a short strip.
+    pub splash: &'static [(&'static str, &'static str)],
+    /// The Controls sheet: columns of (what, keys).
+    pub columns: &'static [&'static [(&'static str, &'static str)]],
+    /// A line under the sheet.
+    pub note: &'static str,
+}
+
 pub trait Emulator: Sync + Send {
     // ------------------------------------------------------------------ identity
 
@@ -147,6 +182,36 @@ pub trait Emulator: Sync + Send {
         cfg.emulator_paths.insert(self.id().to_string(), path);
     }
 
+    /// The community compatibility list's page, opened from a game's menu.
+    fn compat_page(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// A reminder shown when the player's ratings for this emulator are opened for sharing.
+    fn report_note(&self) -> &'static str {
+        ""
+    }
+
+    /// Its keyboard layout, if it has one the launcher should show.
+    fn controls(&self) -> Option<Controls> {
+        None
+    }
+
+    /// The options Settings shows for this emulator (see `Setting`). Rows appear by themselves.
+    fn settings(&self) -> &'static [Setting] {
+        &[]
+    }
+
+    /// An option's current value (a toggle is "true" or "false").
+    fn setting(&self, cfg: &Config, key: &str) -> String {
+        let default = self.settings().iter().find(|s| s.key == key).map_or("", |s| s.default);
+        cfg.emulator_settings.get(&format!("{}.{key}", self.id())).cloned().unwrap_or_else(|| default.to_string())
+    }
+
+    fn set_setting(&self, cfg: &mut Config, key: &str, value: String) {
+        cfg.emulator_settings.insert(format!("{}.{key}", self.id()), value);
+    }
+
     /// Whether the launcher keeps its managed copy on the latest official build.
     fn auto_update(&self, cfg: &Config) -> bool {
         cfg.emulator_auto_update.get(self.id()).copied().unwrap_or(true)
@@ -192,6 +257,16 @@ pub trait Emulator: Sync + Send {
 /// "PS4", or "PS5, PS4" for an emulator that runs several platforms' games.
 pub fn platform_labels(emu: &dyn Emulator) -> String {
     emu.platforms().iter().map(|p| p.label()).collect::<Vec<_>>().join(", ")
+}
+
+/// The emulators with a keyboard layout to show, as Controls sheet tabs.
+pub fn with_controls() -> Vec<&'static dyn Emulator> {
+    all().iter().copied().filter(|e| e.controls().is_some()).collect()
+}
+
+/// "PS5 games on KytyPS5 · PS4 games on shadPS4", for the welcome screen.
+pub fn summary() -> String {
+    all().iter().map(|e| format!("{} games on {}", platform_labels(*e), e.name())).collect::<Vec<_>>().join(" · ")
 }
 
 /// Every emulator, in the order they are offered. Register new ones here.
@@ -255,6 +330,35 @@ mod tests {
 
     /// Checks that hold for every registered emulator, so a new one is covered by adding it to
     /// the registry: a mistake here is a mistake the launcher would only show at run time.
+    #[test]
+    fn every_emulator_setting_is_usable_by_settings() {
+        for emu in all() {
+            let mut keys = std::collections::HashSet::new();
+            let mut cfg = Config::default();
+            for s in emu.settings() {
+                assert!(keys.insert(s.key), "{}: duplicate setting {}", emu.id(), s.key);
+                let value = emu.setting(&cfg, s.key);
+                match s.kind {
+                    SettingKind::Toggle => assert!(matches!(value.as_str(), "true" | "false"), "{}.{}: {value}", emu.id(), s.key),
+                    SettingKind::Choice(options) => {
+                        assert!(options.iter().any(|(v, _)| *v == value), "{}.{}: default {value} is not a choice", emu.id(), s.key);
+                        for (v, _) in options {
+                            emu.set_setting(&mut cfg, s.key, v.to_string());
+                            assert_eq!(emu.setting(&cfg, s.key), *v, "{}.{} must keep what it was given", emu.id(), s.key);
+                        }
+                    }
+                    SettingKind::Text => {
+                        emu.set_setting(&mut cfg, s.key, "--x".into());
+                        assert_eq!(emu.setting(&cfg, s.key), "--x");
+                    }
+                }
+            }
+            if let Some(c) = emu.controls() {
+                assert!(!c.splash.is_empty() && !c.columns.is_empty());
+            }
+        }
+    }
+
     #[test]
     fn every_registered_emulator_honours_the_contract() {
         let mut ids = HashSet::new();

@@ -11,7 +11,7 @@ use crate::library::{self, LocalGame};
 use crate::psn::{self, Info};
 use crate::sessions::{Session, Sessions};
 use crate::util::{self, norm};
-use crate::{AppWindow, ToastData};
+use crate::{AppWindow, KeyColumn, KeyRow, ToastData};
 use slint::platform::Key;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -1221,8 +1221,17 @@ impl App {
         let n = batch.len();
         let left = self.my_results.unshared().len();
         let mut more = if left > 0 { format!(" {left} more next time.") } else { String::new() };
-        if batch.iter().any(|(tid, _)| crate::platform::Platform::of_title_id(tid) == Some(crate::platform::Platform::Ps4)) {
-            more.push_str(" shadPS4 only accepts reports for games dumped from a copy you own, unmodified.");
+        let mut notes: Vec<&str> = Vec::new();
+        for (tid, _) in &batch {
+            let platform = crate::platform::Platform::of_title_id(tid);
+            let note = platform.and_then(|p| crate::emulator::for_platform(p)).map_or("", |e| e.report_note());
+            if !note.is_empty() && !notes.contains(&note) {
+                notes.push(note);
+            }
+        }
+        for note in notes {
+            more.push(' ');
+            more.push_str(note);
         }
         self.toast(&format!("Opened {n} report{} in your browser", if n == 1 { "" } else { "s" }),
             &format!("Check each one, drag in its log from the folder that opened (named after the game), and submit.{more}"), 1);
@@ -1543,7 +1552,7 @@ impl App {
             return;
         }
         if zone == Z_CONTROLS && self.overlay == Overlay::Controls {
-            self.ui().set_controls_ps4(idx == 1);
+            self.push_controls(idx as usize);
             return;
         }
         if zone == Z_ROW && self.overlay == Overlay::None {
@@ -1634,8 +1643,9 @@ impl App {
             Overlay::Controls => match a {
                 Act::Back | Act::Confirm => self.back(),
                 Act::Left | Act::Right => {
-                    let ui = self.ui();
-                    ui.set_controls_ps4(!ui.get_controls_ps4());
+                    let tabs = crate::emulator::with_controls().len().max(1) as i32;
+                    let next = (self.ui().get_controls_tab() + if a == Act::Left { -1 } else { 1 }).rem_euclid(tabs);
+                    self.push_controls(next as usize);
                     audio::play(Sound::Move);
                 }
                 _ => {}
@@ -2590,12 +2600,12 @@ impl App {
                 items.push(mk("rate", "Rate how it runs", "star"));
             }
         }
-        let compat = match self.target_platform(t) {
-            crate::platform::Platform::Ps4 => "shadPS4 compatibility list",
-            crate::platform::Platform::Ps5 => "KytyPS5 compatibility list",
-            crate::platform::Platform::Pc => "ProtonDB page",
+        let platform = self.target_platform(t);
+        let compat = match crate::emulator::selected(&self.cfg.lock().unwrap(), platform) {
+            Some(emu) => format!("{} compatibility list", emu.name()),
+            None => "ProtonDB page".to_string(),
         };
-        items.push(mk("compat", compat, "web"));
+        items.push(mk("compat", &compat, "web"));
         items.push(mk("settings", "Settings", "gear"));
         let title = t.local.map(|l| self.locals[l].name.clone()).or_else(|| t.game.map(|g| self.games[g].name.clone())).unwrap_or_default();
         self.menu_target = Some(t);
@@ -2614,9 +2624,22 @@ impl App {
         ui.set_launch_controller(crate::gamepad::status().into());
     }
 
+    /// The Controls sheet: one tab per emulator with a keyboard layout, `tab` selected.
+    pub fn push_controls(&mut self, tab: usize) {
+        let emus = crate::emulator::with_controls();
+        let Some(emu) = emus.get(tab).copied().or(emus.first().copied()) else { return };
+        let Some(c) = emu.controls() else { return };
+        let ui = self.ui();
+        ui.set_controls_tabs(model(emus.iter().map(|e| slint::SharedString::from(format!("{} games · {}", crate::emulator::platform_labels(*e), e.name()))).collect()));
+        ui.set_controls_tab(tab.min(emus.len() - 1) as i32);
+        ui.set_controls_columns(model(c.columns.iter().map(|col| KeyColumn { rows: model(col.iter().map(|(what, keys)| KeyRow { what: (*what).into(), keys: (*keys).into() }).collect()) }).collect()));
+        ui.set_controls_note(c.note.into());
+    }
+
     /// Settings → Controls: the keyboard layout games use without a controller.
     pub fn open_controls(&mut self) {
         self.push_controller_status();
+        self.push_controls(0);
         audio::play(Sound::Select);
         self.push_overlay(Overlay::Controls, Z_CONTROLS, 0);
     }
@@ -2625,7 +2648,11 @@ impl App {
         self.push_launch(l);
         let platform = self.locals[l].l.platform;
         self.ui().set_launch_sub(if platform == crate::platform::Platform::Pc { "Starting…".into() } else { format!("Starting with {}…", platform.emulator()).into() });
-        self.ui().set_launch_ps4(platform == crate::platform::Platform::Ps4);
+        let keys = {
+            let cfg = self.cfg.lock().unwrap();
+            crate::emulator::selected(&cfg, platform).and_then(|e| e.controls()).map(|c| c.splash).unwrap_or(&[])
+        };
+        self.ui().set_launch_keys(model(keys.iter().map(|(what, keys)| KeyRow { what: (*what).into(), keys: (*keys).into() }).collect()));
         self.push_controller_status();
         self.push_overlay(Overlay::Launch, self.zone, self.idx);
         let Some(pid) = self.session_for_local(l).map(|s| s.pid) else {

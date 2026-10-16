@@ -19,10 +19,9 @@ const SHAD_REPORT_FORM: &str = "https://github.com/shadps4-compatibility/shadps4
 /// The community list page for a console's emulator.
 pub fn list_page(platform: crate::platform::Platform) -> &'static str {
     match platform {
-        crate::platform::Platform::Ps5 => LIST_PAGE,
-        crate::platform::Platform::Ps4 => SHAD_LIST_PAGE,
         // How Windows games run through Proton/Wine, reported by players.
         crate::platform::Platform::Pc => "https://www.protondb.com/",
+        _ => crate::emulator::for_platform(platform).and_then(|e| e.compat_page()).unwrap_or(LIST_PAGE),
     }
 }
 
