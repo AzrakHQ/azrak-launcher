@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::process::Command;
 
-/// Written into the OS image (os/Containerfile).
+/// Written into the OS image (built in github.com/AzrakHQ/azrak-os).
 const MARKER: &str = "/usr/lib/ps5-launcher-os/release";
 
 /// Running on PS5 Launcher OS (or pretending to, for screenshots: `PS5_LAUNCHER_OS=1`).

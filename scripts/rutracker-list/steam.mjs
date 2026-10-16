@@ -150,7 +150,7 @@ async function get(url, as = 'json') {
     if (wait) await sleep(wait);
     let response;
     try {
-      response = await fetch(url, { signal: AbortSignal.timeout(30_000), headers: { 'User-Agent': 'ps5-launcher-catalog (github.com/MohamedAliRashad/ps5-launcher)' } });
+      response = await fetch(url, { signal: AbortSignal.timeout(30_000), headers: { 'User-Agent': 'ps5-launcher-catalog (github.com/AzrakHQ/azrak)' } });
     } catch { continue; }
     if (response.status === 429 || response.status >= 500) continue;
     if (!response.ok) return null;

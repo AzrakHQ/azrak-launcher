@@ -24,7 +24,7 @@ You need 64-bit Linux: Ubuntu 22.04+, Debian 12+, Fedora 36+, Mint 21+, Arch or 
 Open a terminal and run:
 
 ```bash
-curl -fsSL https://github.com/MohamedAliRashad/ps5-launcher/releases/latest/download/ps5-launcher-linux-x86_64.tar.gz | tar xz && ./ps5-launcher-linux-x86_64/install.sh
+curl -fsSL https://github.com/AzrakHQ/azrak/releases/latest/download/ps5-launcher-linux-x86_64.tar.gz | tar xz && ./ps5-launcher-linux-x86_64/install.sh
 ```
 
 **PS5 Launcher** is now in your app menu. For trailers, switching between a game and the
@@ -40,7 +40,8 @@ To uninstall: `./ps5-launcher-linux-x86_64/install.sh --uninstall`
 
 **PS5 Launcher OS** makes a PC start straight into the launcher, like a console. It's
 [Bazzite](https://bazzite.gg), a gaming Linux, with the launcher built in. The launcher, its
-emulators and the system all keep themselves up to date.
+emulators and the system all keep themselves up to date. It's built in
+[AzrakHQ/azrak-os](https://github.com/AzrakHQ/azrak-os).
 
 **You need:**
 - A USB stick (2 GB or more) and an internet connection, cable or Wi-Fi.
@@ -50,7 +51,7 @@ emulators and the system all keep themselves up to date.
 
 **Installing erases the disk you pick.**
 
-1. Download [ps5-launcher-os-x86_64.iso](https://github.com/MohamedAliRashad/ps5-launcher/releases/latest/download/ps5-launcher-os-x86_64.iso)
+1. Download [ps5-launcher-os-x86_64.iso](https://github.com/AzrakHQ/azrak-os/releases/latest/download/ps5-launcher-os-x86_64.iso)
    and write it to the USB stick with [balenaEtcher](https://etcher.balena.io) or
    [Fedora Media Writer](https://fedoraproject.org/workstation/download).
 2. Start the PC from the USB stick (press F12, F11, F8 or Esc while it starts) and choose
@@ -168,7 +169,7 @@ try the next one.
 - **Too big or too small:** run `PS5_LAUNCHER_SCALE=1.15 ps5-launcher` (bigger number, bigger UI).
 - **A new KytyPS5 broke a game:** **Settings → Roll back to previous KytyPS5**.
 
-Still stuck? [Open an issue](https://github.com/MohamedAliRashad/ps5-launcher/issues).
+Still stuck? [Open an issue](https://github.com/AzrakHQ/azrak/issues).
 Developers: see the [developer guide](docs/DEVELOPMENT.md).
 
 ---

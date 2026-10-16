@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-pub const REPO: &str = "MohamedAliRashad/ps5-launcher";
+pub const REPO: &str = "AzrakHQ/azrak";
 const ASSET: &str = "ps5-launcher-linux-x86_64.tar.gz";
 const CHECK_INTERVAL: f64 = 6.0 * 3600.0;
 

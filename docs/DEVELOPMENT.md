@@ -6,7 +6,7 @@ launcher, see the [README](../README.md).
 ## Build from source
 
 ```bash
-git clone https://github.com/MohamedAliRashad/ps5-launcher.git
+git clone https://github.com/AzrakHQ/azrak.git
 cd ps5-launcher
 ./install.sh
 ```
