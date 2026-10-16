@@ -6,8 +6,8 @@ launcher, see the [README](../README.md).
 ## Build from source
 
 ```bash
-git clone https://github.com/AzrakHQ/azrak.git
-cd azrak
+git clone https://github.com/AzrakHQ/azrak-launcher.git
+cd azrak-launcher
 ./install.sh
 ```
 

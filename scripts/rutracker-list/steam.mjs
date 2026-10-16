@@ -150,7 +150,7 @@ async function get(url, as = 'json') {
     if (wait) await sleep(wait);
     let response;
     try {
-      response = await fetch(url, { signal: AbortSignal.timeout(30_000), headers: { 'User-Agent': 'azrak-catalog (github.com/AzrakHQ/azrak)' } });
+      response = await fetch(url, { signal: AbortSignal.timeout(30_000), headers: { 'User-Agent': 'azrak-catalog (github.com/AzrakHQ/azrak-launcher)' } });
     } catch { continue; }
     if (response.status === 429 || response.status >= 500) continue;
     if (!response.ok) return null;

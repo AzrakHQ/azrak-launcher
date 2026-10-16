@@ -65,7 +65,7 @@ done
 PREBUILT="$HERE/$APP"
 if [ -f "$PREBUILT" ] && [ ! -f "$HERE/Cargo.toml" ]; then
     bold "1/2  Checking the prebuilt binary"
-    "$PREBUILT" --version >/dev/null 2>&1 || die "The prebuilt binary does not run on this system (it needs glibc 2.35+, e.g. Ubuntu 22.04 or newer). Build from source instead: https://github.com/AzrakHQ/azrak#build-from-source"
+    "$PREBUILT" --version >/dev/null 2>&1 || die "The prebuilt binary does not run on this system (it needs glibc 2.35+, e.g. Ubuntu 22.04 or newer). Build from source instead: https://github.com/AzrakHQ/azrak-launcher#build-from-source"
     ok "$("$PREBUILT" --version)"
     BIN_SRC="$PREBUILT"
     STEP="2/2"

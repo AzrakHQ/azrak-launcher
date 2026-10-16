@@ -26,7 +26,7 @@ You need 64-bit Linux: Ubuntu 22.04+, Debian 12+, Fedora 36+, Mint 21+, Arch or 
 Open a terminal and run:
 
 ```bash
-curl -fsSL https://github.com/AzrakHQ/azrak/releases/latest/download/azrak-linux-x86_64.tar.gz | tar xz && ./azrak-linux-x86_64/install.sh
+curl -fsSL https://github.com/AzrakHQ/azrak-launcher/releases/latest/download/azrak-linux-x86_64.tar.gz | tar xz && ./azrak-linux-x86_64/install.sh
 ```
 
 **Azrak Launcher** is now in your app menu. For trailers, switching between a game and the
@@ -171,7 +171,7 @@ try the next one.
 - **Too big or too small:** run `AZRAK_SCALE=1.15 azrak` (bigger number, bigger UI).
 - **A new KytyPS5 broke a game:** **Settings → Roll back to previous KytyPS5**.
 
-Still stuck? [Open an issue](https://github.com/AzrakHQ/azrak/issues).
+Still stuck? [Open an issue](https://github.com/AzrakHQ/azrak-launcher/issues).
 Developers: see the [developer guide](docs/DEVELOPMENT.md).
 
 ---
