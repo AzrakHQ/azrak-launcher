@@ -80,7 +80,8 @@ export function labelBytes(label) {
  */
 export function refreshCatalog(catalog, feed, api, platform, now = new Date()) {
   const known = new Map(catalog.topics.map(topic => [topic.id, topic]));
-  const fresh = feed.filter(entry => !platform.tag || entry.title.toUpperCase().startsWith(`[${platform.tag.toUpperCase()}]`));
+  // Every release the API lists (it lists topics with a torrent), whatever its title's tag.
+  const fresh = feed;
   let added = 0, renamed = 0;
   for (const entry of fresh) {
     const topic = known.get(entry.id);

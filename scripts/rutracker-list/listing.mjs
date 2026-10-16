@@ -25,8 +25,11 @@ export function readListing({ forumId = '546', tag = 'PS5' } = {}) {
     const url = new URL(anchor.getAttribute('href'), base);
     const id = url.searchParams.get('t');
     const row = anchor.closest('tr');
-    const released = tag ? title.toUpperCase().startsWith(`[${tag.toUpperCase()}]`)
-      : Boolean(row?.querySelector('.vf-col-tor a.dl-stub')); // untagged forums: topics with a torrent
+    // A release is a topic with a torrent. In the console forums most titles start with the
+    // console's tag, but not all ("[PS4/PS5] …", tags further along): the tag alone missed a
+    // fifth of the PS4 forum. Rules and discussion threads have no torrent.
+    const released = Boolean(row?.querySelector('.vf-col-tor a.dl-stub'))
+      || (tag !== null && title.toUpperCase().startsWith(`[${tag.toUpperCase()}]`));
     if (url.origin !== base.origin || url.pathname !== '/forum/viewtopic.php'
         || !/^\d+$/.test(id || '') || !released) {
       skipped++;

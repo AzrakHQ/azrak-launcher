@@ -180,11 +180,12 @@ test('the daily refresh adds feed releases, follows re-uploads and drops deleted
       <updated>2026-10-07T10:00:00+03:00</updated><title type="html"><![CDATA[[PS5] New Game [EUR / RUS / ENG / v1.000 / Лицензия] [6.17 GB]]]></title>
       <author><name>uploader</name></author></entry>
     <entry><link href="https://rutracker.org/forum/viewtopic.php?t=1"/><title>[Обновлено] [PS5] Old Game &amp; More [v1.002]</title></entry>
-    <entry><link href="https://rutracker.org/forum/viewtopic.php?t=8"/><title>Rules of the forum</title></entry>
+    <entry><link href="https://rutracker.org/forum/viewtopic.php?t=8"/><title>[PS4/PS5] Cross Game [EUR]</title></entry>
+    <entry><link href="https://rutracker.org/forum/viewtopic.php?t=11"/><title>Rules of the forum</title></entry>
     <entry><link href="https://rutracker.org/forum/viewtopic.php?t=9"/><title>[PS5] Not registered yet</title></entry>
   </feed>`);
   assert.deepEqual(feed.map(e => [e.id, e.title]), [['7', '[PS5] New Game [EUR / RUS / ENG / v1.000 / Лицензия] [6.17 GB]'],
-    ['1', '[PS5] Old Game & More [v1.002]'], ['8', 'Rules of the forum'], ['9', '[PS5] Not registered yet']]);
+    ['1', '[PS5] Old Game & More [v1.002]'], ['8', '[PS4/PS5] Cross Game [EUR]'], ['11', 'Rules of the forum'], ['9', '[PS5] Not registered yet']]);
   const row = hash => [2, 3, 1791382052, 6624000000, 1, [], 0, hash, 1, 1];
   const api = { format: { topic_id: ['tor_status', 'seeders', 'reg_time', 'tor_size_bytes', 'keeping_priority', 'keepers', 'seeder_last_seen', 'info_hash', 'topic_poster', 'leechers'] },
     update_time: 1791382052, result: Object.fromEntries([1, 2, 3, 4, 5, 6, 7, 8].map(id => [id, row(String(id).repeat(40))])) };
@@ -193,7 +194,8 @@ test('the daily refresh adds feed releases, follows re-uploads and drops deleted
   topics[1].magnet = `magnet:?xt=urn:btih:${'F'.repeat(40)}&tr=x`; // re-uploaded since
   const platform = { tag: 'PS5' };
   const { catalog, added, renamed, removed } = refreshCatalog({ topics, topic_count: 7 }, feed, api, platform);
-  assert.deepEqual([added, renamed, removed], [1, 1, 1], 'topic 10 is gone from the API; 8 is not a PS5 release; 9 has no torrent');
+  assert.deepEqual([added, renamed, removed], [2, 1, 1], 'topic 10 is gone from the API; 8 has a torrent, whatever its tag; 9 and the rules (11) have none');
+  assert.ok(catalog.topics.some(t => t.id === '8') && !catalog.topics.some(t => t.id === '11' || t.id === '9'));
   const byId = Object.fromEntries(catalog.topics.map(t => [t.id, t]));
   assert.equal(byId[1].title, '[PS5] Old Game & More [v1.002]');
   assert.equal(byId[1].game_info.genre, 'Action', 'details survive a rename');
