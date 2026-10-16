@@ -301,7 +301,7 @@ a partial library entry. RAR4 stored, ZIP, 7z/split 7z and TAR generated fixture
 tested on libarchive 3.7.2; compressed/solid/multipart RAR variants are not certified.
 
 PS5 **debug packages** (`.pkg` files that start with `7F 46 49 48`, "FIH") are unpacked
-by `src/pkg.rs`, without a helper process and without any key. The package's outer file
+by `src/emulator/kytyps5/pkg.rs`, without a helper process and without any key. The package's outer file
 system is readable, `sce_sys` files come from its metadata block, and the game files are
 rebuilt block by block from `pfs_image.dat` using `naps_pkg_layout.dat`. Blocks are stored
 raw or as Oodle Kraken with the headers removed. The launcher puts the headers back and
@@ -349,14 +349,14 @@ Linux is the primary platform. macOS is built and unit-tested in CI on
 (`packaging/macos/bundle.sh`: a universal, ad-hoc-signed `PS5 Launcher.app`).
 
 Low-level OS differences live in `src/platform.rs` behind `cfg(target_os)`, with tests that run on
-both. Smaller OS checks sit next to the code they affect (`kyty.rs`, `update.rs`, `app.rs`), and
+both. Smaller OS checks sit next to the code they affect (`emulator/kytyps5/install.rs`, `update.rs`, `app.rs`), and
 `sessions.rs` (window control through AppleScript instead of `xdotool`),
 `compat.rs` (`sysctl` instead of `/proc`), `gamepad.rs` (gilrs instead of evdev), `audio.rs`
 (`afplay` instead of ALSA) and `update.rs` (swaps the whole `.app` bundle) have macOS branches.
 
 Not verified on real hardware, so check these first when something misbehaves on a Mac:
 
-- KytyPS5's macOS release asset names. `kyty.rs::asset_matches` accepts any `.tar.gz`, `.tgz`
+- KytyPS5's macOS release asset names. `emulator/kytyps5/install.rs::asset_matches` accepts any `.tar.gz`, `.tgz`
   or `.zip` whose name contains `macos`, `darwin` or `osx`, and expects `kyty_emulator` at the
   top of the archive (or one folder down).
 - Window detection needs Accessibility permission; without it the launcher falls back to timeouts.
@@ -510,7 +510,7 @@ A `Platform` (PS5 or PS4) travels with each installed game and catalog release
 - **Installed games:** PS4 game folders are recognized by `sce_sys/param.sfo`
   ([src/sfo.rs](../src/sfo.rs), a bounds-checked PSF reader). Only full games (category `gd`)
   are listed; updates (`gp`) and add-ons are skipped, also by the installer.
-- **Emulator:** shadPS4's official Linux release ([src/shad.rs](../src/shad.rs), plugged in by
+- **Emulator:** shadPS4's official Linux release ([src/emulator/shadps4/install.rs](../src/emulator/shadps4/install.rs), plugged in by
   [src/emulator/shadps4.rs](../src/emulator/shadps4.rs)) is installed in
   the background once the start-up screen closes (after any KytyPS5 download), or right away
   when a PS4 game is played first. The zip is SHA-256 checked, its AppImage unpacked once
@@ -519,8 +519,8 @@ A `Platform` (PS5 or PS4) travels with each installed game and catalog release
   automatically** off, it installs only when a PS4 game is played. Saves stay in
   `~/.local/share/shadPS4`.
 - **PKG releases:** PS4 fake packages (fPKG, `.pkg` files that start with `7F 'C' 'N' 'T'`) are
-  unpacked natively on Linux and macOS by [src/pkg4.rs](../src/pkg4.rs), ported from shadPS4 v0.7.0
-  (GPL-2.0-or-later; its RSA keys and entry names are in [src/pkg4_data.rs](../src/pkg4_data.rs),
+  unpacked natively on Linux and macOS by [src/emulator/shadps4/pkg.rs](../src/emulator/shadps4/pkg.rs), ported from shadPS4 v0.7.0
+  (GPL-2.0-or-later; its RSA keys and entry names are in [src/emulator/shadps4/pkg_data.rs](../src/emulator/shadps4/pkg_data.rs),
   generated from shadPS4's sources). No helper program runs. The reader decrypts the per-entry
   key (DK3) and the file system key (EKPFS) with the public fake RSA keys, derives the AES-XTS
   keys of the outer file system with HMAC-SHA256, finds its PFSC container (64 KiB blocks, raw,

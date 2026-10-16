@@ -58,7 +58,7 @@ impl Emulator for Fpps4 {
     }
     fn store(&self) -> ManagedStore { ManagedStore::new(crate::util::data_dir().join("fpps4")) }
     fn binary(&self) -> PathBuf { self.store().root().join("current").join("fpPS4") }
-    fn latest_release(&self) -> Result<Release, String> { /* GitHub Releases, see kyty.rs */ }
+    fn latest_release(&self) -> Result<Release, String> { /* GitHub Releases, see emulator/kytyps5/install.rs */ }
     fn install(&self, rel: &Release, progress: &dyn Fn(String, f32)) -> Result<(), String> {
         // download::file checks the SHA-256; unpack into store.staging_dir(&rel.tag), check
         // that it starts, then: store.activate(&rel.tag, &staging)

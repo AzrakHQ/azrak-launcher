@@ -1,4 +1,7 @@
-//! KytyPS5, the PS5 emulator. The install, update and version logic is in `crate::kyty`.
+//! KytyPS5, the PS5 emulator. The install, update and version logic is in `crate::emulator::kytyps5::install`.
+
+pub mod install;
+pub mod pkg;
 
 use super::{Controls, Emulator, ManagedStore, Release, Setting, SettingKind};
 use crate::config::{Config, VIDEO_OUT_MODES};
@@ -70,32 +73,32 @@ impl Emulator for KytyPs5 {
     }
 
     fn store(&self) -> ManagedStore {
-        crate::kyty::store()
+        install::store()
     }
 
     fn binary(&self) -> PathBuf {
-        crate::kyty::managed_emulator()
+        install::managed_emulator()
     }
 
     fn latest_release(&self) -> Result<Release, String> {
-        crate::kyty::latest_release()
+        install::latest_release()
     }
 
     fn install(&self, rel: &Release, progress: &dyn Fn(String, f32)) -> Result<(), String> {
-        crate::kyty::install(rel, progress)
+        install::install(rel, progress)
     }
 
     fn pretty(&self, tag: &str) -> String {
-        crate::kyty::pretty(tag)
+        install::pretty(tag)
     }
 
     /// The managed build's tag, or a custom build's "2026-09-30 (b7a1fac)".
     fn version_for(&self, cfg: &Config) -> String {
-        crate::kyty::version_for(&self.path(cfg))
+        install::version_for(&self.path(cfg))
     }
 
     fn detect(&self) -> Option<PathBuf> {
-        crate::config::detect_emulator()
+        detect_emulator()
     }
 
     fn keeps_missing_custom_path(&self) -> bool {
@@ -179,7 +182,7 @@ impl Emulator for KytyPs5 {
 
     /// "6799ecb (2026-09-29)", from the build's `--help` banner.
     fn describe_own_build(&self, path: &Path) -> Option<String> {
-        crate::kyty::binary_version(path).map(|(git, date)| format!("{git} ({date})"))
+        install::binary_version(path).map(|(git, date)| format!("{git} ({date})"))
     }
 
     fn switch_hint(&self) -> &'static str {
@@ -191,9 +194,42 @@ impl Emulator for KytyPs5 {
         if was_managed {
             return None;
         }
-        let copied = previous.parent().map(crate::kyty::import_data_from).unwrap_or(0);
+        let copied = previous.parent().map(install::import_data_from).unwrap_or(0);
         (copied > 0).then(|| "Your saves and shader caches were copied over.".to_string())
     }
+}
+
+/// Look for kyty_emulator in PATH and a few common build locations.
+pub(super) fn detect_emulator() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).map(|d| d.join("kyty_emulator")));
+    }
+    let home = crate::util::expand_home("~");
+    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.to_path_buf()));
+    let mut roots = vec![home.clone(), home.join("projects"), home.join("Games"), home.join("Applications"), home.join("src")];
+    if let Some(d) = &exe_dir {
+        roots.extend(d.ancestors().take(4).map(|p| p.to_path_buf()));
+    }
+    for root in roots {
+        for sub in ["KytyPS5", "kyty", "Kyty"] {
+            for build in ["_Build/release-linux", "_Build/linux/install", "_Build/linux", "build", ""] {
+                candidates.push(root.join(sub).join(build).join("kyty_emulator"));
+            }
+        }
+        // One level deeper, e.g. ~/projects/PS5/KytyPS5
+        if let Ok(rd) = std::fs::read_dir(&root) {
+            for e in rd.flatten().take(200) {
+                let p = e.path();
+                if p.is_dir() {
+                    for build in ["KytyPS5/_Build/release-linux", "KytyPS5/_Build/linux/install"] {
+                        candidates.push(p.join(build).join("kyty_emulator"));
+                    }
+                }
+            }
+        }
+    }
+    candidates.into_iter().find(|p| std::fs::metadata(p).map(|m| m.is_file() && crate::config::is_executable(&m)).unwrap_or(false))
 }
 
 #[cfg(test)]

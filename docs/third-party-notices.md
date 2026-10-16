@@ -84,7 +84,7 @@ general in-application “Built with librqbit” branding requirement.
 
 ## shadPS4 code in this release
 
-`src/pkg4.rs` (the PS4 package reader) and `src/pkg4_data.rs` (its RSA keys and entry names) are
+`src/emulator/shadps4/pkg.rs` (the PS4 package reader) and `src/emulator/shadps4/pkg_data.rs` (its RSA keys and entry names) are
 ported from shadPS4 v0.7.0, Copyright 2024 shadPS4 Emulator Project, under GPL-2.0-or-later
 (<https://github.com/shadps4-emu/shadPS4>). Their file system walk follows LibOrbisPkg (MIT,
 <https://github.com/maxton/LibOrbisPkg>); no LibOrbisPkg code is copied. A binary that contains

@@ -179,7 +179,7 @@ impl App {
         rows.extend(self.emu_update_rows(&cfg));
 
         let mut r = row(2, "Update automatically");
-        r.on = cfg.app_auto_update && cfg.kyty_auto_update && crate::emulator::all().iter().all(|e| e.auto_update(&cfg));
+        r.on = cfg.app_auto_update && crate::emulator::all().iter().all(|e| e.auto_update(&cfg));
         r.hint = "Checks every few hours · updates wait until you close your game".into();
         rows.push((SId::AutoUpdate, r));
         // Rollbacks only when there is something to go back to.

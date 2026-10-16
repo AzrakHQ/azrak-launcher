@@ -122,12 +122,15 @@ impl Config {
         cfg
     }
 
-    /// Settings has one "Update automatically" switch for the launcher, KytyPS5 and shadPS4.
-    /// Older settings files set them separately (and have no shadPS4 entry, which defaults to
-    /// on): if any was turned off, all are off, so the switch shows what actually happens.
+    /// Settings has one "Update automatically" switch for the launcher and every emulator.
+    /// Older settings files set them separately (and may have no entry for an emulator, which
+    /// defaults to on): if any was turned off, all are off, so the switch shows what happens.
     fn one_update_switch(&mut self) {
-        let all = self.app_auto_update && self.kyty_auto_update && self.shad_auto_update;
-        (self.app_auto_update, self.kyty_auto_update, self.shad_auto_update) = (all, all, all);
+        let all = self.app_auto_update && crate::emulator::all().iter().all(|e| e.auto_update(self));
+        self.app_auto_update = all;
+        for emu in crate::emulator::all() {
+            emu.set_auto_update(self, all);
+        }
     }
 
     /// Older settings files have no games folder, only the folder new games install to. Its parent
@@ -239,7 +242,7 @@ pub(crate) fn runnable(path: &std::path::Path) -> bool {
     std::fs::metadata(path).map(|m| m.is_file() && is_executable(&m)).unwrap_or(false)
 }
 
-fn is_executable(m: &std::fs::Metadata) -> bool {
+pub(crate) fn is_executable(m: &std::fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt;
     m.permissions().mode() & 0o111 != 0
 }
@@ -395,37 +398,4 @@ mod tests {
         assert_eq!(again.emulator_paths["other"], "/o/other");
         assert_eq!(again.platform_emulators["PS4"], "other");
     }
-}
-
-/// Look for kyty_emulator in PATH and a few common build locations.
-pub fn detect_emulator() -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(std::env::split_paths(&path).map(|d| d.join("kyty_emulator")));
-    }
-    let home = expand_home("~");
-    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.to_path_buf()));
-    let mut roots = vec![home.clone(), home.join("projects"), home.join("Games"), home.join("Applications"), home.join("src")];
-    if let Some(d) = &exe_dir {
-        roots.extend(d.ancestors().take(4).map(|p| p.to_path_buf()));
-    }
-    for root in roots {
-        for sub in ["KytyPS5", "kyty", "Kyty"] {
-            for build in ["_Build/release-linux", "_Build/linux/install", "_Build/linux", "build", ""] {
-                candidates.push(root.join(sub).join(build).join("kyty_emulator"));
-            }
-        }
-        // One level deeper, e.g. ~/projects/PS5/KytyPS5
-        if let Ok(rd) = std::fs::read_dir(&root) {
-            for e in rd.flatten().take(200) {
-                let p = e.path();
-                if p.is_dir() {
-                    for build in ["KytyPS5/_Build/release-linux", "KytyPS5/_Build/linux/install"] {
-                        candidates.push(p.join(build).join("kyty_emulator"));
-                    }
-                }
-            }
-        }
-    }
-    candidates.into_iter().find(|p| std::fs::metadata(p).map(|m| m.is_file() && is_executable(&m)).unwrap_or(false))
 }

@@ -832,7 +832,7 @@ fn holds_extracted_game(source: &Source) -> bool {
 }
 
 /// A game package opened and listed, ready to install.
-struct Chosen { package: crate::pkg::Package, nodes: Vec<crate::pkg::Node>, plan: Plan }
+struct Chosen { package: crate::emulator::kytyps5::pkg::Package, nodes: Vec<crate::emulator::kytyps5::pkg::Node>, plan: Plan }
 
 // Debug `.pkg` files in the release. Each one that opens is listed; the one that holds a game wins.
 // A game has a sce_sys/param.json and an eboot.bin. DLC packs and update-only packages hold neither,
@@ -846,7 +846,7 @@ fn select_package(source: &Source, cancel: &AtomicBool) -> Result<Option<Chosen>
     for entry in source.plan.entries.iter().filter(|e| !e.directory && e.path.to_ascii_lowercase().ends_with(".pkg")) {
         check_cancel(cancel)?;
         let file = source.file(&entry.path)?;
-        if !crate::pkg::is_package(&file) { continue; }
+        if !crate::emulator::kytyps5::pkg::is_package(&file) { continue; }
         let level = depth(&entry.path);
         match open_package(file, cancel) {
             Ok(chosen) if holds_game(&chosen.plan) && chosen.plan.explicit.contains("eboot.bin") => match &mut best {
@@ -868,7 +868,7 @@ fn select_package(source: &Source, cancel: &AtomicBool) -> Result<Option<Chosen>
 }
 
 fn open_package(file: File, cancel: &AtomicBool) -> Result<Chosen> {
-    let mut package = crate::pkg::Package::open(file, &|| check_cancel(cancel))?;
+    let mut package = crate::emulator::kytyps5::pkg::Package::open(file, &|| check_cancel(cancel))?;
     let nodes = package.list(&|| check_cancel(cancel))?;
     let mut plan = Plan::limited(MAX_PACKAGE_ENTRIES);
     for node in &nodes {
@@ -878,7 +878,7 @@ fn open_package(file: File, cancel: &AtomicBool) -> Result<Chosen> {
     Ok(Chosen { package, nodes, plan })
 }
 
-fn extract_package(package: &mut crate::pkg::Package, nodes: &[crate::pkg::Node], plan: &Plan, output: &Dir, cancel: &AtomicBool, progress: Progress<'_>) -> Result<()> {
+fn extract_package(package: &mut crate::emulator::kytyps5::pkg::Package, nodes: &[crate::emulator::kytyps5::pkg::Node], plan: &Plan, output: &Dir, cancel: &AtomicBool, progress: Progress<'_>) -> Result<()> {
     let total = plan.total;
     let mut done = 0u64;
     for node in nodes {
@@ -984,7 +984,7 @@ fn install(req: &Request, cancel: &AtomicBool, progress: Progress<'_>, commit: &
     let mut pkgs = Vec::new();
     if wants_package && package.is_none() {
         for entry in source.plan.entries.iter().filter(|e| !e.directory && e.path.to_ascii_lowercase().ends_with(".pkg")) {
-            if !crate::pkg::is_package(&source.file(&entry.path)?) { pkgs.push(entry.path.clone()); }
+            if !crate::emulator::kytyps5::pkg::is_package(&source.file(&entry.path)?) { pkgs.push(entry.path.clone()); }
         }
     }
     if !pkgs.is_empty() {
@@ -1241,14 +1241,14 @@ fn place_update(stage: &Stage, destination: &Path, game_root: &str, update: &str
 /// published next to the game as `<game>-patch`, where shadPS4 finds it. DLC goes to shadPS4's
 /// add-on folder.
 fn install_pkgs(req: &Request, source: &Source, pkgs: &[String], cancel: &AtomicBool, progress: Progress<'_>, commit: &dyn Fn(&Stage, &str, &str, &str) -> Result<()>) -> Result<()> {
-    use crate::pkg4::{Kind, Package};
+    use crate::emulator::shadps4::pkg::{Kind, Package};
     let check = || check_cancel(cancel);
     let mut packages = Vec::new();
     for path in pkgs {
         check_cancel(cancel)?;
         // Opened from the inspected source: complete and unchanged since inspection.
         let file = source.file(path)?;
-        ensure!(crate::pkg4::is_package(&file), "{path}: not a PS4 PKG package");
+        ensure!(crate::emulator::shadps4::pkg::is_package(&file), "{path}: not a PS4 PKG package");
         let mut package = Package::open(file, &check).map_err(|e| anyhow::anyhow!("{path}: {e:#}"))?;
         let nodes = package.list(&check).map_err(|e| anyhow::anyhow!("{path}: {e:#}"))?;
         packages.push((path.clone(), package, nodes));
@@ -1273,7 +1273,7 @@ fn install_pkgs(req: &Request, source: &Source, pkgs: &[String], cancel: &Atomic
     // DLC is staged inside shadPS4's add-on folder (same disk) and only moved into place once the
     // game is installed; the stage, and anything left in it, is removed on any failure.
     let dlc_stage = if count(Kind::Dlc) == 0 { None } else {
-        let addons = crate::shad::addons_dir();
+        let addons = crate::emulator::shadps4::install::addons_dir();
         std::fs::create_dir_all(&addons).context("Create shadPS4 add-on folder")?;
         let dir = Dir::absolute(&addons, false).context("Open shadPS4 add-on folder")?;
         disk_check(&dir, &Plan { total: dlc_bytes, ..Plan::default() })?;
@@ -1897,9 +1897,9 @@ mod tests {
     }
 
     /// A generated PS4 package in the release folder, and shadPS4's add-on folder under `t`.
-    fn ps4(req: &Request, t: &Path, name: &str, kind: crate::pkg4::Kind, files: &[(&str, &[u8])], label: &str) -> Vec<u8> {
-        crate::shad::TEST_ADDONS.with(|c| *c.borrow_mut() = Some(t.join("addcont")));
-        let bytes = crate::pkg4::build::package(&crate::pkg4::build::Spec { files, kind, label, compressed: true, ..Default::default() });
+    fn ps4(req: &Request, t: &Path, name: &str, kind: crate::emulator::shadps4::pkg::Kind, files: &[(&str, &[u8])], label: &str) -> Vec<u8> {
+        crate::emulator::shadps4::install::TEST_ADDONS.with(|c| *c.borrow_mut() = Some(t.join("addcont")));
+        let bytes = crate::emulator::shadps4::pkg::build::package(&crate::emulator::shadps4::pkg::build::Spec { files, kind, label, compressed: true, ..Default::default() });
         fs::write(req.source.join(name), &bytes).unwrap();
         bytes
     }
@@ -1907,7 +1907,7 @@ mod tests {
 
     #[test]
     fn pkg_game_update_and_dlc_install_without_replacing_existing_addons() {
-        use crate::pkg4::Kind;
+        use crate::emulator::shadps4::pkg::Kind;
         let (t, mut req) = fixture();
         req.expected_ids = vec!["CUSA12345".into()];
         let game = ps4(&req, t.path(), "game.pkg", Kind::Game, &PS4_GAME, "");
@@ -1933,7 +1933,7 @@ mod tests {
     #[test]
     fn of_two_updates_the_later_one_wins_on_shared_files() {
         // As the extractor did: it wrote both into one -patch folder, in release order.
-        use crate::pkg4::Kind;
+        use crate::emulator::shadps4::pkg::Kind;
         let (t, mut req) = fixture();
         req.expected_ids = vec!["CUSA12345".into()];
         ps4(&req, t.path(), "game.pkg", Kind::Game, &PS4_GAME, "");
@@ -1948,7 +1948,7 @@ mod tests {
 
     #[test]
     fn pkg_failure_leaves_game_folder_and_addons_untouched() {
-        use crate::pkg4::Kind;
+        use crate::emulator::shadps4::pkg::Kind;
         for case in ["damaged dlc", "damaged game data", "no game", "retail"] {
             let (t, mut req) = fixture();
             req.expected_ids = vec!["CUSA12345".into()];
@@ -1974,9 +1974,9 @@ mod tests {
                 }
                 "no game" => { ps4(&req, t.path(), "update.pkg", Kind::Update, &[("eboot.bin", b"patch")], ""); }
                 _ => {
-                    crate::shad::TEST_ADDONS.with(|c| *c.borrow_mut() = Some(t.path().join("addcont")));
-                    let spec = crate::pkg4::build::Spec { files: &PS4_GAME, retail: true, ..Default::default() };
-                    fs::write(req.source.join("game.pkg"), crate::pkg4::build::package(&spec)).unwrap();
+                    crate::emulator::shadps4::install::TEST_ADDONS.with(|c| *c.borrow_mut() = Some(t.path().join("addcont")));
+                    let spec = crate::emulator::shadps4::pkg::build::Spec { files: &PS4_GAME, retail: true, ..Default::default() };
+                    fs::write(req.source.join("game.pkg"), crate::emulator::shadps4::pkg::build::package(&spec)).unwrap();
                 }
             }
             let err = format!("{:#}", run(&req, &AtomicBool::new(false), &|_,_,_| {}).err().unwrap_or_else(|| panic!("{case}: installed")));
@@ -2066,7 +2066,7 @@ mod tests {
     #[test]
     fn extracted_game_wins_over_packages_next_to_it() {
         // A release can ship an extracted game with small DLC unlocker packages beside it.
-        let dlc = crate::pkg::build::package(&crate::pkg::build::Spec { files: &[("data", b"dlc")], ..Default::default() });
+        let dlc = crate::emulator::kytyps5::pkg::build::package(&crate::emulator::kytyps5::pkg::build::Spec { files: &[("data", b"dlc")], ..Default::default() });
         for (case, bytes) in [("PS5 DLC package", dlc), ("damaged package", b"\x7fFIH\0\0damaged".to_vec()), ("PS4 package", b"\x7fCNTfixture".to_vec())] {
             let (_t, req) = fixture();
             game(&req.source);
@@ -2083,7 +2083,7 @@ mod tests {
     fn game_package_wins_over_a_folder_that_isnt_a_game() {
         // Loose metadata (no eboot.bin) next to a debug game package is not an extracted game.
         let (_t, req) = fixture();
-        let bytes = crate::pkg::build::package(&crate::pkg::build::Spec { files: &pkg_files(), ..Default::default() });
+        let bytes = crate::emulator::kytyps5::pkg::build::package(&crate::emulator::kytyps5::pkg::build::Spec { files: &pkg_files(), ..Default::default() });
         fs::write(req.source.join("PPSA12345.pkg"), &bytes).unwrap();
         fs::create_dir_all(req.source.join("art/sce_sys")).unwrap();
         fs::write(req.source.join("art/sce_sys/param.json"), PARAM).unwrap();
@@ -2096,7 +2096,7 @@ mod tests {
     fn a_pkg_file_inside_a_game_package_is_part_of_the_game() {
         let (_t, req) = fixture();
         let files: [(&str, &[u8]); 2] = [("eboot.bin", b"fixture binary bytes"), ("data/inner.pkg", b"not a release file")];
-        let bytes = crate::pkg::build::package(&crate::pkg::build::Spec { files: &files, ..Default::default() });
+        let bytes = crate::emulator::kytyps5::pkg::build::package(&crate::emulator::kytyps5::pkg::build::Spec { files: &files, ..Default::default() });
         fs::write(req.source.join("PPSA12345.pkg"), &bytes).unwrap();
         let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
         assert_eq!(fs::read(p.join("data/inner.pkg")).unwrap(), b"not a release file");
@@ -2107,7 +2107,7 @@ mod tests {
     fn debug_pkg_release_installs_game_and_keeps_package() {
         for entropy in [false, true] {
             let (_t, req) = fixture();
-            let bytes = crate::pkg::build::package(&crate::pkg::build::Spec { files: &pkg_files(), entropy, ..Default::default() });
+            let bytes = crate::emulator::kytyps5::pkg::build::package(&crate::emulator::kytyps5::pkg::build::Spec { files: &pkg_files(), entropy, ..Default::default() });
             let path = req.source.join("PPSA12345.pkg");
             fs::write(&path, &bytes).unwrap();
             let seen = Mutex::new(Vec::new());
@@ -2125,7 +2125,7 @@ mod tests {
 
     #[test]
     fn pkg_release_picks_the_base_game_and_refuses_ambiguity() {
-        let build = |files: &[(&str, &[u8])]| crate::pkg::build::package(&crate::pkg::build::Spec { files, ..Default::default() });
+        let build = |files: &[(&str, &[u8])]| crate::emulator::kytyps5::pkg::build::package(&crate::emulator::kytyps5::pkg::build::Spec { files, ..Default::default() });
         let (_t, req) = fixture();
         // The base game sits at the top; a backport overlay beside a DLC pack sits in sub-folders.
         fs::write(req.source.join("game.pkg"), build(&[("eboot.bin", b"base game"), ("data", b"d")])).unwrap();
@@ -2155,11 +2155,11 @@ mod tests {
     #[test]
     fn retail_and_damaged_pkg_are_refused_before_anything_is_written() {
         let (_t, req) = fixture();
-        let retail = crate::pkg::build::package(&crate::pkg::build::Spec { files: &pkg_files(), retail: true, ..Default::default() });
+        let retail = crate::emulator::kytyps5::pkg::build::package(&crate::emulator::kytyps5::pkg::build::Spec { files: &pkg_files(), retail: true, ..Default::default() });
         fs::write(req.source.join("game.pkg"), &retail).unwrap();
         assert!(format!("{:#}", run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap_err()).contains("retail"));
         unpublished(&req);
-        let good = crate::pkg::build::package(&crate::pkg::build::Spec { files: &pkg_files(), ..Default::default() });
+        let good = crate::emulator::kytyps5::pkg::build::package(&crate::emulator::kytyps5::pkg::build::Spec { files: &pkg_files(), ..Default::default() });
         fs::write(req.source.join("game.pkg"), &good[..good.len() - 40]).unwrap();
         assert!(format!("{:#}", run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap_err()).contains("download"));
         unpublished(&req);
@@ -2168,7 +2168,7 @@ mod tests {
     #[test]
     fn a_broken_base_package_never_lets_the_overlay_install() {
         let (_t, req) = fixture();
-        let build = |files: &[(&str, &[u8])]| crate::pkg::build::package(&crate::pkg::build::Spec { files, ..Default::default() });
+        let build = |files: &[(&str, &[u8])]| crate::emulator::kytyps5::pkg::build::package(&crate::emulator::kytyps5::pkg::build::Spec { files, ..Default::default() });
         let base = build(&[("eboot.bin", b"base game")]);
         fs::write(req.source.join("game.pkg"), &base[..base.len() - 40]).unwrap();
         fs::create_dir(req.source.join("Backport")).unwrap();
@@ -2180,7 +2180,7 @@ mod tests {
     #[test]
     fn cancelling_a_pkg_install_cleans_up_and_keeps_the_package() {
         let (_t, req) = fixture();
-        let bytes = crate::pkg::build::package(&crate::pkg::build::Spec { files: &pkg_files(), ..Default::default() });
+        let bytes = crate::emulator::kytyps5::pkg::build::package(&crate::emulator::kytyps5::pkg::build::Spec { files: &pkg_files(), ..Default::default() });
         fs::write(req.source.join("game.pkg"), &bytes).unwrap();
         let cancel = AtomicBool::new(false);
         let err = run(&req, &cancel, &|s, d, _| { if s == State::Extracting && d > 0 { cancel.store(true, Ordering::Release); } }).unwrap_err();

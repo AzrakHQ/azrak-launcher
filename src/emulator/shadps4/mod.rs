@@ -1,4 +1,8 @@
-//! shadPS4, the PS4 emulator. The install, update and version logic is in `crate::shad`.
+//! shadPS4, the PS4 emulator. The install, update and version logic is in `crate::emulator::shadps4::install`.
+
+pub mod install;
+pub mod pkg;
+mod pkg_data;
 
 use super::{Controls, Emulator, ManagedStore, Release};
 use crate::config::Config;
@@ -34,23 +38,23 @@ impl Emulator for ShadPs4 {
     }
 
     fn store(&self) -> ManagedStore {
-        crate::shad::store()
+        install::store()
     }
 
     fn binary(&self) -> PathBuf {
-        crate::shad::emulator()
+        install::emulator()
     }
 
     fn latest_release(&self) -> Result<Release, String> {
-        crate::shad::latest_release()
+        install::latest_release()
     }
 
     fn install(&self, rel: &Release, progress: &dyn Fn(String, f32)) -> Result<(), String> {
-        crate::shad::install(rel, progress)
+        install::install(rel, progress)
     }
 
     fn pretty(&self, tag: &str) -> String {
-        crate::shad::pretty(tag)
+        install::pretty(tag)
     }
 
     fn version_for(&self, cfg: &Config) -> String {

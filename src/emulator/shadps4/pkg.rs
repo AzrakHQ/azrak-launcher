@@ -19,7 +19,7 @@ use rsa::{BigUint, Pkcs1v15Encrypt, RsaPrivateKey};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs::File, io::Read, os::unix::fs::FileExt};
 
-use crate::pkg4_data as data;
+use super::pkg_data as data;
 
 /// First four bytes of a PS4 package ("CNT").
 const CNT_MAGIC: &[u8; 4] = b"\x7fCNT";
