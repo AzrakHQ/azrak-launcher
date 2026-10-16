@@ -1,7 +1,10 @@
 //! shadPS4, the PS4 emulator. The install, update and version logic is in `crate::emulator::shadps4::install`.
 
+pub mod compat;
 pub mod install;
+mod package;
 pub mod pkg;
+mod requirements;
 mod pkg_data;
 
 use super::{Controls, Emulator, ManagedStore, Release};
@@ -61,8 +64,20 @@ impl Emulator for ShadPs4 {
         if self.is_own(cfg) { "own build".into() } else { self.pretty(&self.store().load_state().installed) }
     }
 
-    fn compat_page(&self) -> Option<&'static str> {
-        Some(crate::compat::SHAD_LIST_PAGE)
+    fn install_packages(&self, job: &crate::installer::PackageJob<'_>) -> Option<anyhow::Result<()>> {
+        Some(package::install_pkgs(job))
+    }
+
+    fn install_note(&self) -> &'static str {
+        "PS4 fake packages (fPKG) are unpacked for shadPS4, with their update and DLC."
+    }
+
+    fn pc_requirements(&self) -> Option<crate::pc::Requirements> {
+        Some(requirements::requirements())
+    }
+
+    fn compat(&self) -> Option<crate::compat::Source> {
+        Some(compat::SOURCE)
     }
 
     fn report_note(&self) -> &'static str {

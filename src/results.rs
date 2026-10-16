@@ -14,7 +14,9 @@ pub struct MyResult {
     /// Same spelling as the community list: "InGame", "MainMenu", "Logo", "DoesntBoot".
     pub status: String,
     /// The KytyPS5 build it was played on.
-    pub kyty: String,
+    /// The emulator build it was rated on. Saved as "kyty" (the name older versions wrote).
+    #[serde(rename = "kyty", alias = "emulator_version")]
+    pub emulator_version: String,
     pub rated: f64,
     /// When its report was opened for sharing; 0 = not yet.
     pub shared: f64,
@@ -79,20 +81,20 @@ impl Results {
         }
     }
 
-    pub fn rate(&mut self, title_id: &str, name: &str, status: Status, kyty: &str, now: f64, log: &str) {
+    pub fn rate(&mut self, title_id: &str, name: &str, status: Status, emulator_version: &str, now: f64, log: &str) {
         self.skipped.remove(title_id);
-        self.games.insert(title_id.to_string(), MyResult { name: name.into(), status: status.key().into(), kyty: kyty.into(), rated: now, shared: 0.0, log: log.into() });
+        self.games.insert(title_id.to_string(), MyResult { name: name.into(), status: status.key().into(), emulator_version: emulator_version.into(), rated: now, shared: 0.0, log: log.into() });
     }
 
-    pub fn skip(&mut self, title_id: &str, kyty: &str) {
-        self.skipped.insert(title_id.to_string(), kyty.to_string());
+    pub fn skip(&mut self, title_id: &str, emulator_version: &str) {
+        self.skipped.insert(title_id.to_string(), emulator_version.to_string());
     }
 
     /// Ask for a rating after playing, unless this game was rated or skipped on this build.
-    pub fn should_ask(&self, title_id: &str, kyty: &str) -> bool {
+    pub fn should_ask(&self, title_id: &str, emulator_version: &str) -> bool {
         !title_id.is_empty()
-            && self.games.get(title_id).is_none_or(|r| !kyty.is_empty() && r.kyty != kyty)
-            && self.skipped.get(title_id).is_none_or(|k| k != kyty)
+            && self.games.get(title_id).is_none_or(|r| !emulator_version.is_empty() && r.emulator_version != emulator_version)
+            && self.skipped.get(title_id).is_none_or(|k| k != emulator_version)
     }
 
     pub fn unshared(&self) -> Vec<(&String, &MyResult)> {
@@ -110,7 +112,7 @@ mod tests {
         assert!(r.should_ask("PPSA1", "build-1"));
         r.skip("PPSA1", "build-1");
         assert!(!r.should_ask("PPSA1", "build-1"));
-        assert!(r.should_ask("PPSA1", "build-2"), "a new KytyPS5 build asks again");
+        assert!(r.should_ask("PPSA1", "build-2"), "a new emulator build asks again");
         r.rate("PPSA1", "Game", Status::InGame, "build-2", 1.0, "");
         assert!(!r.should_ask("PPSA1", "build-2"));
         assert_eq!(r.unshared().len(), 1);

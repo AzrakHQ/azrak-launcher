@@ -182,13 +182,29 @@ pub trait Emulator: Sync + Send {
         cfg.emulator_paths.insert(self.id().to_string(), path);
     }
 
-    /// The community compatibility list's page, opened from a game's menu.
-    fn compat_page(&self) -> Option<&'static str> {
+    /// What it needs from a PC (see `crate::pc::Requirements`); `None` when the launcher can't tell.
+    fn pc_requirements(&self) -> Option<crate::pc::Requirements> {
+        None
+    }
+
+    /// Its community compatibility list and report form (see `crate::compat::Source`).
+    fn compat(&self) -> Option<crate::compat::Source> {
         None
     }
 
     /// A reminder shown when the player's ratings for this emulator are opened for sharing.
     fn report_note(&self) -> &'static str {
+        ""
+    }
+
+    /// Unpack the game packages (`.pkg`) the installer found in a release, if this emulator's
+    /// platform ships them. `None`: not handled here.
+    fn install_packages(&self, _job: &crate::installer::PackageJob<'_>) -> Option<anyhow::Result<()>> {
+        None
+    }
+
+    /// What the installer adds to its note about this emulator's releases.
+    fn install_note(&self) -> &'static str {
         ""
     }
 

@@ -1133,14 +1133,14 @@ impl App {
         }.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
         let probe = self.emulator_probe(l);
         std::thread::spawn(move || {
-            let kyty = probe.version();
+            let emulator_version = probe.version();
             post(move |app| {
                 let Some(status) = status else {
-                    app.my_results.skip(&tid, &kyty);
+                    app.my_results.skip(&tid, &emulator_version);
                     app.my_results.save();
                     return;
                 };
-                app.my_results.rate(&tid, &name, status, &kyty, util::now_secs(), &log);
+                app.my_results.rate(&tid, &name, status, &emulator_version, util::now_secs(), &log);
                 app.my_results.save();
                 app.compat = crate::compat::with_mine(std::mem::take(&mut app.compat), &app.my_results);
                 app.build_genres();
@@ -1166,10 +1166,10 @@ impl App {
         let probe = self.emulator_probe(l);
         let id = game_id.to_string();
         std::thread::spawn(move || {
-            let kyty = probe.version();
+            let emulator_version = probe.version();
             post(move |app| {
                 let free = matches!(app.overlay, Overlay::None | Overlay::Hub) && app.live.is_empty() && !app.boot.active;
-                if free && app.my_results.should_ask(&tid, &kyty) {
+                if free && app.my_results.should_ask(&tid, &emulator_version) {
                     if let Some(l) = app.locals.iter().position(|g| g.l.id == id) {
                         app.open_rating(l, true);
                     }
@@ -1202,17 +1202,17 @@ impl App {
             if let (Some(status), Some(saved)) = (r.status(), self.my_results.games.get_mut(tid)) {
                 saved.shared = now;
                 let game_version = self.locals.iter().find(|g| &g.l.title_id == tid).map(|g| g.l.version.clone()).unwrap_or_default();
-                reports.push((r.name.clone(), tid.clone(), r.kyty.clone(), game_version, status, log));
+                reports.push((r.name.clone(), tid.clone(), r.emulator_version.clone(), game_version, status, log));
             }
         }
         self.my_results.save();
         // Building the links reads system details: do it, and open the tabs, off the UI thread.
         std::thread::spawn(move || {
-            for (i, (name, tid, kyty, game_version, status, log)) in reports.iter().enumerate() {
+            for (i, (name, tid, emulator_version, game_version, status, log)) in reports.iter().enumerate() {
                 if i > 0 {
                     std::thread::sleep(Duration::from_millis(800));
                 }
-                open_url(&crate::compat::report_url_for(name, tid, kyty, game_version, *status, log));
+                open_url(&crate::compat::report_url_for(name, tid, emulator_version, game_version, *status, log));
             }
         });
         if std::fs::read_dir(&folder).is_ok_and(|mut d| d.next().is_some()) {

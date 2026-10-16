@@ -1,7 +1,9 @@
 //! KytyPS5, the PS5 emulator. The install, update and version logic is in `crate::emulator::kytyps5::install`.
 
+pub mod compat;
 pub mod install;
 pub mod pkg;
+mod requirements;
 
 use super::{Controls, Emulator, ManagedStore, Release, Setting, SettingKind};
 use crate::config::{Config, VIDEO_OUT_MODES};
@@ -113,8 +115,16 @@ impl Emulator for KytyPs5 {
         format!("Emulator not found or not executable:\n{}", self.path(cfg).display())
     }
 
-    fn compat_page(&self) -> Option<&'static str> {
-        Some(crate::compat::LIST_PAGE)
+    fn install_note(&self) -> &'static str {
+        "The launcher unpacks PS5 debug packages. It can't unpack retail ones: choose a release that isn't a retail package."
+    }
+
+    fn pc_requirements(&self) -> Option<crate::pc::Requirements> {
+        Some(requirements::requirements())
+    }
+
+    fn compat(&self) -> Option<crate::compat::Source> {
+        Some(compat::SOURCE)
     }
 
     fn controls(&self) -> Option<Controls> {

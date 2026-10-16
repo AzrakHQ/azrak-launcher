@@ -24,7 +24,9 @@ KytyPS5 and shadPS4 are ordinary plugins. Neither has code the other emulators c
 | Settings in `config.json`, no new fields | `Config::emulator_paths`, `emulator_auto_update` and `emulator_settings`, by id |
 | **Your own options** in Settings (toggle, choice, text) | `settings()`, a list of `Setting`; rows, saving and editing are generated |
 | Keyboard layout on the **Controls** sheet and while a game starts | `controls()` |
-| "X compatibility list" in the game menu | `compat_page()` |
+| Community compatibility list, ratings and report form | `compat()`, a `compat::Source` (URL, parser, report builder) |
+| "Will it run on this PC?" verdicts and the graphics check | `pc_requirements()` |
+| Unpacking `.pkg` game packages in a release | `install_packages()`, `install_note()` |
 | Welcome-screen summary, console colours | the registry and `Platform::style()` |
 
 ## Steps
@@ -86,7 +88,9 @@ path through `current/` so it stays the same across updates.
 | `unavailable_message(cfg)` | "X isn't installed yet" / "X not found or not executable" | you want other wording |
 | `settings()` | none | the emulator has options (resolution, extra arguments…). Values are stored as text under `emulator_settings["<id>.<key>"]`; override `setting`/`set_setting` only to keep older fields |
 | `controls()` | none | there is a keyboard layout to show |
-| `compat_page()` / `report_note()` | none | there is a community compatibility list / a rule for reports |
+| `compat()` / `report_note()` | none | there is a community compatibility list and report form / a rule for reports |
+| `pc_requirements()` | none | you can say what a PC needs (AVX2, Vulkan extensions and features, memory, cores) |
+| `install_packages()` / `install_note()` | none | the platform ships games as packages the installer should unpack |
 | `path_setting` / `set_path_setting` / `auto_update` / `set_auto_update` | maps in `Config`, by id | the settings predate the maps (only KytyPS5 and shadPS4) |
 
 ## A new platform (PS3, Switch, ...)
@@ -110,9 +114,14 @@ to the collector, and that every platform but PC has an emulator.
 
 ## What is still written by hand
 
-- **Compatibility data and report forms** (fetching and parsing each list, building each report URL)
-  are per emulator in [src/compat.rs](../src/compat.rs).
-- **Installing a game's updates and DLC** into an emulator's folders (`installer.rs` knows
-  shadPS4's `addcont`), and the install note text in `install_ui.rs`.
-- **PC requirement checks** per console in [src/pc.rs](../src/pc.rs).
+Nothing is written per emulator outside `src/emulator/`, except:
+
+- **Where the PS5 and PS4 games on disk are recognised** (`param.json` vs `param.sfo`, title-ID
+  prefixes) is the platform's: [src/library.rs](../src/library.rs), [src/platform.rs](../src/platform.rs).
+- **PS5 debug packages** are read by `installer.rs` itself through
+  [src/emulator/kytyps5/pkg.rs](../src/emulator/kytyps5/pkg.rs): they become the same plan as an
+  archive, so the generic extraction is shared. A new package format that works the same way needs
+  the same small hook; one that unpacks on its own uses `install_packages()` like shadPS4.
+- **A PS4 update placed beside a game as `<game>-patch`** (`installer.rs::place_update`) is
+  shadPS4's layout, used for folder releases too.
 - **A new platform's colours** are `Platform::style()`; its catalog is the checklist above.

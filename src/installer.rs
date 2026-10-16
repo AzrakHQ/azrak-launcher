@@ -21,7 +21,7 @@ const MAX_ENTRIES: usize = 100_000;
 const MAX_PACKAGE_ENTRIES: usize = 1_000_000;
 const MAX_PATH: usize = 4096;
 const MAX_DEPTH: usize = 128;
-const MAX_PARAM: u64 = 1024 * 1024;
+pub(crate) const MAX_PARAM: u64 = 1024 * 1024;
 const MAX_TOTAL: u64 = 2 * 1024 * 1024 * 1024 * 1024;
 const MAX_FILE: u64 = 1024 * 1024 * 1024 * 1024;
 static UNIQUE: AtomicU64 = AtomicU64::new(0);
@@ -201,15 +201,15 @@ fn validate_request(req: &Request) -> Result<()> {
     Ok(())
 }
 
-fn check_cancel(cancel: &AtomicBool) -> Result<()> {
+pub(crate) fn check_cancel(cancel: &AtomicBool) -> Result<()> {
     ensure!(!cancel.load(Ordering::Acquire), "Cancelled; source files retained");
     Ok(())
 }
 
 // Descriptor-relative filesystem primitives; no symlink traversal, even in ancestors.
-struct Dir(File);
+pub(crate) struct Dir(pub(crate) File);
 impl Dir {
-    fn absolute(path: &Path, create: bool) -> Result<Self> {
+    pub(crate) fn absolute(path: &Path, create: bool) -> Result<Self> {
         ensure!(path.is_absolute(), "Absolute path required");
         let root = CString::new("/").unwrap();
         let fd = unsafe { libc::open(root.as_ptr(), libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_RDONLY) };
@@ -224,7 +224,7 @@ impl Dir {
         }
         Ok(dir)
     }
-    fn child(&self, name: &[u8], create: bool) -> Result<Self> {
+    pub(crate) fn child(&self, name: &[u8], create: bool) -> Result<Self> {
         let name = component(name)?;
         if create {
             let r = unsafe { libc::mkdirat(self.0.as_raw_fd(), name.as_ptr(), 0o700) };
@@ -236,13 +236,13 @@ impl Dir {
         ensure!(fd >= 0, "Open directory without following links: {}", std::io::Error::last_os_error());
         Ok(Self(unsafe { File::from_raw_fd(fd) }))
     }
-    fn parent(&self, path: &str, create: bool) -> Result<(Self, CString)> {
+    pub(crate) fn parent(&self, path: &str, create: bool) -> Result<(Self, CString)> {
         let mut dir = Self(self.0.try_clone()?);
         let parts: Vec<_> = path.split('/').collect();
         for name in &parts[..parts.len() - 1] { dir = dir.child(name.as_bytes(), create)?; }
         Ok((dir, component(parts.last().unwrap().as_bytes())?))
     }
-    fn read(&self, path: &str) -> Result<File> {
+    pub(crate) fn read(&self, path: &str) -> Result<File> {
         let (parent, name) = self.parent(path, false)?;
         // O_NONBLOCK prevents an attacker-swapped FIFO from blocking before fstat.
         let fd = unsafe { libc::openat(parent.0.as_raw_fd(), name.as_ptr(), libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK) };
@@ -251,7 +251,7 @@ impl Dir {
         regular(&file.metadata()?)?;
         Ok(file)
     }
-    fn new_file(&self, path: &str) -> Result<File> {
+    pub(crate) fn new_file(&self, path: &str) -> Result<File> {
         let (parent, name) = self.parent(path, true)?;
         let fd = unsafe { libc::openat(parent.0.as_raw_fd(), name.as_ptr(), libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC, 0o600) };
         ensure!(fd >= 0, "Create private output {path}: {}", std::io::Error::last_os_error());
@@ -264,7 +264,7 @@ impl Dir {
         ensure!(r == 0, "Create symlink {path}: {}", std::io::Error::last_os_error());
         Ok(())
     }
-    fn names(&self) -> Result<Vec<String>> {
+    pub(crate) fn names(&self) -> Result<Vec<String>> {
         let mut names = Vec::new();
         for entry in crate::hostos::dir_names(self.0.as_raw_fd())? {
             ensure!(names.len() < MAX_ENTRIES, "Too many source entries");
@@ -284,7 +284,7 @@ impl Dir {
     }
 }
 
-fn component(name: &[u8]) -> Result<CString> {
+pub(crate) fn component(name: &[u8]) -> Result<CString> {
     ensure!(!name.is_empty() && name.len() <= 255 && name != b"." && name != b".." && !name.contains(&b'/'), "Unsafe path component");
     Ok(CString::new(name)?)
 }
@@ -292,7 +292,7 @@ fn regular(meta: &Metadata) -> Result<()> {
     ensure!(meta.is_file() && meta.nlink() == 1, "Symlinks, hardlinks and special source files are forbidden");
     Ok(())
 }
-fn bounded_read(mut file: File, max: u64) -> Result<Vec<u8>> {
+pub(crate) fn bounded_read(mut file: File, max: u64) -> Result<Vec<u8>> {
     ensure!(file.metadata()?.len() <= max, "File exceeds size limit ({max} bytes)");
     let mut bytes = Vec::new();
     (&mut file).take(max + 1).read_to_end(&mut bytes)?;
@@ -315,7 +315,7 @@ fn inside_link(path: &str, target: &str) -> Result<()> {
     Ok(())
 }
 
-fn normal_path(raw: &str) -> Result<String> {
+pub(crate) fn normal_path(raw: &str) -> Result<String> {
     ensure!(!raw.is_empty() && raw.len() < MAX_PATH && !raw.chars().any(|c| c.is_control()), "Invalid or overlong archive path");
     let raw = raw.replace('\\', "/");
     ensure!(!raw.starts_with('/') && !raw.contains(':'), "Absolute or drive-qualified archive path is forbidden");
@@ -332,28 +332,32 @@ fn normal_path(raw: &str) -> Result<String> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Entry {
-    path: String, directory: bool, size: u64,
+pub(crate) struct Entry {
+    pub(crate) path: String, pub(crate) directory: bool, pub(crate) size: u64,
     /// A symlink's target (PC games only; always relative and inside the game).
     link: Option<String>,
     /// The archive marks it executable.
     exec: bool,
 }
 impl Entry {
-    fn file(path: String, directory: bool, size: u64) -> Self { Self { path, directory, size, link: None, exec: false } }
+    pub(crate) fn file(path: String, directory: bool, size: u64) -> Self { Self { path, directory, size, link: None, exec: false } }
 }
-struct Plan { entries: Vec<Entry>, paths: BTreeMap<String, bool>, explicit: HashSet<String>, total: u64, limit: usize,
+pub(crate) struct Plan { pub(crate) entries: Vec<Entry>, paths: BTreeMap<String, bool>, pub(crate) explicit: HashSet<String>, pub(crate) total: u64, limit: usize,
     /// A PC archive holds a program (native, Windows or AppImage).
     starts: bool }
 impl Default for Plan {
     fn default() -> Self { Self::limited(MAX_ENTRIES) }
 }
 impl Plan {
+    /// An empty plan that only says how many bytes will be written (for the free-space check).
+    pub(crate) fn of_total(total: u64) -> Self {
+        Self { total, ..Self::default() }
+    }
     /// A plan that accepts up to `limit` entries. A game package lists more files than an archive.
-    fn limited(limit: usize) -> Self {
+    pub(crate) fn limited(limit: usize) -> Self {
         Self { entries: Vec::new(), paths: BTreeMap::new(), explicit: HashSet::new(), total: 0, limit, starts: false }
     }
-    fn add(&mut self, entry: Entry) -> Result<()> {
+    pub(crate) fn add(&mut self, entry: Entry) -> Result<()> {
         let limit = self.limit;
         ensure!(self.entries.len() < limit, "Archive/source exceeds {limit} entries");
         ensure!(entry.size <= MAX_FILE, "File exceeds 1 TiB safety limit");
@@ -379,9 +383,9 @@ impl Plan {
     }
 }
 
-struct Source { dir: Dir, plan: Plan, stamps: BTreeMap<String, Stamp> }
+pub(crate) struct Source { pub(crate) dir: Dir, pub(crate) plan: Plan, pub(crate) stamps: BTreeMap<String, Stamp> }
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Stamp { dev: u64, ino: u64, len: u64, mtime: i64, ns: i64, ctime: i64, cns: i64 }
+pub(crate) struct Stamp { dev: u64, ino: u64, len: u64, mtime: i64, ns: i64, ctime: i64, cns: i64 }
 impl Stamp {
     fn of(m: &Metadata) -> Self {
         Self { dev: m.dev(), ino: m.ino(), len: m.len(), mtime: m.mtime(), ns: m.mtime_nsec(), ctime: m.ctime(), cns: m.ctime_nsec() }
@@ -398,7 +402,7 @@ impl Source {
         source.walk(&root, "", cancel)?;
         Ok(source)
     }
-    fn walk(&mut self, dir: &Dir, prefix: &str, cancel: &AtomicBool) -> Result<()> {
+    pub(crate) fn walk(&mut self, dir: &Dir, prefix: &str, cancel: &AtomicBool) -> Result<()> {
         for name in dir.names()? {
             check_cancel(cancel)?;
             if prefix.is_empty() && name == OWNED { continue; }
@@ -423,7 +427,7 @@ impl Source {
         }
         Ok(())
     }
-    fn file(&self, path: &str) -> Result<File> {
+    pub(crate) fn file(&self, path: &str) -> Result<File> {
         let file = self.dir.read(path)?;
         ensure!(self.stamps.get(path) == Some(&Stamp::of(&file.metadata()?)), "Source changed after inspection: {path}; wait until download is complete");
         Ok(file)
@@ -607,9 +611,9 @@ fn inspect_archive_with(api: &Api, source: &Source, paths: &[String], links: boo
     Ok(plan)
 }
 
-struct Stage { destination: Dir, dir: Dir, name: String, token: String }
+pub(crate) struct Stage { pub(crate) destination: Dir, dir: Dir, name: String, token: String }
 impl Stage {
-    fn new(destination: Dir, key: &str) -> Result<Self> {
+    pub(crate) fn new(destination: Dir, key: &str) -> Result<Self> {
         let n = UNIQUE.fetch_add(1, Ordering::Relaxed);
         let name = format!(".ps5-install-{}-{}-{n}", &key[..12], std::process::id());
         let cname = component(name.as_bytes())?;
@@ -622,8 +626,8 @@ impl Stage {
         stage.dir.child(b"payload", true)?;
         Ok(stage)
     }
-    fn payload(&self) -> Result<Dir> { self.dir.child(b"payload", false) }
-    fn publish(&self, root: &str, leaf: &str) -> Result<()> {
+    pub(crate) fn payload(&self) -> Result<Dir> { self.dir.child(b"payload", false) }
+    pub(crate) fn publish(&self, root: &str, leaf: &str) -> Result<()> {
         let payload = self.payload()?;
         let (parent, name) = if root.is_empty() {
             (Dir(self.dir.0.try_clone()?), component(b"payload")?)
@@ -669,7 +673,7 @@ fn remove_contents(dir: &Dir, depth: usize) -> Result<()> {
     Ok(())
 }
 
-fn disk_check(destination: &Dir, plan: &Plan) -> Result<()> {
+pub(crate) fn disk_check(destination: &Dir, plan: &Plan) -> Result<()> {
     let mut v = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     let r = unsafe { libc::fstatvfs(destination.0.as_raw_fd(), v.as_mut_ptr()) };
     ensure!(r == 0, "Cannot check destination free space: {}", std::io::Error::last_os_error());
@@ -681,7 +685,7 @@ fn disk_check(destination: &Dir, plan: &Plan) -> Result<()> {
     Ok(())
 }
 
-type Progress<'a> = &'a dyn Fn(State, u64, u64);
+pub(crate) type Progress<'a> = &'a dyn Fn(State, u64, u64);
 fn copy_folder(source: &Source, output: &Dir, cancel: &AtomicBool, progress: Progress<'_>) -> Result<()> {
     copy_entries(source, source.plan.entries.iter(), output, 0, source.plan.total, cancel, progress)
 }
@@ -831,6 +835,50 @@ fn holds_extracted_game(source: &Source) -> bool {
     })
 }
 
+/// What an emulator gets when the installer finds `.pkg` files it doesn't unpack itself.
+pub struct PackageJob<'a> {
+    pub req: &'a Request,
+    pub source: &'a Source,
+    pub pkgs: &'a [String],
+    pub cancel: &'a AtomicBool,
+    pub progress: Progress<'a>,
+    pub commit: &'a dyn Fn(&Stage, &str, &str, &str) -> Result<()>,
+}
+
+/// The PS4 update (param.sfo category `gp`) for `tid` shipped with a game, if there is exactly one.
+pub(crate) fn update_root(output: &Dir, plan: &Plan, tid: &str) -> Option<String> {
+    let roots: Vec<String> = plan.entries.iter().filter(|e| !e.directory).filter_map(|e| {
+        let root = e.path.strip_suffix("/sce_sys/param.sfo")?;
+        let sfo = output.read(&e.path).ok().and_then(|f| bounded_read(f, MAX_PARAM).ok()).and_then(|b| crate::sfo::parse(&b))?;
+        let is_update = sfo.get("CATEGORY").is_some_and(|c| c.text().starts_with("gp"));
+        let same_game = sfo.get("TITLE_ID").is_some_and(|t| t.text() == tid);
+        (is_update && same_game).then(|| root.to_string())
+    }).collect();
+    if roots.len() > 1 { crate::log!("{} updates for {tid} in one release; none installed", roots.len()); }
+    (roots.len() == 1).then(|| roots[0].clone())
+}
+
+/// Put a game's update next to it as `<leaf>-patch`, where shadPS4 looks for updates. Runs after
+/// the game is published: a failure leaves the game playable without its update.
+pub(crate) fn place_update(stage: &Stage, destination: &Path, game_root: &str, update: &str, leaf: &str) {
+    let patch = format!("{leaf}-patch");
+    let inside = if game_root.is_empty() { Some(update) } else { update.strip_prefix(&format!("{game_root}/")) };
+    let result = match inside {
+        // Shipped inside the game's folder, so it moved with it: move it out beside the game.
+        Some(rel) => (|| -> Result<()> {
+            let from = std::ffi::CString::new(destination.join(leaf).join(rel).into_os_string().into_encoded_bytes())?;
+            let to = std::ffi::CString::new(destination.join(&patch).into_os_string().into_encoded_bytes())?;
+            crate::hostos::rename_noreplace(libc::AT_FDCWD, &from, libc::AT_FDCWD, &to)?;
+            Ok(())
+        })(),
+        None => stage.publish(update, &patch),
+    };
+    match result {
+        Ok(()) => crate::log!("Installed the update as {patch}"),
+        Err(e) => crate::log!("Installed {leaf}, but its update could not be placed: {e:#}"),
+    }
+}
+
 /// A game package opened and listed, ready to install.
 struct Chosen { package: crate::emulator::kytyps5::pkg::Package, nodes: Vec<crate::emulator::kytyps5::pkg::Node>, plan: Plan }
 
@@ -892,7 +940,7 @@ fn extract_package(package: &mut crate::emulator::kytyps5::pkg::Package, nodes: 
 
 /// Write one file of `size` bytes from `copy` into a new file in `output`, counting toward
 /// `(done, total)`. The file must be exactly `size` bytes.
-fn write_file(output: &Dir, path: &str, size: u64, (done, total): (&mut u64, u64), cancel: &AtomicBool, progress: Progress<'_>,
+pub(crate) fn write_file(output: &Dir, path: &str, size: u64, (done, total): (&mut u64, u64), cancel: &AtomicBool, progress: Progress<'_>,
     copy: &mut dyn FnMut(&mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()>) -> Result<()> {
     let mut target = output.new_file(path)?;
     let mut count = 0u64;
@@ -910,7 +958,7 @@ fn write_file(output: &Dir, path: &str, size: u64, (done, total): (&mut u64, u64
     Ok(())
 }
 
-fn game_root(output: &Dir, plan: &Plan, expected_ids: &[String], cancel: &AtomicBool) -> Result<(String, String)> {
+pub(crate) fn game_root(output: &Dir, plan: &Plan, expected_ids: &[String], cancel: &AtomicBool) -> Result<(String, String)> {
     let mut games = Vec::new();
     let mut failures = Vec::new();
     for entry in &plan.entries {
@@ -988,7 +1036,10 @@ fn install(req: &Request, cancel: &AtomicBool, progress: Progress<'_>, commit: &
         }
     }
     if !pkgs.is_empty() {
-        return install_pkgs(req, &source, &pkgs, cancel, progress, commit);
+        let job = PackageJob { req, source: &source, pkgs: &pkgs, cancel, progress, commit };
+        if let Some(result) = crate::emulator::all().iter().find_map(|e| e.install_packages(&job)) {
+            return result;
+        }
     }
     check_cancel(cancel)?;
     let destination = Dir::absolute(&req.destination, true).context("Open explicit installation destination")?;
@@ -1202,153 +1253,6 @@ fn pc_files(dir: &Dir, prefix: &str, out: &mut Vec<(String, crate::pcgame::Probe
     Ok(())
 }
 
-/// The PS4 update (param.sfo category `gp`) for `tid` shipped with a game, if there is exactly one.
-fn update_root(output: &Dir, plan: &Plan, tid: &str) -> Option<String> {
-    let roots: Vec<String> = plan.entries.iter().filter(|e| !e.directory).filter_map(|e| {
-        let root = e.path.strip_suffix("/sce_sys/param.sfo")?;
-        let sfo = output.read(&e.path).ok().and_then(|f| bounded_read(f, MAX_PARAM).ok()).and_then(|b| crate::sfo::parse(&b))?;
-        let is_update = sfo.get("CATEGORY").is_some_and(|c| c.text().starts_with("gp"));
-        let same_game = sfo.get("TITLE_ID").is_some_and(|t| t.text() == tid);
-        (is_update && same_game).then(|| root.to_string())
-    }).collect();
-    if roots.len() > 1 { crate::log!("{} updates for {tid} in one release; none installed", roots.len()); }
-    (roots.len() == 1).then(|| roots[0].clone())
-}
-
-/// Put a game's update next to it as `<leaf>-patch`, where shadPS4 looks for updates. Runs after
-/// the game is published: a failure leaves the game playable without its update.
-fn place_update(stage: &Stage, destination: &Path, game_root: &str, update: &str, leaf: &str) {
-    let patch = format!("{leaf}-patch");
-    let inside = if game_root.is_empty() { Some(update) } else { update.strip_prefix(&format!("{game_root}/")) };
-    let result = match inside {
-        // Shipped inside the game's folder, so it moved with it: move it out beside the game.
-        Some(rel) => (|| -> Result<()> {
-            let from = std::ffi::CString::new(destination.join(leaf).join(rel).into_os_string().into_encoded_bytes())?;
-            let to = std::ffi::CString::new(destination.join(&patch).into_os_string().into_encoded_bytes())?;
-            crate::hostos::rename_noreplace(libc::AT_FDCWD, &from, libc::AT_FDCWD, &to)?;
-            Ok(())
-        })(),
-        None => stage.publish(update, &patch),
-    };
-    match result {
-        Ok(()) => crate::log!("Installed the update as {patch}"),
-        Err(e) => crate::log!("Installed {leaf}, but its update could not be placed: {e:#}"),
-    }
-}
-
-/// A PS4 release shipped as PKG packages: the game, its updates and DLC. The game and its
-/// update are extracted into the stage and validated like any folder release; the update is
-/// published next to the game as `<game>-patch`, where shadPS4 finds it. DLC goes to shadPS4's
-/// add-on folder.
-fn install_pkgs(req: &Request, source: &Source, pkgs: &[String], cancel: &AtomicBool, progress: Progress<'_>, commit: &dyn Fn(&Stage, &str, &str, &str) -> Result<()>) -> Result<()> {
-    use crate::emulator::shadps4::pkg::{Kind, Package};
-    let check = || check_cancel(cancel);
-    let mut packages = Vec::new();
-    for path in pkgs {
-        check_cancel(cancel)?;
-        // Opened from the inspected source: complete and unchanged since inspection.
-        let file = source.file(path)?;
-        ensure!(crate::emulator::shadps4::pkg::is_package(&file), "{path}: not a PS4 PKG package");
-        let mut package = Package::open(file, &check).map_err(|e| anyhow::anyhow!("{path}: {e:#}"))?;
-        let nodes = package.list(&check).map_err(|e| anyhow::anyhow!("{path}: {e:#}"))?;
-        packages.push((path.clone(), package, nodes));
-    }
-    let count = |kind: Kind| packages.iter().filter(|(_, p, _)| p.kind() == kind).count();
-    let (games, updates) = (count(Kind::Game), count(Kind::Update));
-    ensure!(games > 0, "This download has no game PKG, only {}; install the game itself first",
-        if updates == 0 { "add-ons" } else { "an update" });
-    ensure!(games == 1, "This download has {games} game PKGs; install one game at a time");
-    check_cancel(cancel)?;
-    let destination = Dir::absolute(&req.destination, true).context("Open explicit installation destination")?;
-    let actual_dest = crate::hostos::fd_real_path(destination.0.as_raw_fd())?;
-    let actual_source = crate::hostos::fd_real_path(source.dir.0.as_raw_fd())?;
-    ensure!(!actual_dest.starts_with(&actual_source) && !actual_source.starts_with(&actual_dest), "Source and destination trees must be separate");
-    let bytes = |dlc: bool| packages.iter().filter(|(_, p, _)| (p.kind() == Kind::Dlc) == dlc).flat_map(|(_, _, n)| n)
-        .try_fold(0u64, |sum, n| sum.checked_add(n.size)).context("Package sizes overflow");
-    let (game_bytes, dlc_bytes) = (bytes(false)?, bytes(true)?);
-    let total = game_bytes.checked_add(dlc_bytes).context("Package sizes overflow")?;
-    disk_check(&destination, &Plan { total: game_bytes, ..Plan::default() })?;
-    let stage = Stage::new(destination, &req.key)?;
-    let output = stage.payload()?;
-    // DLC is staged inside shadPS4's add-on folder (same disk) and only moved into place once the
-    // game is installed; the stage, and anything left in it, is removed on any failure.
-    let dlc_stage = if count(Kind::Dlc) == 0 { None } else {
-        let addons = crate::emulator::shadps4::install::addons_dir();
-        std::fs::create_dir_all(&addons).context("Create shadPS4 add-on folder")?;
-        let dir = Dir::absolute(&addons, false).context("Open shadPS4 add-on folder")?;
-        disk_check(&dir, &Plan { total: dlc_bytes, ..Plan::default() })?;
-        Some(Stage::new(dir, &req.key)?)
-    };
-    let dlc_output = match &dlc_stage { Some(s) => Some(s.payload()?), None => None };
-    progress(State::Extracting, 0, total);
-    let mut done = 0u64;
-    // Packages sharing a folder (two updates) were written in release order, the later one
-    // replacing shared files. Same result without replacing: write in reverse, skip what's there.
-    let mut written = HashSet::new();
-    for (path, package, nodes) in packages.iter_mut().rev() {
-        check_cancel(cancel)?;
-        let dlc = package.kind() == Kind::Dlc;
-        let into = if dlc { dlc_output.as_ref().unwrap() } else { &output };
-        let root = package.root().map_err(|e| anyhow::anyhow!("{path}: {e:#}"))?;
-        for node in nodes.iter() {
-            check_cancel(cancel)?;
-            let full = format!("{root}/{}", node.path);
-            ensure!(normal_path(&full)? == full, "Unsafe path in {path}: {}", node.path);
-            if node.directory { into.parent(&format!("{full}/_"), true)?; continue; }
-            if !written.insert((dlc, full.clone())) { done += node.size; continue; }
-            write_file(into, &full, node.size, (&mut done, total), cancel, progress, &mut |sink| package.copy(node, sink))
-                .map_err(|e| anyhow::anyhow!("{path}: {e:#}"))?;
-        }
-        source.file(path).context("PKG changed while installing")?;
-    }
-    check_cancel(cancel)?;
-    progress(State::Validating, total, total);
-    // Validate exactly what was written (no links or special files), then find the game.
-    let walk = |dir: &Dir| -> Result<Plan> {
-        let mut tree = Source { dir: Dir(dir.0.try_clone()?), plan: Plan::default(), stamps: BTreeMap::new() };
-        tree.walk(&Dir(dir.0.try_clone()?), "", cancel)?;
-        Ok(tree.plan)
-    };
-    let plan = walk(&output)?;
-    let (root, tid) = game_root(&output, &plan, &req.expected_ids, cancel)?;
-    let update = update_root(&output, &plan, &tid);
-    if updates > 0 && update.is_none() { crate::log!("The update PKG isn't for {tid}: not installed"); }
-    let dlc_items: Vec<String> = match &dlc_stage {
-        Some(s) => {
-            let payload = s.payload()?;
-            walk(&payload)?;
-            match payload.child(tid.as_bytes(), false) {
-                Ok(dir) => dir.names()?,
-                Err(_) => { crate::log!("The DLC PKGs aren't for {tid}: not installed"); Vec::new() }
-            }
-        }
-        None => Vec::new(),
-    };
-    let leaf = format!("{tid}-{}", &req.key[..12]);
-    check_cancel(cancel)?;
-    commit(&stage, &root, &leaf, &tid)?;
-    if let Some(update) = update { place_update(&stage, &req.destination, &root, &update, &leaf); }
-    if let Some(s) = &dlc_stage { place_dlc(s, &tid, &dlc_items); }
-    Ok(())
-}
-
-/// Move staged DLC (`<stage>/payload/<tid>/<label>`) to `<add-on folder>/<tid>/<label>`. Add-ons
-/// already there are never replaced.
-fn place_dlc(stage: &Stage, tid: &str, items: &[String]) {
-    let result = (|| -> Result<()> {
-        let from = stage.payload()?.child(tid.as_bytes(), false)?;
-        let to = stage.destination.child(tid.as_bytes(), true)?;
-        for item in items {
-            let name = component(item.as_bytes())?;
-            match crate::hostos::rename_noreplace(from.0.as_raw_fd(), &name, to.0.as_raw_fd(), &name) {
-                Ok(()) => crate::log!("Installed DLC {tid}/{item}"),
-                Err(e) => crate::log!("DLC {tid}/{item} not installed (an add-on with that name is kept): {e}"),
-            }
-        }
-        Ok(())
-    })();
-    if let Err(e) = result { crate::log!("DLC for {tid} could not be placed: {e:#}"); }
-}
 #[derive(Serialize, Deserialize)]
 struct Saved { version: u32, jobs: Vec<Record> }
 fn load_records(store: &Path) -> Result<Vec<Record>> {

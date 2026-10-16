@@ -1,15 +1,20 @@
 //! Installation is explicit and separate from downloading. The worker never runs payload code.
 use crate::{app::*, downloads, installer, util};
 
-/// What a download can be installed from: archives on both consoles, PS5 debug packages, and PS4
-/// fake packages (fPKG), which unpack into the game, its update and its DLC for shadPS4.
-fn install_note(platform: Option<crate::platform::Platform>) -> &'static str {
+/// What a download can be installed from: archives and folders for every console, plus whatever
+/// package formats each console's emulator unpacks (`Emulator::install_note`).
+fn install_note(platform: Option<crate::platform::Platform>, cfg: &crate::config::Config) -> String {
     use crate::platform::Platform;
+    const ARCHIVES: &str = "Folders, exFAT images and RAR, ZIP, 7z or TAR archives (these depend on the system's libarchive; password-protected ones aren't supported).";
+    const CHECKS: &str = "Installing checks the game's structure, not that its content is authentic, and never runs the downloaded files.";
     match platform {
-        Some(Platform::Ps4) => "Folders, exFAT images and RAR, ZIP, 7z or TAR archives (these depend on the system's libarchive; password-protected ones aren't supported). PS4 fake packages (fPKG) are unpacked for shadPS4, with their update and DLC. Installing checks the game's structure, not that its content is authentic, and never runs the downloaded files.",
-        Some(Platform::Ps5) => "Folders, exFAT images and RAR, ZIP, 7z or TAR archives (these depend on the system's libarchive; password-protected ones aren't supported). The launcher unpacks PS5 debug packages. It can't unpack retail ones: choose a release that isn't a retail package. Installing checks the game's structure, not that its content is authentic, and never runs the downloaded files.",
-        Some(Platform::Pc) => "Folders, RAR, ZIP, 7z or TAR archives (these depend on the system's libarchive), GOG Linux installers (.sh) and AppImages. Installing unpacks the game and finds how to start it; nothing in it runs until you press Play. Unlike console games, which run inside an emulator, PC games run with your user's access to your files: only install releases you trust.",
-        None => "Folders, exFAT images, RAR, ZIP, 7z or TAR archives, PS5 debug packages, and PS4 fake packages (fPKG). Installing checks the game's structure, not that its content is authentic, and never runs the downloaded files.",
+        Some(Platform::Pc) => "Folders, RAR, ZIP, 7z or TAR archives (these depend on the system's libarchive), GOG Linux installers (.sh) and AppImages. Installing unpacks the game and finds how to start it; nothing in it runs until you press Play. Unlike console games, which run inside an emulator, PC games run with your user's access to your files: only install releases you trust.".into(),
+        Some(p) => [ARCHIVES, crate::emulator::selected(cfg, p).map_or("", |e| e.install_note()), CHECKS]
+            .into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" "),
+        None => {
+            let notes: Vec<&str> = crate::emulator::all().iter().map(|e| e.install_note()).filter(|s| !s.is_empty()).collect();
+            format!("Folders, exFAT images, RAR, ZIP, 7z or TAR archives. {} {CHECKS}", notes.join(" "))
+        }
     }
 }
 
@@ -34,7 +39,7 @@ impl App {
         // A game not in the catalog goes to the PS5 folder, like any game of unknown platform.
         ui.set_download_path(self.cfg.lock().unwrap().install_path(platform.unwrap_or_default()).into());
         ui.set_download_error("".into());
-        ui.set_download_install_note(install_note(platform).into());
+        ui.set_download_install_note(install_note(platform, &self.cfg.lock().unwrap()).into());
         ui.set_download_consent(true);
     }
 

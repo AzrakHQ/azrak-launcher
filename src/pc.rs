@@ -1,10 +1,49 @@
 //! This PC: what the emulators need and whether this computer has it. Reads the processor and
-//! memory from /proc, and the graphics cards from Vulkan (the API both emulators draw with), in
-//! a child process so a broken graphics driver can't take the launcher down.
+//! memory from /proc, and the graphics cards from Vulkan (the API the emulators draw with), in
+//! a child process so a broken graphics driver can't take the launcher down. What each emulator
+//! needs is its own (`Emulator::pc_requirements`); this file only measures.
 
 use crate::platform::Platform;
 use std::path::Path;
 use std::time::Duration;
+
+/// What an emulator needs from this PC (`Emulator::pc_requirements`).
+pub struct Requirements {
+    /// Built for x86-64-v3 (AVX2, BMI2, FMA…) and stops at once without it.
+    pub needs_avx2: bool,
+    /// How the emulator picks its graphics card: `true` only looks at cards that pass `check`,
+    /// preferring a discrete one; `false` sorts every card (Vulkan 1.3, discrete, not software,
+    /// most memory), takes the first and only then checks it.
+    pub considers_only_passing: bool,
+    /// The structs `Caps::feature` can answer for, as (extension, sType). `a|b` accepts either.
+    pub feature_structs: &'static [(&'static str, u32)],
+    /// Whether a card has everything the emulator refuses to start without.
+    pub check: fn(&Caps) -> bool,
+    /// Below these the games run, but slowly: graphics memory, cores, threads, RAM (GiB).
+    pub min_vram_gb: f32,
+    pub min_cores: u32,
+    pub min_threads: u32,
+    pub min_ram_gb: f32,
+    /// The same, rounded for the sentence shown to the player.
+    pub advice_vram_gb: u32,
+    pub advice_ram_gb: u32,
+}
+
+/// What the probe learned about one Vulkan device, for `Requirements::check`.
+pub struct Caps<'a> {
+    pub vulkan: (u32, u32),
+    /// The device has this extension (`a|b`: either).
+    pub has: &'a dyn Fn(&str) -> bool,
+    /// Field `index` of the feature struct of this extension (or "core 1.1" / "core 1.2" / "core 1.3").
+    pub feature: &'a dyn Fn(&str, usize) -> bool,
+    /// Field `index` of VkPhysicalDeviceFeatures.
+    pub core: &'a dyn Fn(usize) -> bool,
+    /// A queue family that does graphics and compute.
+    pub graphics_compute_queue: bool,
+    /// The format (VkFormat number) supports all of these optimal-tiling feature bits.
+    pub format: &'a dyn Fn(i32, u32) -> bool,
+    pub max_anisotropy: f32,
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Gpu {
@@ -16,10 +55,9 @@ pub struct Gpu {
     pub software: bool,
     /// Graphics memory in GiB (for integrated graphics: what it may share).
     pub vram_gb: f32,
-    /// Has the Vulkan extensions and features KytyPS5 (PS5) and shadPS4 (PS4) refuse to start
-    /// without; `None` when the check couldn't run.
-    pub ps5_ok: Option<bool>,
-    pub ps4_ok: Option<bool>,
+    /// Whether it has what each emulator refuses to start without, by emulator id; missing or
+    /// `None` when the check couldn't run.
+    pub ok: std::collections::BTreeMap<String, Option<bool>>,
 }
 
 impl Gpu {
@@ -30,8 +68,8 @@ impl Gpu {
         self.name.split("(NVK ").nth(1).is_some_and(|chip| ["GK", "GM", "GP"].iter().any(|g| chip.starts_with(g)))
     }
 
-    fn meets(&self, platform: Platform) -> Option<bool> {
-        if platform == Platform::Ps4 { self.ps4_ok } else { self.ps5_ok }
+    fn meets(&self, emulator_id: &str) -> Option<bool> {
+        self.ok.get(emulator_id).copied().flatten()
     }
 }
 
@@ -40,7 +78,7 @@ pub struct Specs {
     pub cpu: String,
     pub cores: u32,
     pub threads: u32,
-    /// AVX2, BMI2, FMA… (x86-64-v3): shadPS4 is built for these and stops at once without them.
+    /// AVX2, BMI2, FMA… (x86-64-v3): some emulators are built for these and stop at once without them.
     pub x86_64_v3: bool,
     pub ram_gb: f32,
     /// `None` when the graphics check didn't finish (a driver crash or hang).
@@ -97,19 +135,16 @@ impl Specs {
         self.best_gpu(|_| true)
     }
 
-    /// The graphics card this console's emulator would use, picked the way it picks:
-    /// - KytyPS5 only considers devices that pass its checks, preferring a discrete one; if none
-    ///   does, the strongest card says why;
-    /// - shadPS4 sorts every device (Vulkan 1.3, then discrete, then not software, then the most
-    ///   graphics memory), takes the first and only then checks it, so a discrete card it can't
-    ///   use wins over an integrated one it could.
-    fn gpu_for(&self, platform: Platform) -> Option<&Gpu> {
-        if platform == Platform::Ps4 {
+    /// The graphics card this console's emulator would use, picked the way it picks (see
+    /// `Requirements::considers_only_passing`). When it sorts every device, a discrete card it
+    /// can't use wins over an integrated one it could.
+    fn gpu_for(&self, emulator_id: &str, req: &Requirements) -> Option<&Gpu> {
+        if !req.considers_only_passing {
             let key = |g: &Gpu| (g.vulkan >= (1, 3), g.discrete, !g.software, g.vram_gb);
             return self.gpus.as_ref()?.iter()
                 .max_by(|a, b| key(a).partial_cmp(&key(b)).unwrap_or(std::cmp::Ordering::Equal));
         }
-        self.best_gpu(|g| g.meets(platform) == Some(true))
+        self.best_gpu(|g| g.meets(emulator_id) == Some(true))
     }
 
     fn best_gpu(&self, preferred: impl Fn(&Gpu) -> bool) -> Option<&Gpu> {
@@ -121,29 +156,27 @@ impl Specs {
     /// Whether games of this console run here. `None`: unknown (the graphics check failed).
     pub fn verdict(&self, platform: Platform) -> Option<Verdict> {
         // PC games have their own requirements, which the catalog doesn't carry.
-        if platform == Platform::Pc {
-            return None;
-        }
+        let emu = crate::emulator::for_platform(platform)?;
+        let req = emu.pc_requirements()?;
         let gpus = self.gpus.as_ref()?;
-        let Some(gpu) = self.gpu_for(platform).filter(|g| !g.software) else {
+        let Some(gpu) = self.gpu_for(emu.id(), &req).filter(|g| !g.software) else {
             return Some(Verdict::No(if gpus.is_empty() { "no GPU driver" } else { "no GPU" }.into()));
         };
         if gpu.vulkan < (1, 3) {
             return Some(Verdict::No("no Vulkan 1.3".into()));
         }
-        let ps4 = platform == Platform::Ps4;
-        if ps4 && !self.x86_64_v3 {
+        if req.needs_avx2 && !self.x86_64_v3 {
             return Some(Verdict::No("no AVX2".into()));
         }
         // Vulkan 1.3 isn't all: each emulator checks specific extensions and features. Without
         // that answer there's no honest "Should run well".
-        match gpu.meets(platform) {
+        match gpu.meets(emu.id()) {
             Some(false) => return Some(Verdict::No("missing features".into())),
             None => return None,
             Some(true) => {}
         }
-        // What the README asks for, a step up for PS5 games: (VRAM, cores, threads, RAM).
-        let (vram, cores, threads, ram) = if ps4 { (3.5, 4, 8, 7.0) } else { (7.5, 6, 12, 14.5) };
+        // What the emulator's README asks for.
+        let (vram, cores, threads, ram) = (req.min_vram_gb, req.min_cores, req.min_threads, req.min_ram_gb);
         let slow = if !gpu.discrete {
             Some("integrated GPU".to_string())
         } else if gpu.nvk_low_clock() {
@@ -203,7 +236,7 @@ pub fn detect() -> Specs {
 }
 
 /// For screenshots of other PCs: "CPU;cores;threads;avx2 0 or 1;RAM GB;GPUs" where GPUs are
-/// "name,1.3,discrete,8,1,1" (the last two: meets KytyPS5's and shadPS4's requirements, 1 or 0)
+/// "name,1.3,discrete,8,1,1" (the last ones: meets each emulator's requirements, in registry order, 1 or 0)
 /// separated by "|".
 fn pretend(text: &str) -> Option<Specs> {
     let f: Vec<&str> = text.split(';').collect();
@@ -263,8 +296,8 @@ fn probe_gpus() -> Option<Vec<Gpu>> {
     None
 }
 
-/// Lines of `name<TAB>major.minor<TAB>type<TAB>vram GiB<TAB>PS5 ok<TAB>PS4 ok` (1, 0 or ? for
-/// unknown), as [`print_gpus`] writes them.
+/// Lines of `name<TAB>major.minor<TAB>type<TAB>vram GiB` and then one column per emulator that has
+/// requirements, in registry order (1, 0 or ? for unknown), as [`print_gpus`] writes them.
 fn parse_probe(text: &str) -> Vec<Gpu> {
     text.lines().filter_map(|line| {
         let f: Vec<&str> = line.split('\t').collect();
@@ -277,10 +310,14 @@ fn parse_probe(text: &str) -> Vec<Gpu> {
             discrete: kind == "discrete",
             software: kind == "cpu",
             vram_gb: vram.parse().ok()?,
-            ps5_ok: flag(4),
-            ps4_ok: flag(5),
+            ok: checked_emulators().enumerate().map(|(i, id)| (id.to_string(), flag(4 + i))).collect(),
         })
     }).collect()
+}
+
+/// The emulators whose requirements the probe checks, in the order of the probe's columns.
+fn checked_emulators() -> impl Iterator<Item = &'static str> {
+    crate::emulator::all().iter().filter(|e| e.pc_requirements().is_some()).map(|e| e.id())
 }
 
 /// `--probe-gpu`: list the Vulkan devices on stdout. Runs in its own process (see [`probe_gpus`]).
@@ -289,7 +326,8 @@ pub fn print_gpus() {
     let flag = |ok: Option<bool>| match ok { Some(true) => "1", Some(false) => "0", None => "?" };
     for d in unsafe { vulkan_devices() } {
         let (major, minor) = d.vulkan;
-        println!("{}\t{major}.{minor}\t{}\t{:.1}\t{}\t{}", d.name, d.kind, d.vram_gb, flag(d.ps5_ok), flag(d.ps4_ok));
+        let checks: Vec<&str> = d.ok.iter().map(|ok| flag(*ok)).collect();
+        println!("{}\t{major}.{minor}\t{}\t{:.1}\t{}", d.name, d.kind, d.vram_gb, checks.join("\t"));
     }
 }
 
@@ -298,17 +336,10 @@ struct Probed {
     vulkan: (u32, u32),
     kind: &'static str,
     vram_gb: f32,
-    ps5_ok: Option<bool>,
-    ps4_ok: Option<bool>,
+    /// One answer per emulator with requirements, in registry order.
+    ok: Vec<Option<bool>>,
 }
 
-/// Device extensions each emulator refuses to start without (KytyPS5's vulkanWindow.cpp,
-/// shadPS4's vk_instance.cpp). Alternatives are separated by '|' (an extension promoted to KHR).
-const PS5_EXTENSIONS: [&str; 8] = ["VK_KHR_swapchain", "VK_EXT_depth_clip_control", "VK_EXT_image_view_min_lod",
-    "VK_KHR_push_descriptor", "VK_KHR_maintenance1", "VK_EXT_depth_clip_enable", "VK_EXT_color_write_enable",
-    "VK_KHR_fragment_shader_barycentric"];
-const PS4_EXTENSIONS: [&str; 4] = ["VK_KHR_swapchain", "VK_KHR_push_descriptor",
-    "VK_EXT_vertex_attribute_divisor|VK_KHR_vertex_attribute_divisor", "VK_EXT_robustness2|VK_KHR_robustness2"];
 
 /// A Vulkan feature struct: sType, pNext, then its VkBool32 fields (at most 60 read here).
 #[repr(C)]
@@ -410,7 +441,8 @@ unsafe fn vulkan_devices() -> Vec<Probed> {
 
         // Extensions (VkExtensionProperties: name[256], specVersion: 260 bytes each), then the
         // features the emulators check, chained only for extensions the device has.
-        let (mut ps5_ok, mut ps4_ok) = (None, None);
+        let requirements: Vec<Requirements> = crate::emulator::all().iter().filter_map(|e| e.pc_requirements()).collect();
+        let mut ok: Vec<Option<bool>> = vec![None; requirements.len()];
         let vulkan = (api >> 22, (api >> 12) & 0x3ff);
         if let (Some(extensions_of), Some(features2), Some(format_of), Some(queues_of)) = (extensions_of, features2, format_of, queues_of) {
             let mut n = 0u32;
@@ -427,13 +459,13 @@ unsafe fn vulkan_devices() -> Vec<Probed> {
                 ("core 1.1", Features::new(49)), // PHYSICAL_DEVICE_VULKAN_1_1_FEATURES
                 ("core 1.2", Features::new(51)),
                 ("core 1.3", Features::new(53)),
-                ("VK_KHR_fragment_shader_barycentric", Features::new(1000203000)),
-                ("VK_EXT_image_view_min_lod", Features::new(1000391000)),
-                ("VK_EXT_depth_clip_control", Features::new(1000355000)),
-                ("VK_EXT_depth_clip_enable", Features::new(1000102000)),
-                ("VK_EXT_color_write_enable", Features::new(1000381000)),
-                ("VK_EXT_robustness2|VK_KHR_robustness2", Features::new(1000286000)),
             ];
+            // The extension feature structs the emulators ask about, each once.
+            for (ext, s_type) in requirements.iter().flat_map(|r| r.feature_structs.iter().copied()) {
+                if !chain.iter().any(|(e, _)| *e == ext) {
+                    chain.push((ext, Features::new(s_type)));
+                }
+            }
             chain.retain(|(ext, _)| if ext.starts_with("core") { vulkan >= (1, 3) } else { has(ext) });
             for i in (0..chain.len()).rev() {
                 let next: *mut c_void = if i + 1 < chain.len() { &mut *chain[i + 1].1 as *mut Features as *mut c_void } else { std::ptr::null_mut() };
@@ -444,46 +476,22 @@ unsafe fn vulkan_devices() -> Vec<Probed> {
             let feature = |ext: &str, index: usize| chain.iter().find(|(e, _)| *e == ext).is_some_and(|(_, f)| f.values[index] == 1);
             let core = |index: usize| base.values[index] == 1;
 
-            // KytyPS5 (vulkanWindow.cpp, VulkanFindPhysicalDevice): every check it rejects a
-            // device for, except the window surface's, which needs a window.
-            // VkPhysicalDeviceFeatures: robustBufferAccess, independentBlend, tessellationShader,
-            // sampleRateShading, depthClamp, depthBiasClamp, fillModeNonSolid, depthBounds,
-            // largePoints, multiViewport, samplerAnisotropy, fragmentStoresAndAtomics,
-            // shaderImageGatherExtended, shaderStorageImageWriteWithoutFormat, shaderClipDistance,
-            // shaderCullDistance.
-            let core_ok = [0, 3, 5, 6, 11, 12, 13, 14, 16, 18, 19, 26, 28, 32, 37, 38].iter().all(|i| core(*i));
-            // 1.1 storageBuffer16BitAccess; 1.2 samplerMirrorClampToEdge, storageBuffer8BitAccess,
-            // shaderBufferInt64Atomics, shaderSampledImageArrayNonUniformIndexing,
-            // timelineSemaphore, bufferDeviceAddress, shaderOutputViewportIndex, shaderOutputLayer;
-            // 1.3 robustImageAccess, synchronization2, dynamicRendering.
-            let versions_ok = feature("core 1.1", 0)
-                && [0, 2, 5, 14, 37, 38, 44, 45].iter().all(|i| feature("core 1.2", *i))
-                && [0, 9, 12].iter().all(|i| feature("core 1.3", *i));
-            let extensions_ok = PS5_EXTENSIONS.iter().all(|e| has(e))
-                && ["VK_KHR_fragment_shader_barycentric", "VK_EXT_image_view_min_lod", "VK_EXT_depth_clip_control",
-                    "VK_EXT_depth_clip_enable", "VK_EXT_color_write_enable"].iter().all(|e| feature(e, 0));
             // A queue family that does graphics and compute.
             let mut families = 0u32;
             queues_of(device, &mut families, std::ptr::null_mut());
             let mut queues = vec![[0u32; 6]; families as usize];
             queues_of(device, &mut families, queues.as_mut_ptr());
-            let queue_ok = queues.iter().take(families as usize).any(|q| q[0] & 0x3 == 0x3);
+            let graphics_compute_queue = queues.iter().take(families as usize).any(|q| q[0] & 0x3 == 0x3);
             // Formats with optimal tiling (VkFormatProperties.optimalTilingFeatures).
             let format = |f: i32, need: u32| { let mut p = [0u32; 3]; format_of(device, f, &mut p); p[1] & need == need };
-            let (depth, texture, storage) = (0x200, 0x1 | 0x8000, 0x2 | 0x8000);
-            let formats_ok = [126, 130, 124].iter().all(|f| format(*f, depth)) // D32, D32S8, D16
-                && [138, 43, 9, 16].iter().all(|f| format(*f, texture)) // BC3 sRGB, RGBA8 sRGB, R8, RG8
-                && (format(43, storage) || format(37, storage)) // RGBA8 sRGB or UNORM
-                && (format(50, storage) || format(44, storage)); // BGRA8 sRGB or UNORM
             // VkPhysicalDeviceLimits.maxSamplerAnisotropy at 568 in VkPhysicalDeviceProperties.
-            let anisotropy_ok = *(p.add(568) as *const f32) >= 16.0;
-            ps5_ok = Some(vulkan >= (1, 3) && core_ok && versions_ok && extensions_ok && queue_ok && formats_ok && anisotropy_ok);
-
-            // shadPS4 (vk_instance.cpp): the extensions it asserts, and robustness2's features.
-            let robust = |i| feature("VK_EXT_robustness2|VK_KHR_robustness2", i);
-            ps4_ok = Some(PS4_EXTENSIONS.iter().all(|e| has(e)) && robust(0) && robust(1) && robust(2));
+            let max_anisotropy = *(p.add(568) as *const f32);
+            let caps = Caps { vulkan, has: &has, feature: &feature, core: &core, graphics_compute_queue, format: &format, max_anisotropy };
+            for (answer, requirement) in ok.iter_mut().zip(&requirements) {
+                *answer = Some((requirement.check)(&caps));
+            }
         }
-        out.push(Probed { name, vulkan, kind, vram_gb: local as f32 / (1u64 << 30) as f32, ps5_ok, ps4_ok });
+        out.push(Probed { name, vulkan, kind, vram_gb: local as f32 / (1u64 << 30) as f32, ok });
     }
     destroy(instance, std::ptr::null());
     out
@@ -508,8 +516,18 @@ mod tests {
         Specs { cpu: "Test CPU".into(), cores, threads, x86_64_v3: v3, ram_gb: ram, gpus: Some(gpus) }
     }
 
+    fn all_ok(answer: Option<bool>) -> std::collections::BTreeMap<String, Option<bool>> {
+        super::checked_emulators().map(|id| (id.to_string(), answer)).collect()
+    }
+
+    fn only(id: &str, answer: Option<bool>) -> std::collections::BTreeMap<String, Option<bool>> {
+        let mut ok = all_ok(Some(true));
+        ok.insert(id.to_string(), answer);
+        ok
+    }
+
     fn gpu(name: &str, vulkan: (u32, u32), discrete: bool, vram: f32) -> Gpu {
-        Gpu { name: name.into(), vulkan, discrete, software: name.starts_with("llvmpipe"), vram_gb: vram, ps5_ok: Some(true), ps4_ok: Some(true) }
+        Gpu { name: name.into(), vulkan, discrete, software: name.starts_with("llvmpipe"), vram_gb: vram, ok: all_ok(Some(true)) }
     }
 
     #[test]
@@ -530,9 +548,9 @@ mod tests {
     fn reads_the_graphics_probe() {
         let gpus = parse_probe("NVIDIA GeForce RTX 3090\t1.4\tdiscrete\t24.0\t1\t1\nllvmpipe (LLVM 20.1.2, 256 bits)\t1.4\tcpu\t31.0\t0\t1\nOld\t1.3\tdiscrete\t2.0\nbroken line\n");
         assert_eq!(gpus.len(), 3);
-        assert_eq!((gpus[0].vulkan, gpus[0].discrete, gpus[0].vram_gb, gpus[0].ps5_ok), ((1, 4), true, 24.0, Some(true)));
-        assert!(gpus[1].software && gpus[1].ps5_ok == Some(false) && gpus[1].ps4_ok == Some(true));
-        assert_eq!((gpus[2].ps5_ok, gpus[2].ps4_ok), (None, None), "older probe output: unknown");
+        assert_eq!((gpus[0].vulkan, gpus[0].discrete, gpus[0].vram_gb, gpus[0].meets("kytyps5")), ((1, 4), true, 24.0, Some(true)));
+        assert!(gpus[1].software && gpus[1].meets("kytyps5") == Some(false) && gpus[1].meets("shadps4") == Some(true));
+        assert_eq!((gpus[2].meets("kytyps5"), gpus[2].meets("shadps4")), (None, None), "older probe output: unknown");
     }
 
     #[test]
@@ -571,20 +589,20 @@ mod tests {
             assert!(v.unwrap().why().unwrap().chars().count() <= 16);
         }
         // Vulkan 1.3, but without what KytyPS5 checks for (e.g. fragment-shader barycentrics).
-        let partial = pc(8, 16, true, 16.0, vec![Gpu { ps5_ok: Some(false), ..rtx.clone() }]);
+        let partial = pc(8, 16, true, 16.0, vec![Gpu { ok: only("kytyps5", Some(false)), ..rtx.clone() }]);
         assert_eq!(partial.verdict(Platform::Ps5).unwrap().short(), "Won't start · missing features");
         assert_eq!(partial.verdict(Platform::Ps4), Some(Verdict::Good));
         // The emulator picks the card that has what it needs.
-        let two = pc(8, 16, true, 16.0, vec![Gpu { ps5_ok: Some(false), vram_gb: 24.0, ..rtx.clone() }, gpu("AMD Radeon RX 6600", (1, 3), true, 8.0)]);
+        let two = pc(8, 16, true, 16.0, vec![Gpu { ok: only("kytyps5", Some(false)), vram_gb: 24.0, ..rtx.clone() }, gpu("AMD Radeon RX 6600", (1, 3), true, 8.0)]);
         assert_eq!(two.verdict(Platform::Ps5), Some(Verdict::Good));
         // shadPS4 takes the discrete card even when only the integrated one would work.
-        let mixed = pc(8, 16, true, 16.0, vec![Gpu { ps4_ok: Some(false), ..rtx.clone() }, gpu("AMD Radeon 780M", (1, 3), false, 2.0)]);
+        let mixed = pc(8, 16, true, 16.0, vec![Gpu { ok: only("shadps4", Some(false)), ..rtx.clone() }, gpu("AMD Radeon 780M", (1, 3), false, 2.0)]);
         assert_eq!(mixed.verdict(Platform::Ps4).unwrap().short(), "Won't start · missing features");
         // …and an integrated card when there's no discrete one; software only as a last resort.
         let laptop = pc(8, 16, true, 16.0, vec![gpu("llvmpipe", (1, 4), false, 30.0), gpu("AMD Radeon 780M", (1, 3), false, 2.0)]);
         assert_eq!(laptop.verdict(Platform::Ps4), Some(Verdict::Slow("integrated GPU".into())));
         // Requirements unknown (the feature check couldn't run): no verdict rather than a guess.
-        let unknown = pc(8, 16, true, 16.0, vec![Gpu { ps5_ok: None, ps4_ok: None, ..rtx.clone() }]);
+        let unknown = pc(8, 16, true, 16.0, vec![Gpu { ok: all_ok(None), ..rtx.clone() }]);
         assert_eq!(unknown.verdict(Platform::Ps5), None);
         // A graphics check that crashed tells nothing.
         assert_eq!(Specs { gpus: None, ..big }.verdict(Platform::Ps5), None);
