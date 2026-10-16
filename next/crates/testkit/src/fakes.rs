@@ -9,12 +9,19 @@ pub struct FakeHttp {
     pub calls: Mutex<Vec<String>>,
 }
 impl FakeHttp {
-    pub fn route(&self, url: &str, body: impl Into<Vec<u8>>) { self.routes.lock().unwrap().insert(url.into(), body.into()); }
+    pub fn route(&self, url: &str, body: impl Into<Vec<u8>>) {
+        self.routes.lock().unwrap().insert(url.into(), body.into());
+    }
 }
 impl Http for FakeHttp {
     fn get(&self, url: &str) -> Result<Vec<u8>, PortError> {
         self.calls.lock().unwrap().push(url.into());
-        self.routes.lock().unwrap().get(url).cloned().ok_or_else(|| PortError::Network(format!("no route {url}")))
+        self.routes
+            .lock()
+            .unwrap()
+            .get(url)
+            .cloned()
+            .ok_or_else(|| PortError::Network(format!("no route {url}")))
     }
 }
 
@@ -29,19 +36,36 @@ impl Processes for FakeProcesses {
         s.push(plan.clone());
         Ok(ProcessId(s.len() as u64))
     }
-    fn is_running(&self, id: ProcessId) -> bool { id.0 as usize <= self.spawned.lock().unwrap().len() }
+    fn is_running(&self, id: ProcessId) -> bool {
+        id.0 as usize <= self.spawned.lock().unwrap().len()
+    }
     fn find(&self, m: &ProcessMatch) -> Vec<ProcessId> {
-        self.external.lock().unwrap().iter().filter(|(n, _)| m.names.contains(n)).map(|(_, id)| *id).collect()
+        self.external
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(n, _)| m.names.contains(n))
+            .map(|(_, id)| *id)
+            .collect()
     }
 }
 
 pub struct FixedClock(pub u64);
-impl Clock for FixedClock { fn now_unix(&self) -> u64 { self.0 } }
+impl Clock for FixedClock {
+    fn now_unix(&self) -> u64 {
+        self.0
+    }
+}
 
 #[derive(Default)]
 pub struct RecordingProgress(pub Mutex<Vec<(String, u64, u64)>>);
 impl ProgressSink for RecordingProgress {
-    fn report(&self, label: &Text, done: u64, total: u64) { self.0.lock().unwrap().push((label.key.clone(), done, total)); }
+    fn report(&self, label: &Text, done: u64, total: u64) {
+        self.0
+            .lock()
+            .unwrap()
+            .push((label.key.clone(), done, total));
+    }
 }
 
 pub struct Fakes {
@@ -62,7 +86,12 @@ pub fn fakes() -> Fakes {
         progress: progress.clone(),
         cancel: CancelToken::new(),
     };
-    Fakes { http, processes, progress, ctx }
+    Fakes {
+        http,
+        processes,
+        progress,
+        ctx,
+    }
 }
 
 /// An in-memory tree for recognisers and the install engine.
@@ -72,23 +101,45 @@ pub struct MemTree {
     pub extra: Vec<Entry>,
 }
 impl MemTree {
-    pub fn new(name: &str) -> Self { Self { name: name.into(), files: BTreeMap::new(), extra: vec![] } }
+    pub fn new(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            files: BTreeMap::new(),
+            extra: vec![],
+        }
+    }
     pub fn with(mut self, path: &str, body: &str) -> Self {
-        self.files.insert(RelPath::new(path).unwrap(), body.as_bytes().to_vec());
+        self.files
+            .insert(RelPath::new(path).unwrap(), body.as_bytes().to_vec());
         self
     }
-    pub fn with_entry(mut self, e: Entry) -> Self { self.extra.push(e); self }
+    pub fn with_entry(mut self, e: Entry) -> Self {
+        self.extra.push(e);
+        self
+    }
 }
 impl Tree for MemTree {
-    fn name(&self) -> String { self.name.clone() }
+    fn name(&self) -> String {
+        self.name.clone()
+    }
     fn entries(&self) -> io::Result<Vec<Entry>> {
-        let mut v: Vec<Entry> = self.files.iter()
-            .map(|(p, b)| Entry { path: p.clone(), size: b.len() as u64, kind: EntryKind::File }).collect();
+        let mut v: Vec<Entry> = self
+            .files
+            .iter()
+            .map(|(p, b)| Entry {
+                path: p.clone(),
+                size: b.len() as u64,
+                kind: EntryKind::File,
+            })
+            .collect();
         v.extend(self.extra.iter().cloned());
         Ok(v)
     }
     fn read_to(&self, path: &RelPath, out: &mut dyn Write) -> io::Result<u64> {
-        let b = self.files.get(path).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "missing"))?;
+        let b = self
+            .files
+            .get(path)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "missing"))?;
         out.write_all(b)?;
         Ok(b.len() as u64)
     }

@@ -1,0 +1,60 @@
+# Tier-0 plugin: a system and a runner declared as data, no code.
+# Drop a file like this into <home>/plugins/ and restart.
+[plugin]
+id = "example"
+version = "0.1.0"
+api = 1
+
+[[system]]
+id = "example-sys"
+name = "Example System"
+short = "SS"
+folder = "example"
+style = { color = "#ffaa44", cover = { w = 1, h = 1 } }
+recognise = { markers = ["boot.bin"] }
+
+[[runner]]
+id = "example-run"
+name = "Example Runner"
+systems = ["example-sys"]
+process = { names = ["examplerun"] }
+
+[[runner.settings]]
+key = "fullscreen"
+label = "Fullscreen"
+type = "bool"
+default = true
+
+[[runner.settings]]
+key = "scale"
+label = "Scale"
+type = "int"
+min = 1
+max = 4
+default = 2
+
+[[runner.settings]]
+key = "api"
+label = "Graphics API"
+type = "choice"
+options = [{ value = "vk", label = "Vulkan" }, { value = "gl", label = "OpenGL" }]
+default = "vk"
+
+[runner.launch]
+cwd_game = true
+args = [
+  { value = "--fullscreen", when = "fullscreen" },
+  { value = "--scale={setting.scale}" },
+  { value = "{game}" },
+]
+
+[[runner.requires]]
+expr = { at_least = ["ram.gib", 4.0] }
+severity = "blocks"
+message = "Needs 4 GiB of memory"
+
+[runner.provision]
+policy = "on_demand"
+executable = "bin/example"
+assets = [{ os = "linux", arch = "x86_64", pattern = "example-*.tar.gz" }]
+source = { type = "github_releases", repo = "o/r" }

@@ -2,7 +2,12 @@ use crate::path::RelPath;
 use std::io::{self, Write};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EntryKind { File, Dir, Symlink, Other }
+pub enum EntryKind {
+    File,
+    Dir,
+    Symlink,
+    Other,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
@@ -26,6 +31,8 @@ impl dyn Tree + '_ {
         Ok(v)
     }
     pub fn exists(&self, path: &RelPath) -> bool {
-        self.entries().map(|es| es.iter().any(|e| &e.path == path)).unwrap_or(false)
+        self.entries()
+            .map(|es| es.iter().any(|e| &e.path == path))
+            .unwrap_or(false)
     }
 }

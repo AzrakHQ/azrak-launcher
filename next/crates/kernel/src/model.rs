@@ -5,7 +5,11 @@ use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Role { Game, Update, Dlc }
+pub enum Role {
+    Game,
+    Update,
+    Dlc,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -69,7 +73,9 @@ impl GameInfo {
         for i in infos {
             out.name = out.name.or(i.name);
             out.publisher = out.publisher.or(i.publisher);
-            if out.genres.is_empty() { out.genres = i.genres; }
+            if out.genres.is_empty() {
+                out.genres = i.genres;
+            }
             out.released = out.released.or(i.released);
             out.cover = out.cover.or(i.cover);
             out.hero = out.hero.or(i.hero);
@@ -83,8 +89,15 @@ mod tests {
     use super::*;
     #[test]
     fn merge_prefers_earlier_providers_per_field() {
-        let a = GameInfo { name: Some("A".into()), ..Default::default() };
-        let b = GameInfo { name: Some("B".into()), publisher: Some("P".into()), ..Default::default() };
+        let a = GameInfo {
+            name: Some("A".into()),
+            ..Default::default()
+        };
+        let b = GameInfo {
+            name: Some("B".into()),
+            publisher: Some("P".into()),
+            ..Default::default()
+        };
         let m = GameInfo::merge([a, b]);
         assert_eq!(m.name.as_deref(), Some("A"));
         assert_eq!(m.publisher.as_deref(), Some("P"));

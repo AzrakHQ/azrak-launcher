@@ -25,9 +25,14 @@ fn every_build_starts_and_answers_basic_questions() {
     cli(&app, &["catalog-manifest"]).unwrap();
     let diag = cli(&app, &["diagnose"]).unwrap();
     assert!(diag.contains("plugins:"));
-    let lib: serde_json::Value = serde_json::from_str(&cli(&app, &["ui", "library"]).unwrap()).unwrap();
+    let lib: serde_json::Value =
+        serde_json::from_str(&cli(&app, &["ui", "library"]).unwrap()).unwrap();
     let empty = &lib["Library"]["empty"];
-    if app.registry.systems().is_empty() { assert_eq!(empty, "NoSystems"); } else { assert_eq!(empty, "NoGames"); }
+    if app.registry.systems().is_empty() {
+        assert_eq!(empty, "NoSystems");
+    } else {
+        assert_eq!(empty, "NoGames");
+    }
     cli(&app, &["ui", "settings"]).unwrap();
 }
 
@@ -48,17 +53,34 @@ fn unrecognised_input_is_a_clean_error_never_a_panic() {
 #[test]
 fn data_of_an_absent_plugin_is_kept_and_reported() {
     let (d, app) = app();
-    fs::write(d.path().join("config.json"), r#"{"version":2,"plugins":{"gone":{"settings":{"x":1}}},"mystery":true}"#).unwrap();
+    fs::write(
+        d.path().join("config.json"),
+        r#"{"version":2,"plugins":{"gone":{"settings":{"x":1}}},"mystery":true}"#,
+    )
+    .unwrap();
     fs::create_dir_all(d.path().join("games/gone-system/g1/.launcher")).unwrap();
-    fs::write(d.path().join("games/gone-system/g1/.launcher/game.json"), "{}").unwrap();
+    fs::write(
+        d.path().join("games/gone-system/g1/.launcher/game.json"),
+        "{}",
+    )
+    .unwrap();
     let diag = cli(&app, &["diagnose"]).unwrap();
-    assert!(diag.contains("kept settings of absent plugin gone"), "{diag}");
+    assert!(
+        diag.contains("kept settings of absent plugin gone"),
+        "{diag}"
+    );
     assert!(diag.contains("gone-system"), "{diag}");
     // Changing an unrelated thing must not touch what we do not understand.
     let _ = cli(&app, &["choose", "a", "b"]).unwrap();
     let saved = fs::read_to_string(d.path().join("config.json")).unwrap();
-    assert!(saved.contains("\"gone\"") && saved.contains("mystery"), "{saved}");
-    assert!(d.path().join("games/gone-system/g1/.launcher/game.json").exists());
+    assert!(
+        saved.contains("\"gone\"") && saved.contains("mystery"),
+        "{saved}"
+    );
+    assert!(d
+        .path()
+        .join("games/gone-system/g1/.launcher/game.json")
+        .exists());
 }
 
 #[test]
@@ -67,7 +89,9 @@ fn a_broken_tier0_manifest_never_stops_the_app() {
     fs::create_dir_all(d.path().join("plugins")).unwrap();
     fs::write(d.path().join("plugins/broken.toml"), "this is not [valid").unwrap();
     let app = App::open(d.path().to_path_buf()).unwrap();
-    assert!(cli(&app, &["diagnose"]).unwrap().contains("skipped manifest"));
+    assert!(cli(&app, &["diagnose"])
+        .unwrap()
+        .contains("skipped manifest"));
 }
 
 #[cfg(feature = "native-pc")]
@@ -76,14 +100,27 @@ fn native_pc_install_list_plan_end_to_end() {
     let (d, app) = app();
     let src = d.path().join("hello");
     fs::create_dir_all(src.join("bin")).unwrap();
-    fs::write(src.join("game.toml"), "name = \"Hello Game\"\nexe = \"bin/run\"").unwrap();
+    fs::write(
+        src.join("game.toml"),
+        "name = \"Hello Game\"\nexe = \"bin/run\"",
+    )
+    .unwrap();
     fs::write(src.join("bin/run"), "#!/bin/sh\n").unwrap();
-    assert!(cli(&app, &["install", src.to_str().unwrap()]).unwrap().contains("Hello Game"));
-    assert_eq!(cli(&app, &["list"]).unwrap().trim(), "native-pc/hello\tHello Game");
+    assert!(cli(&app, &["install", src.to_str().unwrap()])
+        .unwrap()
+        .contains("Hello Game"));
+    assert_eq!(
+        cli(&app, &["list"]).unwrap().trim(),
+        "native-pc/hello\tHello Game"
+    );
     cli(&app, &["set", "native", "args", "-v"]).unwrap();
     let plan = cli(&app, &["plan", "native-pc/hello"]).unwrap();
-    assert!(plan.contains("bin/run") && plan.trim_end().ends_with("-v"), "{plan}");
-    let ui: serde_json::Value = serde_json::from_str(&cli(&app, &["ui", "native-pc/hello"]).unwrap()).unwrap();
+    assert!(
+        plan.contains("bin/run") && plan.trim_end().ends_with("-v"),
+        "{plan}"
+    );
+    let ui: serde_json::Value =
+        serde_json::from_str(&cli(&app, &["ui", "native-pc/hello"]).unwrap()).unwrap();
     assert_eq!(ui["Hub"]["can_play"], true);
 }
 
@@ -97,6 +134,35 @@ fn toy_plugin_scenario() {
     cli(&app, &["install", src.to_str().unwrap()]).unwrap();
     assert!(cli(&app, &["list"]).unwrap().contains("toy-sys/alpha"));
     // The toy runner is unmanaged-with-executable but has no provision, so it is honestly "not installed".
-    assert!(cli(&app, &["plan", "toy-sys/alpha"]).unwrap_err().contains("not installed"));
-    assert!(cli(&app, &["catalog-manifest"]).unwrap().contains("toy-feed"));
+    assert!(cli(&app, &["plan", "toy-sys/alpha"])
+        .unwrap_err()
+        .contains("not installed"));
+    assert!(cli(&app, &["catalog-manifest"])
+        .unwrap()
+        .contains("toy-feed"));
+}
+
+#[test]
+fn the_shipped_example_manifest_loads_and_works_with_no_code() {
+    let d = tempfile::tempdir().unwrap();
+    fs::create_dir_all(d.path().join("plugins")).unwrap();
+    fs::copy(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/example.toml"),
+        d.path().join("plugins/example.toml"),
+    )
+    .unwrap();
+    let app = App::open(d.path().to_path_buf()).unwrap();
+    assert!(cli(&app, &["systems"]).unwrap().contains("example-sys"));
+    let src = d.path().join("mygame");
+    fs::create_dir_all(&src).unwrap();
+    fs::write(src.join("boot.bin"), "").unwrap();
+    assert!(cli(&app, &["install", src.to_str().unwrap()])
+        .unwrap()
+        .contains("example-sys/mygame"));
+    // a declared setting is validated and persisted with no plugin code involved
+    cli(&app, &["set", "example-run", "scale", "3"]).unwrap();
+    assert!(cli(&app, &["set", "example-run", "scale", "9"]).is_err());
+    assert!(cli(&app, &["settings"])
+        .unwrap()
+        .contains("example-run.scale = 3"));
 }

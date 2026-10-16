@@ -10,25 +10,43 @@ pub struct RelPath(String);
 impl RelPath {
     pub const MAX_LEN: usize = 1024;
 
-    pub fn root() -> Self { Self(String::new()) }
+    pub fn root() -> Self {
+        Self(String::new())
+    }
 
     pub fn new(s: &str) -> Result<Self, PathError> {
         let s = s.strip_suffix('/').unwrap_or(s);
-        if s.len() > Self::MAX_LEN { return Err(PathError::Length); }
-        if s.is_empty() { return Ok(Self::root()); }
-        if s.starts_with('/') { return Err(PathError::Absolute); }
-        if s.chars().any(|c| c == '\0' || c == '\\' || c == ':' || c.is_control()) {
+        if s.len() > Self::MAX_LEN {
+            return Err(PathError::Length);
+        }
+        if s.is_empty() {
+            return Ok(Self::root());
+        }
+        if s.starts_with('/') {
+            return Err(PathError::Absolute);
+        }
+        if s.chars()
+            .any(|c| c == '\0' || c == '\\' || c == ':' || c.is_control())
+        {
             return Err(PathError::Character);
         }
         for part in s.split('/') {
-            if part.is_empty() || part == "." || part == ".." { return Err(PathError::Component); }
+            if part.is_empty() || part == "." || part == ".." {
+                return Err(PathError::Component);
+            }
         }
         Ok(Self(s.to_string()))
     }
 
-    pub fn as_str(&self) -> &str { &self.0 }
-    pub fn is_root(&self) -> bool { self.0.is_empty() }
-    pub fn components(&self) -> impl Iterator<Item = &str> { self.0.split('/').filter(|p| !p.is_empty()) }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+    pub fn is_root(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn components(&self) -> impl Iterator<Item = &str> {
+        self.0.split('/').filter(|p| !p.is_empty())
+    }
 
     pub fn join(&self, other: &RelPath) -> RelPath {
         match (self.is_root(), other.is_root()) {
@@ -39,14 +57,22 @@ impl RelPath {
     }
 
     pub fn strip_prefix(&self, prefix: &RelPath) -> Option<RelPath> {
-        if prefix.is_root() { return Some(self.clone()); }
-        if self.0 == prefix.0 { return Some(RelPath::root()); }
-        self.0.strip_prefix(&format!("{}/", prefix.0)).map(|r| RelPath(r.to_string()))
+        if prefix.is_root() {
+            return Some(self.clone());
+        }
+        if self.0 == prefix.0 {
+            return Some(RelPath::root());
+        }
+        self.0
+            .strip_prefix(&format!("{}/", prefix.0))
+            .map(|r| RelPath(r.to_string()))
     }
 
     pub fn to_path(&self, base: &Path) -> PathBuf {
         let mut p = base.to_path_buf();
-        for c in self.components() { p.push(c); }
+        for c in self.components() {
+            p.push(c);
+        }
         p
     }
 }
@@ -63,7 +89,9 @@ mod tests {
     use super::*;
     #[test]
     fn rejects_traversal_and_absolute() {
-        for bad in ["../x", "a/../b", "/etc", "a//b", "a/./b", "a\\b", "c:x", "a\0b"] {
+        for bad in [
+            "../x", "a/../b", "/etc", "a//b", "a/./b", "a\\b", "c:x", "a\0b",
+        ] {
             assert!(RelPath::new(bad).is_err(), "{bad}");
         }
     }

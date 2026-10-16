@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
   "crates/kernel", "crates/engines", "crates/application", "crates/testkit",
-  "crates/ui-model", "crates/host", "shells/cli", "extensions/native-pc", "gates",
+  "crates/ui-model", "crates/host", "shells/cli", "shells/slint", "extensions/native-pc", "gates",
 ]
 
 [workspace.package]
@@ -26,3 +26,4 @@ testkit = { path = "crates/testkit" }
 ui-model = { path = "crates/ui-model" }
 host = { path = "crates/host" }
 native-pc = { path = "extensions/native-pc" }
+launcher = { path = "shells/cli", default-features = false }

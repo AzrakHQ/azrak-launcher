@@ -6,14 +6,16 @@ use engines::declarative;
 use engines::install::{install, InstallError, Limits};
 use engines::provision::{self, ManagedStore, Platform};
 use kernel::*;
+pub mod controller;
+pub use controller::Controller;
 use std::io::Write;
 use std::path::PathBuf;
 use thiserror::Error;
 use ui_model::{update, view, Action, Env, Screen, SettingsPage, State};
 
 /// Extensions compiled into this build. Remove a feature and its line disappears; nothing else changes.
+#[allow(unused_mut, clippy::vec_init_then_push)]
 pub fn builtin_plugins() -> Vec<Box<dyn Plugin>> {
-    #[allow(unused_mut)]
     let mut v: Vec<Box<dyn Plugin>> = vec![];
     #[cfg(feature = "native-pc")]
     v.push(Box::new(native_pc::NativePc));
@@ -23,21 +25,32 @@ pub fn builtin_plugins() -> Vec<Box<dyn Plugin>> {
 }
 
 pub fn default_home() -> PathBuf {
-    std::env::var_os("LAUNCHER_HOME").map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/launcher")))
+    std::env::var_os("LAUNCHER_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/launcher"))
+        })
         .unwrap_or_else(|| PathBuf::from(".launcher"))
 }
 
 #[derive(Debug, Error)]
 pub enum CliError {
-    #[error(transparent)] Registry(#[from] RegistryError),
-    #[error(transparent)] Config(#[from] ConfigError),
-    #[error(transparent)] Install(#[from] InstallError),
-    #[error(transparent)] Session(#[from] session::SessionError),
-    #[error(transparent)] Settings(#[from] app_settings::SettingsError),
-    #[error(transparent)] Provision(#[from] provision::ProvisionError),
-    #[error("io: {0}")] Io(#[from] std::io::Error),
-    #[error("{0}")] Usage(String),
+    #[error(transparent)]
+    Registry(#[from] RegistryError),
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+    #[error(transparent)]
+    Install(#[from] InstallError),
+    #[error(transparent)]
+    Session(#[from] session::SessionError),
+    #[error(transparent)]
+    Settings(#[from] app_settings::SettingsError),
+    #[error(transparent)]
+    Provision(#[from] provision::ProvisionError),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Usage(String),
 }
 
 pub struct App {
@@ -55,11 +68,22 @@ impl App {
         let mut refs: Vec<&dyn Plugin> = builtin.iter().map(|b| b.as_ref()).collect();
         refs.extend(decl.iter().map(|d| d as &dyn Plugin));
         let registry = Registry::build(&refs)?;
-        Ok(App { home, registry, skipped_manifests: bad.into_iter().map(|(p, e)| (p, e.to_string())).collect(), bundle: default_bundle() })
+        Ok(App {
+            home,
+            registry,
+            skipped_manifests: bad.into_iter().map(|(p, e)| (p, e.to_string())).collect(),
+            bundle: default_bundle(),
+        })
     }
-    pub fn config_path(&self) -> PathBuf { self.home.join("config.json") }
-    pub fn games_dir(&self, cfg: &Config) -> PathBuf { cfg.games_dir().unwrap_or_else(|| self.home.join("games")) }
-    pub fn store(&self) -> ManagedStore { ManagedStore::new(self.home.join("runners")) }
+    pub fn config_path(&self) -> PathBuf {
+        self.home.join("config.json")
+    }
+    pub fn games_dir(&self, cfg: &Config) -> PathBuf {
+        cfg.games_dir().unwrap_or_else(|| self.home.join("games"))
+    }
+    pub fn store(&self) -> ManagedStore {
+        ManagedStore::new(self.home.join("runners"))
+    }
 }
 
 pub fn default_bundle() -> Bundle {
@@ -71,21 +95,32 @@ pub fn default_bundle() -> Bundle {
 }
 
 fn find_game(app: &App, cfg: &Config, spec: &str) -> Result<InstalledGame, CliError> {
-    let (sys, key) = spec.split_once('/').ok_or_else(|| CliError::Usage("game must be <system>/<key>".into()))?;
-    library::scan(&app.registry, &app.games_dir(cfg)).into_iter()
+    let (sys, key) = spec
+        .split_once('/')
+        .ok_or_else(|| CliError::Usage("game must be <system>/<key>".into()))?;
+    library::scan(&app.registry, &app.games_dir(cfg))
+        .into_iter()
         .find(|g| g.game.system.as_str() == sys && g.game.key.as_str() == key)
         .ok_or_else(|| CliError::Usage(format!("no installed game {spec}")))
 }
 
 fn parse_value(spec: &SettingSpec, raw: &str) -> Result<Value, CliError> {
     Ok(match spec.kind {
-        SettingKind::Bool => Value::Bool(raw.parse().map_err(|_| CliError::Usage(format!("{} expects true or false", spec.key)))?),
-        SettingKind::Int { .. } => Value::Int(raw.parse().map_err(|_| CliError::Usage(format!("{} expects a number", spec.key)))?),
+        SettingKind::Bool => Value::Bool(
+            raw.parse()
+                .map_err(|_| CliError::Usage(format!("{} expects true or false", spec.key)))?,
+        ),
+        SettingKind::Int { .. } => Value::Int(
+            raw.parse()
+                .map_err(|_| CliError::Usage(format!("{} expects a number", spec.key)))?,
+        ),
         _ => Value::Text(raw.into()),
     })
 }
 
-fn pretty<T: serde::Serialize>(v: &T) -> String { serde_json::to_string_pretty(v).expect("serialises") }
+fn pretty<T: serde::Serialize>(v: &T) -> String {
+    serde_json::to_string_pretty(v).expect("serialises")
+}
 
 pub fn run(args: &[String], app: &App, out: &mut dyn Write) -> Result<(), CliError> {
     let a: Vec<&str> = args.iter().map(String::as_str).collect();

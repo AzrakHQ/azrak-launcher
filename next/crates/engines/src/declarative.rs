@@ -15,7 +15,9 @@ pub enum DeclError {
 
 /// A system is recognised when every marker path exists in the tree; its key is the source's name.
 #[derive(Debug, Clone, Deserialize)]
-struct Recognise { markers: Vec<RelPath> }
+struct Recognise {
+    markers: Vec<RelPath>,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 struct SystemDecl {
@@ -33,26 +35,53 @@ struct File {
     runner: Vec<RunnerDescriptor>,
 }
 
-struct DeclSystem { desc: SystemDescriptor, markers: Vec<RelPath> }
+struct DeclSystem {
+    desc: SystemDescriptor,
+    markers: Vec<RelPath>,
+}
 impl System for DeclSystem {
-    fn descriptor(&self) -> &SystemDescriptor { &self.desc }
+    fn descriptor(&self) -> &SystemDescriptor {
+        &self.desc
+    }
     fn recognise(&self, tree: &dyn Tree) -> Vec<Recognised> {
-        if self.markers.is_empty() || !self.markers.iter().all(|m| tree.exists(m)) { return vec![]; }
+        if self.markers.is_empty() || !self.markers.iter().all(|m| tree.exists(m)) {
+            return vec![];
+        }
         let key = tree.name();
-        vec![Recognised { name: key.clone(), key: GameKey::new(key), role: Role::Game, root: RelPath::root(), extra: serde_json::Value::Null }]
+        vec![Recognised {
+            name: key.clone(),
+            key: GameKey::new(key),
+            role: Role::Game,
+            root: RelPath::root(),
+            extra: serde_json::Value::Null,
+        }]
     }
 }
 
 struct DeclRunner(RunnerDescriptor);
-impl Runner for DeclRunner { fn descriptor(&self) -> &RunnerDescriptor { &self.0 } }
+impl Runner for DeclRunner {
+    fn descriptor(&self) -> &RunnerDescriptor {
+        &self.0
+    }
+}
 
-pub struct DeclPlugin { manifest: Manifest, systems: Vec<Arc<DeclSystem>>, runners: Vec<Arc<DeclRunner>> }
+pub struct DeclPlugin {
+    manifest: Manifest,
+    systems: Vec<Arc<DeclSystem>>,
+    runners: Vec<Arc<DeclRunner>>,
+}
 
 impl Plugin for DeclPlugin {
-    fn manifest(&self) -> Manifest { self.manifest.clone() }
+    fn manifest(&self) -> Manifest {
+        self.manifest.clone()
+    }
     fn register(&self, r: &mut Registrar) {
-        for s in &self.systems { r.system(s.clone()); }
-        for x in &self.runners { r.runner(x.clone()); }
+        for s in &self.systems {
+            r.system(s.clone());
+        }
+        for x in &self.runners {
+            r.runner(x.clone());
+        }
     }
 }
 
@@ -60,19 +89,41 @@ pub fn parse(text: &str) -> Result<DeclPlugin, DeclError> {
     let f: File = toml::from_str(text).map_err(|e| DeclError::Parse(e.to_string()))?;
     Ok(DeclPlugin {
         manifest: f.plugin,
-        systems: f.system.into_iter().map(|s| Arc::new(DeclSystem { desc: s.desc, markers: s.recognise.markers })).collect(),
-        runners: f.runner.into_iter().map(|r| Arc::new(DeclRunner(r))).collect(),
+        systems: f
+            .system
+            .into_iter()
+            .map(|s| {
+                Arc::new(DeclSystem {
+                    desc: s.desc,
+                    markers: s.recognise.markers,
+                })
+            })
+            .collect(),
+        runners: f
+            .runner
+            .into_iter()
+            .map(|r| Arc::new(DeclRunner(r)))
+            .collect(),
     })
 }
 
 /// Load every `*.toml` in a directory. A broken manifest is reported and skipped, never fatal.
 pub fn load_dir(dir: &Path) -> (Vec<DeclPlugin>, Vec<(PathBuf, DeclError)>) {
     let (mut ok, mut bad) = (vec![], vec![]);
-    let Ok(rd) = std::fs::read_dir(dir) else { return (ok, bad) };
-    let mut paths: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.extension().map(|x| x == "toml").unwrap_or(false)).collect();
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return (ok, bad);
+    };
+    let mut paths: Vec<PathBuf> = rd
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|x| x == "toml").unwrap_or(false))
+        .collect();
     paths.sort();
     for p in paths {
-        match std::fs::read_to_string(&p).map_err(|e| DeclError::Io(e.to_string())).and_then(|t| parse(&t)) {
+        match std::fs::read_to_string(&p)
+            .map_err(|e| DeclError::Io(e.to_string()))
+            .and_then(|t| parse(&t))
+        {
             Ok(pl) => ok.push(pl),
             Err(e) => bad.push((p, e)),
         }

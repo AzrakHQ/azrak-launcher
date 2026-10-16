@@ -30,11 +30,21 @@ pub trait ProgressSink: Send + Sync {
 #[derive(Clone, Default)]
 pub struct CancelToken(Arc<AtomicBool>);
 impl CancelToken {
-    pub fn new() -> Self { Self::default() }
-    pub fn cancel(&self) { self.0.store(true, Ordering::SeqCst); }
-    pub fn is_cancelled(&self) -> bool { self.0.load(Ordering::SeqCst) }
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
     pub fn check(&self) -> Result<(), PortError> {
-        if self.is_cancelled() { Err(PortError::Cancelled) } else { Ok(()) }
+        if self.is_cancelled() {
+            Err(PortError::Cancelled)
+        } else {
+            Ok(())
+        }
     }
 }
 

@@ -1,0 +1,298 @@
+import { ScrollView, LineEdit, Switch, ComboBox, SpinBox } from "std-widgets.slint";
+
+// Design tokens
+global T {
+    out property <color> bg: #0e1116;
+    out property <color> panel: #171b22;
+    out property <color> line: #262c36;
+    out property <color> text: #e9ecf1;
+    out property <color> muted: #9aa3b2;
+    out property <color> good: #3ddc97;
+    out property <color> warn: #ffa94d;
+    out property <color> bad: #ff6b6b;
+}
+
+export struct Chip { name: string, color: color, count: int, selected: bool }
+export struct Card { title: string, short: string, color: color, cover-w: int, cover-h: int }
+export struct RunnerOpt { name: string, selected: bool, installed: bool }
+export struct CheckRow { blocks: bool, text: string }
+export struct Setting { label: string, hint: string, kind: int, on: bool, number: int, min: int, max: int, step: int, text: string, options: [string], selected: int }
+export struct NavRow { heading: bool, label: string, active: bool }
+export struct PluginRow { id: string, version: string, provides: string, notes: string }
+export struct KeptRow { what: string, detail: string }
+
+component Btn inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    callback clicked();
+    height: 44px;
+    width: max(96px, bt.preferred-width + 36px);
+    border-radius: 10px;
+    background: primary ? T.text : T.panel;
+    border-width: primary ? 0px : 1px;
+    border-color: T.line;
+    ta := TouchArea { clicked => { root.clicked(); } }
+    bt := Text { text: root.label; color: root.primary ? T.bg : T.text; font-size: 15px; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+    states [ hover when ta.has-hover: { opacity: 0.85; } ]
+}
+
+component Pill inherits Rectangle {
+    in property <string> label;
+    in property <color> tint;
+    background: tint;
+    border-radius: 6px;
+    height: 22px;
+    width: t.preferred-width + 16px;
+    t := Text { text: root.label; color: #0b0d11; font-size: 12px; font-weight: 800; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+component Section inherits Rectangle {
+    in property <string> title;
+    background: T.panel;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: T.line;
+    @children
+}
+
+export component AppWindow inherits Window {
+    title: "Launcher";
+    background: T.bg;
+    min-width: 960px;
+    min-height: 600px;
+    preferred-width: 1280px;
+    preferred-height: 800px;
+
+    // 0 library, 1 game hub, 2 settings
+    in property <int> screen;
+    in property <[Chip]> chips;
+    in property <[Card]> cards;
+    in property <string> empty-title;
+    in property <string> empty-text;
+    in property <string> hub-title;
+    in property <string> hub-short;
+    in property <color> hub-color;
+    in property <[RunnerOpt]> runners;
+    in property <[CheckRow]> checks;
+    in property <[Setting]> settings;
+    in property <bool> can-play;
+    in property <string> no-runner-text;
+    in property <[NavRow]> nav;
+    in property <string> page-title;
+    in property <[PluginRow]> plugins;
+    in property <[KeptRow]> kept;
+    in property <bool> overview;
+    in property <string> message;
+
+    callback filter(int);
+    callback open-card(int);
+    callback back();
+    callback open-settings();
+    callback nav-click(int);
+    callback choose-runner(int);
+    callback play();
+    callback toggle(int, bool);
+    callback step(int, int);
+    callback edit-text(int, string);
+    callback pick(int, int);
+    callback search(string);
+
+    VerticalLayout {
+        // top bar
+        Rectangle {
+            height: 72px;
+            HorizontalLayout {
+                padding-left: 32px; padding-right: 32px; spacing: 12px;
+                if root.screen == 0: HorizontalLayout {
+                    spacing: 12px;
+                    Text { text: "Launcher"; color: T.text; font-size: 18px; font-weight: 800; vertical-alignment: center; }
+                    for chip[i] in root.chips: VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        height: 40px;
+                        width: ct.preferred-width + 32px;
+                        border-radius: 20px;
+                        background: chip.selected ? T.text : T.panel;
+                        border-width: 1px; border-color: T.line;
+                        TouchArea { clicked => { root.filter(i); } }
+                        ct := Text {
+                            text: chip.name + "  " + chip.count;
+                            color: chip.selected ? T.bg : T.text; font-size: 15px; font-weight: 700;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                    }
+                    }
+                }
+                if root.screen != 0: VerticalLayout { alignment: center; Btn { label: "Back"; clicked => { root.back(); } } }
+                if root.screen != 0: Text { text: root.screen == 1 ? root.hub-title : "Settings"; color: T.text; font-size: 20px; font-weight: 800; vertical-alignment: center; }
+                Rectangle { horizontal-stretch: 1; }
+                if root.screen == 0: VerticalLayout { alignment: center; Btn { label: "Settings"; clicked => { root.open-settings(); } } }
+            }
+            Rectangle { y: parent.height - 1px; height: 1px; background: T.line; }
+        }
+
+        // library
+        if root.screen == 0: VerticalLayout {
+            padding: 28px; spacing: 20px;
+            if root.empty-title != "": VerticalLayout {
+                alignment: center; spacing: 12px;
+                Text { text: root.empty-title; color: T.text; font-size: 30px; font-weight: 800; horizontal-alignment: center; }
+                Text { text: root.empty-text; color: T.muted; font-size: 16px; horizontal-alignment: center; wrap: word-wrap; }
+            }
+            if root.empty-title == "": VerticalLayout {
+                spacing: 14px;
+                LineEdit { placeholder-text: "Search games"; edited(t) => { root.search(t); } }
+                ScrollView {
+                    HorizontalLayout {
+                        spacing: 20px; alignment: start;
+                        for card[i] in root.cards: VerticalLayout {
+                            spacing: 8px; alignment: start;
+                            Rectangle {
+                                width: 200px * (card.cover-w / card.cover-h); height: 200px;
+                                border-radius: 12px; border-width: 1px; border-color: T.line;
+                                background: @linear-gradient(160deg, card.color.with-alpha(0.35) 0%, T.panel 80%);
+                                TouchArea { clicked => { root.open-card(i); } }
+                                Pill { x: 10px; y: 10px; label: card.short; tint: card.color; }
+                            }
+                            Text { text: card.title; color: T.text; font-size: 14px; font-weight: 700; overflow: elide; width: 200px * (card.cover-w / card.cover-h); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // game hub
+        if root.screen == 1: HorizontalLayout {
+            padding: 32px; spacing: 32px;
+            VerticalLayout {
+                width: 280px; spacing: 14px; alignment: start;
+                Rectangle {
+                    height: 360px; border-radius: 16px; border-width: 1px; border-color: T.line;
+                    background: @linear-gradient(160deg, root.hub-color.with-alpha(0.35) 0%, T.panel 80%);
+                    Pill { x: 12px; y: 12px; label: root.hub-short; tint: root.hub-color; }
+                }
+                Btn { label: "Play"; primary: true; height: 52px; opacity: root.can-play ? 1 : 0.4; clicked => { if (root.can-play) { root.play(); } } }
+            }
+            VerticalLayout {
+                spacing: 16px;
+                Text { text: root.hub-title; color: T.text; font-size: 32px; font-weight: 800; }
+                if root.no-runner-text != "": Text { text: root.no-runner-text; color: T.warn; font-size: 15px; wrap: word-wrap; }
+                if root.runners.length > 0: Section {
+                    height: 56px + 44px * root.runners.length;
+                    VerticalLayout {
+                        padding: 16px; spacing: 6px;
+                        Text { text: "RUNS WITH"; color: T.muted; font-size: 12px; font-weight: 800; }
+                        for r[i] in root.runners: Rectangle {
+                            height: 38px; border-radius: 10px; border-width: 1px;
+                            border-color: r.selected ? T.text : T.line;
+                            TouchArea { clicked => { root.choose-runner(i); } }
+                            HorizontalLayout {
+                                padding-left: 12px; padding-right: 12px; spacing: 10px;
+                                Text { text: r.name; color: T.text; font-size: 15px; font-weight: 700; vertical-alignment: center; }
+                                Text { text: r.installed ? "ready" : "not installed"; color: T.muted; font-size: 13px; vertical-alignment: center; }
+                            }
+                        }
+                    }
+                }
+                if root.checks.length > 0: Section {
+                    height: 48px + 28px * root.checks.length;
+                    VerticalLayout {
+                        padding: 16px; spacing: 4px;
+                        Text { text: "THIS COMPUTER"; color: T.muted; font-size: 12px; font-weight: 800; }
+                        for c in root.checks: Text { text: (c.blocks ? "Blocks: " : "Slower: ") + c.text; color: c.blocks ? T.bad : T.warn; font-size: 14px; }
+                    }
+                }
+                Text { text: "SETTINGS"; color: T.muted; font-size: 12px; font-weight: 800; }
+                ScrollView {
+                    VerticalLayout {
+                        spacing: 4px;
+                        for s[i] in root.settings: Rectangle {
+                            height: 52px;
+                            HorizontalLayout {
+                                spacing: 16px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Text { text: s.label; color: T.text; font-size: 15px; font-weight: 700; }
+                                    if s.hint != "": Text { text: s.hint; color: T.muted; font-size: 12px; }
+                                }
+                                if s.kind == 0: Switch { checked: s.on; toggled => { root.toggle(i, self.checked); } }
+                                if s.kind == 1: ComboBox { model: s.options; current-index: s.selected; selected(v) => { root.pick(i, self.current-index); } width: 180px; }
+                                if s.kind == 2: SpinBox { minimum: s.min; maximum: s.max; value: s.number; step-size: s.step; edited(v) => { root.step(i, v); } width: 140px; }
+                                if s.kind >= 3: LineEdit { text: s.text; accepted(t) => { root.edit-text(i, t); } width: 220px; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // settings
+        if root.screen == 2: HorizontalLayout {
+            VerticalLayout {
+                width: 260px; padding: 20px; spacing: 4px; alignment: start;
+                for n[i] in root.nav: Rectangle {
+                    height: n.heading ? 40px : 40px; border-radius: 10px;
+                    background: n.active ? T.text : transparent;
+                    if !n.heading: TouchArea { clicked => { root.nav-click(i); } }
+                    Text {
+                        x: 12px; text: n.label; vertical-alignment: center;
+                        color: n.active ? T.bg : (n.heading ? T.muted : T.text);
+                        font-size: n.heading ? 12px : 15px; font-weight: n.heading || n.active ? 800 : 600;
+                    }
+                }
+            }
+            VerticalLayout {
+                padding: 32px; spacing: 16px;
+                if root.overview: VerticalLayout {
+                    spacing: 12px;
+                    Text { text: "Plugins"; color: T.text; font-size: 28px; font-weight: 800; }
+                    if root.plugins.length == 0: Text { text: "No plugins are installed."; color: T.muted; font-size: 15px; }
+                    ScrollView {
+                        VerticalLayout {
+                            spacing: 10px;
+                            for p in root.plugins: Section {
+                                height: 76px;
+                                VerticalLayout {
+                                    padding: 14px; spacing: 4px;
+                                    Text { text: p.id + "  " + p.version; color: T.text; font-size: 16px; font-weight: 800; }
+                                    Text { text: p.provides; color: T.muted; font-size: 13px; }
+                                    if p.notes != "": Text { text: p.notes; color: T.muted; font-size: 12px; }
+                                }
+                            }
+                            for k in root.kept: Text { text: "Kept: " + k.what + " (" + k.detail + ")"; color: T.warn; font-size: 14px; }
+                        }
+                    }
+                }
+                if !root.overview: VerticalLayout {
+                    spacing: 12px;
+                    Text { text: root.page-title; color: T.text; font-size: 28px; font-weight: 800; }
+                    ScrollView {
+                        VerticalLayout {
+                            spacing: 4px;
+                            for s[i] in root.settings: Rectangle {
+                                height: 52px;
+                                HorizontalLayout {
+                                    spacing: 16px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Text { text: s.label; color: T.text; font-size: 15px; font-weight: 700; }
+                                        if s.hint != "": Text { text: s.hint; color: T.muted; font-size: 12px; }
+                                    }
+                                    if s.kind == 0: Switch { checked: s.on; toggled => { root.toggle(i, self.checked); } }
+                                    if s.kind == 1: ComboBox { model: s.options; current-index: s.selected; selected(v) => { root.pick(i, self.current-index); } width: 180px; }
+                                    if s.kind == 2: SpinBox { minimum: s.min; maximum: s.max; value: s.number; step-size: s.step; edited(v) => { root.step(i, v); } width: 140px; }
+                                    if s.kind >= 3: LineEdit { text: s.text; accepted(t) => { root.edit-text(i, t); } width: 220px; }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if root.message != "": Rectangle {
+            height: 40px; background: T.panel;
+            Text { x: 32px; text: root.message; color: T.text; font-size: 14px; vertical-alignment: center; }
+        }
+    }
+}

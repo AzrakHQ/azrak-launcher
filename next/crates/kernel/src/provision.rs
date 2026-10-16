@@ -36,4 +36,6 @@ pub struct Provision {
     #[serde(default = "two")]
     pub keep: u8,
 }
-fn two() -> u8 { 2 }
+fn two() -> u8 {
+    2
+}

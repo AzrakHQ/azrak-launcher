@@ -142,3 +142,21 @@ Design source: the canvas screens (library, library with a plugin removed, empty
 5. Run the fixture-capture script against the current app.
 
 Decision point at the end of week two: review the kernel API with the toy plugin and the spike, then commit to phase 2.
+
+## 9. Status
+
+Built in `next/` (see `next/README.md`). All checks pass: `cargo test --workspace`, the removal matrix (no extensions, each alone, each removed, the toy alone), the dependency rule and vocabulary gates, and the Slint shell rendered with the software renderer for review (`target/shots`).
+
+| Phase | State |
+|---|---|
+| 0 Foundations | Done: workspace, dependency-rule test, vocabulary lint, removal matrix script, CI workflow |
+| 1 Kernel and test kit | Done: types, traits, ports, registry, toy plugin, contract suites |
+| 2 Application core, headless shell | Done: lossless versioned config with v1 migration, settings, library, sessions, assessment, catalog manifest, CLI |
+| 3 Install engine | Done for folders and `.tar.gz`: staged commit, limits on written bytes, symlinks refused, traversal refused, ambiguity refused. Not done: zip/7z/rar/exFAT/package containers, fd-relative writes, expansion-ratio limit, fuzz targets |
+| 4 Provision, launch, assess | Done: provisioning engine (GitHub or URL source, digest check, activate, rollback, prune), launch templates, declarative requirements. Not done: signature verification, fact collectors for real hardware (CPU flags, Vulkan) |
+| 5 Catalog and transfer | Partly: catalog manifest, snapshot, offline filtering, source trait. Not done: a real feed source, torrent transfer, metadata providers, image cache, replacing the Node collector |
+| 6 Slint shell | Library, game hub, settings (plugins overview and generated runner pages) render from `ui_model::View`, windowed build compiles. Not done: gamepad focus graph, download/install screens, controls sheet screen, screenshot diffing (images are produced, not compared), localised chrome strings (the `Text` machinery exists; labels in the `.slint` file are literals) |
+| 7 Real plugins | Native PC and a no-code example only. The two console systems and their emulators are not ported; their knowledge (package formats, compatibility lists, hardware tables, launch lines) still lives in the old app |
+| 8 Platform, cut-over | Not started: macOS adapters beyond `ps`-based detection, self-update, network profile, kiosk, settings importer for the old app's file, parity checklist |
+
+Deviations from the design: services are plain synchronous functions rather than tokio actors (nothing here needs a runtime yet; add one when transfer lands), permissions in plugin manifests are declared and shown but not yet enforced by the ports, and the `zip` container was skipped because the crate was not available offline.

@@ -14,4 +14,6 @@ for f in "${FEATURES[@]}"; do             # everything except one
   run "$rest"
 done
 run "toy"                                 # the toy plugin alone
+echo "== launcher-ui (software renderer) with no extensions"
+cargo check -q -p launcher-ui --no-default-features
 echo "removal matrix passed"

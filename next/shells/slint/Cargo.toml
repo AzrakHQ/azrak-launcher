@@ -1,0 +1,26 @@
+[package]
+name = "launcher-ui"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["native-pc", "window"]
+native-pc = ["launcher/native-pc"]
+toy = ["launcher/toy"]
+# A real window (winit + GPU renderer). Without it only the software renderer is built, which is what tests use.
+window = ["slint/backend-winit", "slint/renderer-femtovg"]
+
+[dependencies]
+kernel.workspace = true
+ui-model.workspace = true
+host.workspace = true
+launcher.workspace = true
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "renderer-software"] }
+
+[build-dependencies]
+slint-build = "1.18"
+
+[dev-dependencies]
+tempfile.workspace = true
+testkit.workspace = true
+engines.workspace = true

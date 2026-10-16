@@ -44,12 +44,17 @@ fn substitute(s: &str, i: &LaunchInputs<'_>) -> Result<String, LaunchError> {
     while let Some(start) = rest.find('{') {
         out.push_str(&rest[..start]);
         let after = &rest[start + 1..];
-        let end = after.find('}').ok_or_else(|| LaunchError::Placeholder(after.to_string()))?;
+        let end = after
+            .find('}')
+            .ok_or_else(|| LaunchError::Placeholder(after.to_string()))?;
         let name = &after[..end];
         let value = if name == "game" {
             i.game_root.display().to_string()
         } else if let Some(key) = name.strip_prefix("setting.") {
-            i.settings.get(key).ok_or_else(|| LaunchError::Placeholder(name.to_string()))?.render()
+            i.settings
+                .get(key)
+                .ok_or_else(|| LaunchError::Placeholder(name.to_string()))?
+                .render()
         } else {
             return Err(LaunchError::Placeholder(name.to_string()));
         };
@@ -74,10 +79,14 @@ impl LaunchTemplate {
     pub fn render(&self, i: &LaunchInputs<'_>) -> Result<LaunchPlan, LaunchError> {
         let mut args = Vec::new();
         for a in &self.args {
-            if guard(&a.when, i.settings) { args.push(substitute(&a.value, i)?); }
+            if guard(&a.when, i.settings) {
+                args.push(substitute(&a.value, i)?);
+            }
         }
         let mut env = BTreeMap::new();
-        for (k, v) in &self.env { env.insert(k.clone(), substitute(v, i)?); }
+        for (k, v) in &self.env {
+            env.insert(k.clone(), substitute(v, i)?);
+        }
         Ok(LaunchPlan {
             program: i.runner_exe.to_path_buf(),
             args,
@@ -94,10 +103,22 @@ mod tests {
     fn t() -> LaunchTemplate {
         LaunchTemplate {
             args: vec![
-                ArgTemplate { value: "--fullscreen".into(), when: Some("fs".into()) },
-                ArgTemplate { value: "--windowed".into(), when: Some("!fs".into()) },
-                ArgTemplate { value: "--fps={setting.fps}".into(), when: None },
-                ArgTemplate { value: "{game}".into(), when: None },
+                ArgTemplate {
+                    value: "--fullscreen".into(),
+                    when: Some("fs".into()),
+                },
+                ArgTemplate {
+                    value: "--windowed".into(),
+                    when: Some("!fs".into()),
+                },
+                ArgTemplate {
+                    value: "--fps={setting.fps}".into(),
+                    when: None,
+                },
+                ArgTemplate {
+                    value: "{game}".into(),
+                    when: None,
+                },
             ],
             env: BTreeMap::new(),
             cwd_game: true,
@@ -108,17 +129,41 @@ mod tests {
         let mut s = Settings::new();
         s.insert("fs".into(), Value::Bool(true));
         s.insert("fps".into(), Value::Int(60));
-        let plan = t().render(&LaunchInputs { runner_exe: Path::new("/r/exe"), game_root: Path::new("/g"), settings: &s }).unwrap();
+        let plan = t()
+            .render(&LaunchInputs {
+                runner_exe: Path::new("/r/exe"),
+                game_root: Path::new("/g"),
+                settings: &s,
+            })
+            .unwrap();
         assert_eq!(plan.args, vec!["--fullscreen", "--fps=60", "/g"]);
         assert_eq!(plan.cwd, Some(PathBuf::from("/g")));
         s.insert("fs".into(), Value::Bool(false));
-        let plan = t().render(&LaunchInputs { runner_exe: Path::new("/r/exe"), game_root: Path::new("/g"), settings: &s }).unwrap();
+        let plan = t()
+            .render(&LaunchInputs {
+                runner_exe: Path::new("/r/exe"),
+                game_root: Path::new("/g"),
+                settings: &s,
+            })
+            .unwrap();
         assert_eq!(plan.args[0], "--windowed");
     }
     #[test]
     fn unknown_placeholder_is_an_error_not_a_shell() {
-        let tpl = LaunchTemplate { args: vec![ArgTemplate { value: "{env.HOME}".into(), when: None }], ..Default::default() };
+        let tpl = LaunchTemplate {
+            args: vec![ArgTemplate {
+                value: "{env.HOME}".into(),
+                when: None,
+            }],
+            ..Default::default()
+        };
         let s = Settings::new();
-        assert!(tpl.render(&LaunchInputs { runner_exe: Path::new("x"), game_root: Path::new("g"), settings: &s }).is_err());
+        assert!(tpl
+            .render(&LaunchInputs {
+                runner_exe: Path::new("x"),
+                game_root: Path::new("g"),
+                settings: &s
+            })
+            .is_err());
     }
 }

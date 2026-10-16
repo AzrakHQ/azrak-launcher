@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 
 /// Cover aspect ratio as width:height.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Cover { pub w: u16, pub h: u16 }
+pub struct Cover {
+    pub w: u16,
+    pub h: u16,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Style {
@@ -39,13 +42,20 @@ pub struct SystemDescriptor {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProcessMatch { pub names: Vec<String> }
+pub struct ProcessMatch {
+    pub names: Vec<String>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ControlRow { pub action: Text, pub input: String }
+pub struct ControlRow {
+    pub action: Text,
+    pub input: String,
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Controls { pub rows: Vec<ControlRow> }
+pub struct Controls {
+    pub rows: Vec<ControlRow>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunnerDescriptor {
@@ -68,4 +78,6 @@ pub struct RunnerDescriptor {
     #[serde(default = "yes")]
     pub needs_executable: bool,
 }
-fn yes() -> bool { true }
+fn yes() -> bool {
+    true
+}

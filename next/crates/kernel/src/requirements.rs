@@ -25,7 +25,10 @@ pub enum Expr {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Severity { Blocks, Slows }
+pub enum Severity {
+    Blocks,
+    Slows,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Requirement {
@@ -41,13 +44,18 @@ pub struct Verdict {
 }
 
 impl Verdict {
-    pub fn ok(&self) -> bool { self.blocks.is_empty() }
+    pub fn ok(&self) -> bool {
+        self.blocks.is_empty()
+    }
 }
 
 impl Expr {
     pub fn holds(&self, f: &Facts) -> bool {
         match self {
-            Expr::Has(k) => matches!(f.get(k), Some(Fact::Bool(true))) || matches!(f.get(k), Some(Fact::Num(n)) if *n != 0.0),
+            Expr::Has(k) => {
+                matches!(f.get(k), Some(Fact::Bool(true)))
+                    || matches!(f.get(k), Some(Fact::Num(n)) if *n != 0.0)
+            }
             Expr::AtLeast(k, n) => matches!(f.get(k), Some(Fact::Num(v)) if v >= n),
             Expr::Not(e) => !e.holds(f),
             Expr::All(es) => es.iter().all(|e| e.holds(f)),
@@ -56,7 +64,9 @@ impl Expr {
     }
     pub fn keys(&self, out: &mut std::collections::BTreeSet<String>) {
         match self {
-            Expr::Has(k) | Expr::AtLeast(k, _) => { out.insert(k.clone()); }
+            Expr::Has(k) | Expr::AtLeast(k, _) => {
+                out.insert(k.clone());
+            }
             Expr::Not(e) => e.keys(out),
             Expr::All(es) | Expr::AnyOf(es) => es.iter().for_each(|e| e.keys(out)),
         }
@@ -86,9 +96,21 @@ mod tests {
         f.insert("ram.gib".into(), Fact::Num(8.0));
         f.insert("cpu.flag.avx2".into(), Fact::Bool(true));
         let reqs = vec![
-            Requirement { expr: Expr::AtLeast("ram.gib".into(), 16.0), severity: Severity::Blocks, message: "ram".into() },
-            Requirement { expr: Expr::Has("cpu.flag.avx2".into()), severity: Severity::Blocks, message: "avx2".into() },
-            Requirement { expr: Expr::AnyOf(vec![Expr::Has("gpu.x".into()), Expr::Has("gpu.y".into())]), severity: Severity::Slows, message: "gpu".into() },
+            Requirement {
+                expr: Expr::AtLeast("ram.gib".into(), 16.0),
+                severity: Severity::Blocks,
+                message: "ram".into(),
+            },
+            Requirement {
+                expr: Expr::Has("cpu.flag.avx2".into()),
+                severity: Severity::Blocks,
+                message: "avx2".into(),
+            },
+            Requirement {
+                expr: Expr::AnyOf(vec![Expr::Has("gpu.x".into()), Expr::Has("gpu.y".into())]),
+                severity: Severity::Slows,
+                message: "gpu".into(),
+            },
         ];
         let v = evaluate(&reqs, &f);
         assert_eq!(v.blocks, vec![Text::new("ram")]);

@@ -26,16 +26,27 @@ pub trait Runner: Send + Sync {
     fn descriptor(&self) -> &RunnerDescriptor;
 
     /// Pure launch planning. The default renders the descriptor's template.
-    fn plan(&self, runner_exe: &Path, game: &InstalledGame, settings: &Settings) -> Result<LaunchPlan, LaunchError> {
+    fn plan(
+        &self,
+        runner_exe: &Path,
+        game: &InstalledGame,
+        settings: &Settings,
+    ) -> Result<LaunchPlan, LaunchError> {
         self.descriptor()
             .launch
             .as_ref()
             .ok_or(LaunchError::NoTemplate)?
-            .render(&LaunchInputs { runner_exe, game_root: &game.root, settings })
+            .render(&LaunchInputs {
+                runner_exe,
+                game_root: &game.root,
+                settings,
+            })
     }
 
     /// Where files of a role land inside the game folder. The consumer of the files knows where it looks.
-    fn layout(&self, _role: Role, _key: &GameKey) -> RelPath { RelPath::root() }
+    fn layout(&self, _role: Role, _key: &GameKey) -> RelPath {
+        RelPath::root()
+    }
 }
 
 pub trait CatalogSource: Send + Sync {
@@ -43,7 +54,11 @@ pub trait CatalogSource: Send + Sync {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Confidence { No, Maybe, Yes }
+pub enum Confidence {
+    No,
+    Maybe,
+    Yes,
+}
 
 pub trait Container: Send + Sync {
     fn sniff(&self, head: &[u8], file_name: &str) -> Confidence;
@@ -51,7 +66,13 @@ pub trait Container: Send + Sync {
 }
 
 pub trait MetadataProvider: Send + Sync {
-    fn lookup(&self, system: &crate::ids::SystemId, key: &GameKey, name: &str, ctx: &Ctx) -> Result<Option<GameInfo>, PortError>;
+    fn lookup(
+        &self,
+        system: &crate::ids::SystemId,
+        key: &GameKey,
+        name: &str,
+        ctx: &Ctx,
+    ) -> Result<Option<GameInfo>, PortError>;
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -99,4 +120,6 @@ pub type DynMetadata = Arc<dyn MetadataProvider>;
 pub type DynCollector = Arc<dyn FactCollector>;
 pub type DynCompat = Arc<dyn CompatSource>;
 
-pub fn provider(id: &str) -> ProviderId { ProviderId::new(id) }
+pub fn provider(id: &str) -> ProviderId {
+    ProviderId::new(id)
+}
