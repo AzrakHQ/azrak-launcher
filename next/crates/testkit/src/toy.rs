@@ -28,7 +28,7 @@ impl System for ToySystem {
         let name = tree.read(&marker).ok().and_then(|b| String::from_utf8(b).ok()).unwrap_or_default().trim().to_string();
         let key = tree.name();
         let name = if name.is_empty() { key.clone() } else { name };
-        vec![Recognised { key: GameKey::new(key), name, role: Role::Game, root: RelPath::root() }]
+        vec![Recognised { key: GameKey::new(key), name, role: Role::Game, root: RelPath::root(), extra: serde_json::Value::Null }]
     }
 }
 
@@ -59,6 +59,7 @@ impl ToyRunner {
                 cwd_game: false,
             }),
             provision: None,
+            needs_executable: true,
         })
     }
 }

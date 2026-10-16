@@ -10,7 +10,7 @@ for f in "${FEATURES[@]}"; do run "$f"; done   # each alone
 all="${FEATURES[*]}"; all="${all// /,}"
 run "$all"                                # everything
 for f in "${FEATURES[@]}"; do             # everything except one
-  rest=$(printf '%s\n' "${FEATURES[@]}" | grep -vx "$f" | paste -sd, -)
+  rest=$(printf "%s\n" "${FEATURES[@]}" | { grep -vx "$f" || true; } | paste -sd, -)
   run "$rest"
 done
 run "toy"                                 # the toy plugin alone

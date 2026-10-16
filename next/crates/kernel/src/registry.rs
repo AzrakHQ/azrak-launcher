@@ -36,6 +36,7 @@ pub struct Registry {
     containers: Vec<DynContainer>,
     collectors: Vec<DynCollector>,
     compat: Vec<DynCompat>,
+    provides: BTreeMap<String, Vec<&'static str>>,
 }
 
 impl Registry {
@@ -51,6 +52,13 @@ impl Registry {
             }
             let mut r = Registrar::default();
             p.register(&mut r);
+            let mut kinds = vec![];
+            for (n, c) in [("system", r.systems.len()), ("runner", r.runners.len()), ("catalog source", r.sources.len()),
+                           ("metadata", r.metadata.len()), ("container", r.containers.len()),
+                           ("fact collector", r.collectors.len()), ("compatibility list", r.compat.len())] {
+                if c > 0 { kinds.push(n); }
+            }
+            reg.provides.insert(m.id.clone(), kinds);
             for s in r.systems {
                 let id = s.descriptor().id.to_string();
                 if reg.systems.iter().any(|x| x.descriptor().id.as_str() == id) { return Err(RegistryError::Duplicate("system", id)); }
@@ -75,6 +83,10 @@ impl Registry {
         Ok(reg)
     }
 
+    /// What a plugin registered, as display words. Derived, so it cannot drift from reality.
+    pub fn provides(&self, plugin: &str) -> Vec<String> {
+        self.provides.get(plugin).map(|v| v.iter().map(|s| s.to_string()).collect()).unwrap_or_default()
+    }
     pub fn manifests(&self) -> &[Manifest] { &self.manifests }
     pub fn systems(&self) -> &[DynSystem] { &self.systems }
     pub fn system(&self, id: &SystemId) -> Option<&DynSystem> { self.systems.iter().find(|s| s.descriptor().id == *id) }

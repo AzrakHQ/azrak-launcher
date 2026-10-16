@@ -64,4 +64,8 @@ pub struct RunnerDescriptor {
     pub launch: Option<LaunchTemplate>,
     #[serde(default)]
     pub provision: Option<Provision>,
+    /// False for runners that need no separate program (a native game launches itself).
+    #[serde(default = "yes")]
+    pub needs_executable: bool,
 }
+fn yes() -> bool { true }

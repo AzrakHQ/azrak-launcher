@@ -158,7 +158,7 @@ pub fn install(reg: &Registry, source: &Path, games_dir: &Path, limits: &Limits,
         extract(tree.as_ref(), &rec.root, &layout.to_path(&game_root), limits, cancel)?;
         let game = InstalledGame {
             game: GameRef { system: sys.clone(), key: rec.key.clone() },
-            name: rec.name.clone(), root: game_root.clone(), extra: serde_json::Value::Null,
+            name: rec.name.clone(), root: game_root.clone(), extra: rec.extra.clone(),
         };
         if rec.role == Role::Game {
             let meta = game_root.join(GAME_FILE);
@@ -244,7 +244,7 @@ mod tests {
                 impl System for S {
                     fn descriptor(&self) -> &SystemDescriptor { &self.0 }
                     fn recognise(&self, t: &dyn Tree) -> Vec<Recognised> {
-                        if t.exists(&RelPath::new(toy::MARKER).unwrap()) { vec![Recognised { key: GameKey::new(t.name()), name: "x".into(), role: Role::Game, root: RelPath::root() }] } else { vec![] }
+                        if t.exists(&RelPath::new(toy::MARKER).unwrap()) { vec![Recognised { key: GameKey::new(t.name()), name: "x".into(), role: Role::Game, root: RelPath::root(), extra: serde_json::Value::Null }] } else { vec![] }
                     }
                 }
                 let mut d = testkit::toy::ToySystem::new().descriptor().clone();

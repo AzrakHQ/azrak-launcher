@@ -39,7 +39,7 @@ impl System for DeclSystem {
     fn recognise(&self, tree: &dyn Tree) -> Vec<Recognised> {
         if self.markers.is_empty() || !self.markers.iter().all(|m| tree.exists(m)) { return vec![]; }
         let key = tree.name();
-        vec![Recognised { name: key.clone(), key: GameKey::new(key), role: Role::Game, root: RelPath::root() }]
+        vec![Recognised { name: key.clone(), key: GameKey::new(key), role: Role::Game, root: RelPath::root(), extra: serde_json::Value::Null }]
     }
 }
 

@@ -372,8 +372,12 @@ dependencies = [
  "host",
  "kernel",
  "native-pc",
+ "serde",
  "serde_json",
+ "tempfile",
  "testkit",
+ "thiserror",
+ "ui-model",
 ]
 
 [[package]]
@@ -425,6 +429,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "testkit",
+ "toml",
 ]
 
 [[package]]

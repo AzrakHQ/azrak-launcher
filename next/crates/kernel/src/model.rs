@@ -38,6 +38,8 @@ pub struct Recognised {
     pub role: Role,
     /// Subtree of the source that belongs to this game.
     pub root: RelPath,
+    /// Opaque data the system wants kept with the installed game (the runner of this system reads it).
+    pub extra: serde_json::Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
