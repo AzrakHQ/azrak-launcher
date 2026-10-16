@@ -1,0 +1,18 @@
+[package]
+name = "engines"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+sha2.workspace = true
+tar.workspace = true
+flate2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+testkit.workspace = true

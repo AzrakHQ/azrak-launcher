@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/kernel", "crates/engines", "crates/application", "crates/testkit",
+  "crates/ui-model", "crates/host", "shells/cli", "extensions/native-pc", "gates",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+toml = "1"
+sha2 = "0.10"
+tar = "0.4"
+flate2 = "1"
+tempfile = "3"
+kernel = { path = "crates/kernel" }
+engines = { path = "crates/engines" }
+application = { path = "crates/application" }
+testkit = { path = "crates/testkit" }
+ui-model = { path = "crates/ui-model" }
+host = { path = "crates/host" }
+native-pc = { path = "extensions/native-pc" }

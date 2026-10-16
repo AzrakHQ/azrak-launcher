@@ -1,0 +1,18 @@
+[package]
+name = "launcher"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["native-pc"]
+native-pc = ["dep:native-pc"]
+toy = ["dep:testkit"]
+
+[dependencies]
+kernel.workspace = true
+engines.workspace = true
+application.workspace = true
+host.workspace = true
+serde_json.workspace = true
+native-pc = { workspace = true, optional = true }
+testkit = { workspace = true, optional = true }

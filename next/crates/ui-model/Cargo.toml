@@ -1,0 +1,14 @@
+[package]
+name = "ui-model"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kernel.workspace = true
+application.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+testkit.workspace = true
+tempfile.workspace = true
