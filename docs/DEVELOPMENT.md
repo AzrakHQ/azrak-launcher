@@ -116,7 +116,9 @@ and can be combined with genres and search. Counts reflect those combinations wi
 duplicating release variants. Genre-row arrows expose options beyond the viewport.
 Click the sort control or press Enter on it to open all seven sort choices; arrows select,
 Enter applies, and Escape cancels. Page Up/Down on the closed sort control cycles directly.
-Keyboard/controller navigation follows search/sort/density → status filters → genres → grid.
+Keyboard/controller navigation follows search/sort/density → status filters → genres → grid,
+and Up walks back the same way. Pressing a chosen filter again goes back to All; pressing the
+chosen **All** or **All genres** goes down to the games.
 
 The welcome screen and app assets use an original white/electric-blue **P5 chassis emblem**,
 not the former generic play-button icon. Source installation updates the matching desktop icon.

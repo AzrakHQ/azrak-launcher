@@ -1821,6 +1821,21 @@ impl App {
                 }
                 Act::Confirm => {
                     if let Some((g, _)) = self.genre_list.get(self.idx as usize).cloned() {
+                        let i = self.idx as usize;
+                        let chosen = if i == 0 { self.status_filter == "All" && self.platform_filter.is_none() }
+                            else if i < n as usize { self.console_chip(i).is_none() && self.status_filter == g }
+                            else { self.genre == g || (i == n as usize && self.genre == "All") };
+                        // The chip that's already chosen: "All" (or "All genres") takes you to the
+                        // games; any other one goes back to All, like pressing a toggle again.
+                        if chosen && (i == 0 || i == n as usize) {
+                            if !self.filtered.is_empty() {
+                                let first = self.first_visible_card();
+                                self.move_focus(Z_GRID, first as i32);
+                                self.focus_card_changed();
+                            }
+                            return;
+                        }
+                        let g = if chosen { if i < n as usize { "All".to_string() } else { "All genres".to_string() } } else { g };
                         if let Some(p) = self.console_chip(self.idx as usize) {
                             // A console chip toggles: press it again to see every console.
                             self.platform_filter = if self.platform_filter == Some(p) { None } else { Some(p) };
