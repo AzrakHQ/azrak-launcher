@@ -5,7 +5,7 @@
 
 use crate::app::*;
 use crate::audio::{self, Sound};
-use crate::system::{self, Disk, InstallEvent};
+use crate::os::system::{self, Disk, InstallEvent};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Phase {

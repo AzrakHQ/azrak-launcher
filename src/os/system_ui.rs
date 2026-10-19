@@ -4,7 +4,7 @@
 
 use crate::app::*;
 use crate::settings::SId;
-use crate::system::{self, Device, Network, Output, Update, Wifi};
+use crate::os::system::{self, Device, Network, Output, Update, Wifi};
 use crate::SettingData;
 
 #[derive(Default)]

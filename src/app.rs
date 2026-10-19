@@ -56,9 +56,9 @@ pub enum Overlay {
     Sort = 8,
     Trailer = 9,
     Controls = 10,
-    /// Install AzrakOS from the USB stick (os_install.rs).
+    /// Install AzrakOS from the USB stick (os/install.rs).
     OsInstall = 11,
-    /// The password for a Wi-Fi network (wifi_join.rs).
+    /// The password for a Wi-Fi network (os/wifi_join.rs).
     WifiJoin = 12,
 }
 
@@ -259,12 +259,12 @@ pub struct App {
     net_watch: slint::Timer,
     net_retry: NetRetry,
     /// Settings → SYSTEM on AzrakOS.
-    pub sys: crate::system_ui::SysUi,
-    pub osi: crate::os_install::OsInstall,
+    pub sys: crate::os::system_ui::SysUi,
+    pub osi: crate::os::install::OsInstall,
     /// On the AzrakOS USB stick the launcher's own start (first run?, catalog stale?) waits for
-    /// "Try AzrakOS" (os_install.rs).
+    /// "Try AzrakOS" (os/install.rs).
     pub held_start: Option<(bool, bool)>,
-    pub wj: crate::wifi_join::WifiJoin,
+    pub wj: crate::os::wifi_join::WifiJoin,
     /// This PC's processor, memory and graphics (read in the background at start).
     pub pc: Option<crate::pc::Specs>,
     pub pc_checking: bool,
@@ -464,7 +464,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
     with_app(move |app| {
         // From the AzrakOS USB stick: first the choice to try AzrakOS or install it. The launcher
         // sets itself up (catalog, artwork, emulators) only when it's tried.
-        if crate::system::on_usb() {
+        if crate::os::system::on_usb() {
             app.held_start = Some((first_run, stale));
             app.os_install_welcome();
         } else {

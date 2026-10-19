@@ -9,7 +9,7 @@ use crate::SettingData;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SId {
     Header,
-    // System (AzrakOS only; see system_ui.rs)
+    // System (AzrakOS only; see os/system_ui.rs)
     Internet,
     WifiNet(u16),
     BtPair,
@@ -314,7 +314,7 @@ impl App {
         }
 
         header(&mut rows, "");
-        if crate::system::on_os() {
+        if crate::os::system::on_os() {
             // The launcher is the whole screen here: quitting it would only start it again.
             rows.push((SId::Restart, row(4, "Restart")));
             let mut r = row(4, "Shut down");

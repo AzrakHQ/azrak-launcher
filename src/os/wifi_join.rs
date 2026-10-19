@@ -6,7 +6,7 @@
 
 use crate::app::*;
 use crate::audio::{self, Sound};
-use crate::system;
+use crate::os::system;
 
 /// Character rows, ten keys each; the fifth row is ACTIONS, whose widths (in keys) add up to ten.
 const LETTERS: [&str; 4] = ["1234567890", "qwertyuiop", "asdfghjkl'", "zxcvbnm,.-"];

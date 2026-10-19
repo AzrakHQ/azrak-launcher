@@ -225,7 +225,7 @@ fn install() {
     }
     if new_exe.exists() {
         let _ = std::fs::rename(bin.join(format!("{OLD}.previous")), bin.join(format!("{}.previous", crate::util::APP_NAME)));
-        let old_os = Path::new(OLD_OS_MARKER).exists() && !Path::new(crate::system::MARKER).exists();
+        let old_os = Path::new(OLD_OS_MARKER).exists() && !Path::new(crate::os::system::MARKER).exists();
         if old_os && !old_exe.exists() {
             let _ = std::os::unix::fs::symlink(crate::util::APP_NAME, &old_exe);
         } else if !old_os && std::fs::symlink_metadata(&old_exe).is_ok_and(|m| m.file_type().is_symlink()) {

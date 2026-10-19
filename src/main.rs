@@ -15,10 +15,7 @@ mod vpn;
 mod pc;
 mod pc_ui;
 mod pcgame;
-mod system;
-mod system_ui;
-mod os_install;
-mod wifi_join;
+mod os;
 mod exfat;
 mod results;
 mod trailer;
@@ -61,11 +58,12 @@ OPTIONS:
 ";
 
 fn main() {
-    // `--supports gamescope`: exit 0 when this launcher can run in AzrakOS's Gamescope
-    // session (it tags its window so Gamescope shows it). Older releases reject the option, so the
-    // OS session and the image build can tell.
+    // `--supports FEATURE`: exit 0 when this launcher has it, so AzrakOS can tell (older releases
+    // reject the option). gamescope: it tags its window, so Gamescope shows it; os-install: the
+    // USB stick's install screens (the stick's build checks the launcher it bundles has them).
+    // See docs/AZRAKOS.md.
     if std::env::args().nth(1).as_deref() == Some("--supports") {
-        let known = ["gamescope", "system-settings"];
+        let known = ["gamescope", "system-settings", "os-install"];
         std::process::exit(if std::env::args().nth(2).is_some_and(|f| known.contains(&f.as_str())) { 0 } else { 1 });
     }
     if std::env::args().nth(1).as_deref() == Some("--probe-gpu") {

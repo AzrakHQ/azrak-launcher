@@ -492,6 +492,14 @@ shoulders, Enter Options). The launcher only reports which controller is connect
 (`gamepad::connected`, from `/proc/bus/input/devices`) on the start-up splash and in
 **Settings → Controller & keyboard**, which shows that layout.
 
+## On AzrakOS
+
+On AzrakOS the launcher is the whole screen, so it also has the OS's own screens: Settings →
+SYSTEM (internet with an on-screen keyboard for Wi-Fi passwords, controllers, sound, updates,
+power) and, on the AzrakOS USB stick, "Install AzrakOS on this PC". That code is in
+[src/os/](../src/os/) and shows only on AzrakOS. What it expects from the OS, and what the OS
+checks with `azrak --supports FEATURE`, is in [AZRAKOS.md](AZRAKOS.md).
+
 ## Where things are stored
 
 | Path | Contents |
