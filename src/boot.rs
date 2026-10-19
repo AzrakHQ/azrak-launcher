@@ -413,7 +413,5 @@ impl App {
             self.set_status(&p, true);
         }
         self.shad_tick();
-        // From the AzrakOS USB stick: try it, or install it.
-        self.os_install_welcome();
     }
 }

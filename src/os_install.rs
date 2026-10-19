@@ -30,17 +30,11 @@ pub struct OsInstall {
     pub progress: f32,
     pub step: String,
     pub end: Option<InstallEvent>,
-    /// The welcome was shown this session (it opens by itself once).
-    pub welcomed: bool,
 }
 
 impl App {
-    /// After the start screen on the USB stick: the welcome, once.
+    /// Starting from the USB stick: the welcome comes first, before the launcher sets itself up.
     pub fn os_install_welcome(&mut self) {
-        if !system::on_usb() || self.osi.welcomed {
-            return;
-        }
-        self.osi.welcomed = true;
         self.osi.phase = Phase::Intro;
         self.osi.sel = 0;
         self.push_overlay(Overlay::OsInstall, Z_OS_INSTALL, 0);
@@ -111,9 +105,27 @@ impl App {
         }
     }
 
+    /// Leave for the launcher: on the stick, the launcher starts now that AzrakOS is tried.
+    fn osi_leave(&mut self) {
+        self.back();
+        if let Some((first_run, stale)) = self.held_start.take() {
+            self.start_launcher(first_run, stale);
+        }
+    }
+
+    /// Back to the welcome while the launcher hasn't started (there's nothing behind it yet).
+    fn osi_welcome_again(&mut self) {
+        audio::play(Sound::Back);
+        self.osi.phase = Phase::Intro;
+        self.osi.sel = 0;
+        self.osi_push();
+    }
+
     fn osi_back(&mut self) {
         match self.osi.phase {
             Phase::Installing => {}
+            Phase::Intro => self.osi_leave(),
+            Phase::Pick | Phase::Failed if self.held_start.is_some() => self.osi_welcome_again(),
             Phase::Confirm => {
                 audio::play(Sound::Back);
                 let i = self.osi.disk.as_ref().and_then(|d| self.osi.disks.iter().position(|x| x == d)).unwrap_or(0);
@@ -121,7 +133,7 @@ impl App {
                 self.osi.sel = i;
                 self.osi_push();
             }
-            _ => self.back(),
+            _ => self.osi_leave(),
         }
     }
 
@@ -132,7 +144,8 @@ impl App {
                     audio::play(Sound::Select);
                     self.osi_pick();
                 } else {
-                    self.back();
+                    audio::play(Sound::Start);
+                    self.osi_leave();
                 }
             }
             Phase::Pick => match self.osi.disks.get(i).cloned() {
@@ -144,7 +157,7 @@ impl App {
                     self.osi.sel = 1;
                     self.osi_push();
                 }
-                None => self.back(),
+                None => self.osi_back(),
             },
             Phase::Confirm => {
                 if i == 0 {
@@ -160,14 +173,14 @@ impl App {
                         self.toast("Couldn't restart", &e, 2);
                     }
                 } else {
-                    self.back();
+                    self.osi_leave();
                 }
             }
             Phase::Failed => {
                 if i == 0 {
                     self.osi_pick();
                 } else {
-                    self.back();
+                    self.osi_back();
                 }
             }
         }

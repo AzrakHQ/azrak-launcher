@@ -258,6 +258,9 @@ pub struct App {
     /// Settings → SYSTEM on AzrakOS.
     pub sys: crate::system_ui::SysUi,
     pub osi: crate::os_install::OsInstall,
+    /// On the AzrakOS USB stick the launcher's own start (first run?, catalog stale?) waits for
+    /// "Try AzrakOS" (os_install.rs).
+    pub held_start: Option<(bool, bool)>,
     /// This PC's processor, memory and graphics (read in the background at start).
     pub pc: Option<crate::pc::Specs>,
     pub pc_checking: bool,
@@ -424,6 +427,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         net_retry: NetRetry::default(),
         sys: Default::default(),
         osi: Default::default(),
+        held_start: None,
         pc: None,
         pc_checking: false,
         boot: Default::default(),
@@ -452,13 +456,16 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         cfg.lock().unwrap().save(); // remember detected defaults
     }
     APP.with(|a| *a.borrow_mut() = Some(app));
-    with_app(move |app| app.boot_start(first_run));
-    with_app(|app| app.kyty_start());
-    with_app(|app| app.shad_start());
-    with_app(|app| app.app_update_start());
-    with_app(|app| app.compat_start());
-    with_app(|app| app.net_watch_start());
-    with_app(|app| app.pc_check());
+    with_app(move |app| {
+        // From the AzrakOS USB stick: first the choice to try AzrakOS or install it. The launcher
+        // sets itself up (catalog, artwork, emulators) only when it's tried.
+        if crate::system::on_usb() {
+            app.held_start = Some((first_run, stale));
+            app.os_install_welcome();
+        } else {
+            app.start_launcher(first_run, stale);
+        }
+    });
 
     wire_callbacks(&ui);
     crate::gamepad::spawn(|p| post(move |app| app.on_pad(p)));
@@ -472,20 +479,6 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         slint::Timer::single_shot(Duration::from_millis(ms), || { std::thread::spawn(crate::sessions::claim_screen); });
     }
 
-    with_app(move |app| {
-        if stale {
-            app.start_sync(false);
-        } else {
-            app.start_enrich();
-        }
-        // New releases are published daily; a launcher left open for days still picks them up.
-        // AZRAK_CATALOG_INTERVAL (seconds): for testing reloads while something is open.
-        let every = std::env::var("AZRAK_CATALOG_INTERVAL").ok().and_then(|s| s.parse::<f64>().ok()).filter(|s| *s >= 1.0)
-            .unwrap_or(crate::catalog::CATALOG_TTL);
-        app.catalog_timer.start(slint::TimerMode::Repeated, Duration::from_secs_f64(every),
-            || with_app(|app| app.start_sync(false)));
-    });
-
     ui.show().expect("could not open window");
     crate::display::place_window(&ui, target_monitor.as_ref(), windowed);
     slint::run_event_loop().expect("event loop failed");
@@ -495,6 +488,31 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         app.downloads.shutdown();
         crate::trailer::close();
     });
+}
+
+impl App {
+    /// The launcher's own start: the start screen (with its first-run setup), the catalog, the
+    /// emulators, its own update check.
+    pub fn start_launcher(&mut self, first_run: bool, stale: bool) {
+        self.boot_start(first_run);
+        self.kyty_start();
+        self.shad_start();
+        self.app_update_start();
+        self.compat_start();
+        self.net_watch_start();
+        self.pc_check();
+        if stale {
+            self.start_sync(false);
+        } else {
+            self.start_enrich();
+        }
+        // New releases are published daily; a launcher left open for days still picks them up.
+        // AZRAK_CATALOG_INTERVAL (seconds): for testing reloads while something is open.
+        let every = std::env::var("AZRAK_CATALOG_INTERVAL").ok().and_then(|s| s.parse::<f64>().ok()).filter(|s| *s >= 1.0)
+            .unwrap_or(crate::catalog::CATALOG_TTL);
+        self.catalog_timer.start(slint::TimerMode::Repeated, Duration::from_secs_f64(every),
+            || with_app(|app| app.start_sync(false)));
+    }
 }
 
 fn wire_callbacks(ui: &AppWindow) {
