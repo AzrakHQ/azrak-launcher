@@ -413,5 +413,9 @@ impl App {
             self.set_status(&p, true);
         }
         self.shad_tick();
+        // AzrakOS was installed from the USB stick with "Later" before the launcher started.
+        if self.osi.tell_installed {
+            self.osi_tell_installed();
+        }
     }
 }

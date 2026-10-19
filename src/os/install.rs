@@ -30,6 +30,8 @@ pub struct OsInstall {
     pub progress: f32,
     pub step: String,
     pub end: Option<InstallEvent>,
+    /// "Later" after installing while the launcher sets itself up: its toast waits for Home.
+    pub tell_installed: bool,
 }
 
 impl App {
@@ -136,6 +138,22 @@ impl App {
         self.osi_push();
     }
 
+    /// Installed, restarting later: say once how to start it, where it's seen (on Home, once the
+    /// launcher's setup is done when it's only starting now).
+    fn osi_later(&mut self) {
+        self.osi_leave();
+        if self.boot.active {
+            self.osi.tell_installed = true;
+        } else {
+            self.osi_tell_installed();
+        }
+    }
+
+    pub fn osi_tell_installed(&mut self) {
+        self.osi.tell_installed = false;
+        self.toast("AzrakOS is installed", "Restart without the USB stick to start it.", 1);
+    }
+
     fn osi_back(&mut self) {
         match self.osi.phase {
             Phase::Installing => {}
@@ -148,6 +166,7 @@ impl App {
                 self.osi.sel = i;
                 self.osi_push();
             }
+            Phase::Done => self.osi_later(),
             _ => self.osi_leave(),
         }
     }
@@ -193,7 +212,7 @@ impl App {
                         self.toast("Couldn't restart", &e, 2);
                     }
                 } else {
-                    self.osi_leave();
+                    self.osi_later();
                 }
             }
             Phase::Failed => {
@@ -250,6 +269,8 @@ impl App {
         // fill the screen). The text turns bold and amber when Windows is about to go.
         let mut sub = String::new();
         let mut text_warn = false;
+        // Secure Boot's key screen comes at the restart: its steps get their own panel.
+        let mut mok = false;
         let (title, text, note): (String, String, String) = match s.phase {
             Phase::Intro => ("Welcome to AzrakOS".into(),
                 "You're running it from the USB stick, and nothing on this PC has changed. Try it as long as you like, or install it so the PC starts straight into it.".into(),
@@ -271,14 +292,14 @@ impl App {
             }
             Phase::Installing => ("Installing AzrakOS".into(), s.step.clone(), "This takes a few minutes. Keep the PC on.".into()),
             Phase::Done => {
-                let (mok, nvidia_later) = match &s.end {
-                    Some(InstallEvent::Done { mok, nvidia_later, .. }) => (*mok, *nvidia_later),
-                    _ => (false, false),
+                let nvidia_later = match &s.end {
+                    Some(InstallEvent::Done { mok: m, nvidia_later, .. }) => { mok = *m; *nvidia_later }
+                    _ => false,
                 };
                 ("AzrakOS is installed".into(),
                  "Remove the USB stick, then restart: the PC starts straight into AzrakOS.".into(),
-                 if mok { "After the restart a blue screen asks to enroll a key for NVIDIA's driver: choose Enroll MOK, Continue, Yes, type universalblue, then Reboot.".into() }
-                 else if nvidia_later { "NVIDIA's driver downloads by itself the first time the PC is online, then asks for a restart.".into() }
+                 // With the key screen, its panel says what the driver needs instead.
+                 if nvidia_later && !mok { "This PC has an NVIDIA graphics card: its driver downloads by itself the first time the PC is online, then asks for a restart.".into() }
                  else { String::new() })
             }
             Phase::Failed => ("Installation didn't finish".into(),
@@ -290,6 +311,7 @@ impl App {
         ui.set_osi_sub(sub.into());
         ui.set_osi_text(text.into());
         ui.set_osi_text_warn(text_warn);
+        ui.set_osi_mok(mok);
         ui.set_osi_note(note.into());
         ui.set_osi_sel(s.sel as i32);
         ui.set_osi_progress(s.progress);

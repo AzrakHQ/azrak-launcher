@@ -258,6 +258,8 @@ export component AppWindow inherits Window {
     in property <string> osi-sub;
     in property <string> osi-text;
     in property <bool> osi-text-warn;
+    // Installed, and Secure Boot's blue key screen (MokManager) comes at the restart.
+    in property <bool> osi-mok;
     in property <string> osi-note;
     in property <int> osi-sel;
     in property <float> osi-progress;
@@ -1911,6 +1913,70 @@ export component AppWindow inherits Window {
                         wrap: word-wrap;
                     }
                 }
+
+                // Installed with Secure Boot on: what to press on the blue key screen, one step
+                // per line. It takes a keyboard (the controller doesn't work there yet).
+                if root.osi-phase == 4 && root.osi-mok: HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: (680px * S.k);
+                        height: mok.preferred-height;
+                        border-radius: (18px * S.k);
+                        background: #ffb54712;
+                        border-width: 1px;
+                        border-color: #ffb54759;
+                        clip: true;
+                        Rectangle { x: 0; width: (5px * S.k); background: Theme.warn; }
+                        mok := VerticalLayout {
+                            padding: (26px * S.k);
+                            padding-left: (34px * S.k);
+                            spacing: (10px * S.k);
+                            HorizontalLayout {
+                                spacing: (10px * S.k);
+                                Image { source: Icons.lock; colorize: Theme.warn; width: (22px * S.k); height: self.width; y: (3px * S.k); }
+                                Text { text: "Before you restart"; font-size: (24px * S.k); font-weight: 700; color: Theme.warn; }
+                            }
+                            Text {
+                                text: "A blue screen comes up once after the restart. On it, use a keyboard's arrow keys and Enter:";
+                                width: (620px * S.k);
+                                font-size: (18px * S.k);
+                                color: Theme.text2;
+                                wrap: word-wrap;
+                            }
+                            Rectangle { height: (2px * S.k); }
+                            for st[n] in [
+                                { a: "Choose ", b: "“Enroll MOK”" },
+                                { a: "", b: "“Continue”" },
+                                { a: "", b: "“Yes”" },
+                                { a: "Type the password ", b: "universalblue" },
+                                { a: "", b: "“Reboot”" },
+                            ]: HorizontalLayout {
+                                spacing: (14px * S.k);
+                                Rectangle {
+                                    width: (28px * S.k);
+                                    height: self.width;
+                                    border-radius: self.width / 2;
+                                    background: #ffb54726;
+                                    Text { text: n + 1; font-size: (15px * S.k); font-weight: 700; color: Theme.warn; }
+                                }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    if st.a != "": Text { text: st.a; font-size: (20px * S.k); color: Theme.text2; vertical-alignment: center; }
+                                    Text { text: st.b; font-size: (20px * S.k); font-weight: 700; color: n == 3 ? Theme.warn : Theme.text; vertical-alignment: center; }
+                                }
+                            }
+                            Rectangle { height: (4px * S.k); }
+                            Text {
+                                text: "This lets NVIDIA's graphics driver start. Skipped it? AzrakOS still starts; the PC asks again later.";
+                                width: (620px * S.k);
+                                font-size: (16px * S.k);
+                                color: Theme.text3;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+
                 Rectangle { height: (40px * S.k); }
 
                 HorizontalLayout {
