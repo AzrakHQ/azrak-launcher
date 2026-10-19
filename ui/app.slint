@@ -295,6 +295,7 @@ export component AppWindow inherits Window {
     // ---------------------------------------------------------------- callbacks to Rust
     callback key(string, bool, bool, bool) -> bool;   // text, ctrl, alt, repeat
     callback click(int, int);                         // zone, index
+    callback hover(int, int);                         // zone, index: the mouse moved onto it
     callback row-wheel(float);
     callback grid-scrolled();
     callback grid-wheel(float);
@@ -1864,7 +1865,12 @@ export component AppWindow inherits Window {
                                     Text { text: d.detail; font-size: (17px * S.k); color: d.warn ? Theme.warn : Theme.text2; }
                                 }
                             }
-                            TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.os-install, i); } }
+                            // The highlight follows the mouse, so it shows what a click (or ✕) does.
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.click(Zone.os-install, i); }
+                                changed has-hover => { if self.has-hover { root.hover(Zone.os-install, i); } }
+                            }
                         }
                     }
                 }
@@ -2019,9 +2025,35 @@ export component AppWindow inherits Window {
                             if f: KeyCap { text: root.pad-hints ? "✕" : "Enter"; round: root.pad-hints; fg: #ffffff; bg: #0a0d18; y: (16px * S.k); }
                             Text { text: b; font-size: (20px * S.k); font-weight: 600; color: f ? (danger ? #ffffff : #0a0d18) : (danger ? #ff8f9c : Theme.text); vertical-alignment: center; }
                         }
-                        TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.os-install, parent.i); } }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.click(Zone.os-install, parent.i); }
+                            changed has-hover => { if self.has-hover { root.hover(Zone.os-install, parent.i); } }
+                        }
                     }
                 }
+            }
+
+            // Where Back goes is never on screen as a button (disks, last check, failed): its
+            // key is, like on the launcher's other screens. Clicking it goes back too.
+            if root.osi-phase == 1 || root.osi-phase == 2 || root.osi-phase == 5: Rectangle {
+                x: root.width - self.width - (76px * S.k);
+                y: root.height - self.height - (30px * S.k);
+                width: osi-hint.preferred-width;
+                height: (50px * S.k);
+                border-radius: (25px * S.k);
+                background: #070a14e6;
+                border-width: 1px;
+                border-color: Theme.line;
+                osi-hint := HorizontalLayout {
+                    padding-left: (20px * S.k);
+                    padding-right: (22px * S.k);
+                    spacing: (10px * S.k);
+                    alignment: center;
+                    KeyCap { text: root.pad-hints ? "○" : "Esc"; round: root.pad-hints; fg: root.pad-hints ? #ff8f9c : #ffffff; y: (10px * S.k); }
+                    Text { text: "Back"; font-size: (17px * S.k); color: Theme.text2; vertical-alignment: center; }
+                }
+                TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.os-install, -1); } }
             }
         }
 

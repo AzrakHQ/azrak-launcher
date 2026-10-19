@@ -115,6 +115,14 @@ impl App {
         }
     }
 
+    /// The highlight follows the mouse (quietly: no sound for every row it passes).
+    pub fn hover_os_install(&mut self, idx: i32) {
+        if idx >= 0 && (idx as usize) < self.osi_count() && idx as usize != self.osi.sel {
+            self.osi.sel = idx as usize;
+            self.osi_push();
+        }
+    }
+
     pub fn click_os_install(&mut self, idx: i32) {
         if idx >= 0 && (idx as usize) < self.osi_count() {
             self.osi.sel = idx as usize;
