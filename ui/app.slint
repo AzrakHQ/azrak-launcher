@@ -250,7 +250,7 @@ export component AppWindow inherits Window {
     // PS4 games run on shadPS4, whose keyboard layout differs from KytyPS5's.
     in property <bool> launch-ps4;
     in property <bool> controls-ps4;
-    // Install AzrakOS from the USB stick (os_install.rs). Phase: 0 welcome, 1 disk, 2 last check,
+    // Install AzrakOS from the USB stick (os/install.rs). Phase: 0 welcome, 1 disk, 2 last check,
     // 3 installing, 4 done, 5 failed. Buttons are numbered from osi-button-base (after the disks).
     in property <int> osi-phase;
     in property <string> osi-title;
@@ -262,7 +262,7 @@ export component AppWindow inherits Window {
     in property <[OsiDisk]> osi-disks;
     in property <[string]> osi-buttons;
     in property <int> osi-button-base;
-    // Joining a secured Wi-Fi network (wifi_join.rs): the field shows dots unless wj-show.
+    // Joining a secured Wi-Fi network (os/wifi_join.rs): the field shows dots unless wj-show.
     in property <string> wj-ssid;
     in property <string> wj-sub;
     in property <string> wj-field;
