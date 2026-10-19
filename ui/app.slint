@@ -2024,8 +2024,8 @@ export component AppWindow inherits Window {
                                     }
                                     if root.wj-field != "": Text {
                                         text: root.wj-field;
-                                        font-size: root.wj-show ? (24px * S.k) : (28px * S.k);
-                                        letter-spacing: root.wj-show ? 0 : (3px * S.k);
+                                        font-size: (24px * S.k);
+                                        letter-spacing: root.wj-show ? 0 : (5px * S.k);
                                         color: Theme.text;
                                         vertical-alignment: center;
                                         overflow: elide;
@@ -2067,32 +2067,59 @@ export component AppWindow inherits Window {
                                         width: wj.key * k.w + wj.gap * (k.w - 1);
                                         height: r == 4 ? (62px * S.k) : (58px * S.k);
                                         border-radius: (14px * S.k);
+                                        // White is the highlight only; a switch that's on is filled blue and lit.
                                         background: k.focused ? (k.accent ? Theme.accent : #ffffff)
-                                            : k.accent ? Theme.accent.with-alpha(0.35) : k.on ? #3d8bff40 : #ffffff12;
-                                        border-width: k.on && !k.focused ? (2px * S.k) : 1px;
-                                        border-color: k.on && !k.focused ? #8fb6ff : #ffffff14;
+                                            : k.on ? #2f6fe0 : k.accent ? Theme.accent.with-alpha(0.35) : #ffffff12;
+                                        border-width: 1px;
+                                        border-color: k.on && !k.focused ? #8fb6ff66 : #ffffff14;
                                         drop-shadow-blur: k.focused ? (22px * S.k) : 0;
                                         drop-shadow-color: k.accent ? #0a6cffaa : #8cb9ff99;
                                         transform-scale: k.focused ? 1.06 : 1.0;
                                         animate background, transform-scale { duration: 120ms; }
-                                        Text {
-                                            text: k.label;
-                                            font-size: k.w > 1 ? (18px * S.k) : (24px * S.k);
-                                            font-weight: k.w > 1 ? 600 : 500;
-                                            color: k.focused && !k.accent ? #0a0d18 : Theme.text;
+                                        HorizontalLayout {
+                                            alignment: center;
+                                            spacing: (8px * S.k);
+                                            if k.icon != "": Image {
+                                                source: Icons.get(k.icon);
+                                                colorize: k.focused && !k.accent ? (k.on ? Theme.accent : #0a0d18) : Theme.text;
+                                                width: (20px * S.k);
+                                                height: self.width;
+                                                y: (parent.height - self.height) / 2;
+                                            }
+                                            Text {
+                                                text: k.label;
+                                                font-size: k.w > 1 ? (18px * S.k) : (24px * S.k);
+                                                font-weight: k.w > 1 ? 600 : 500;
+                                                color: k.focused && !k.accent ? #0a0d18 : Theme.text;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        // The switch's light, like Caps Lock's.
+                                        if k.on: Rectangle {
+                                            x: parent.width - self.width - (9px * S.k);
+                                            y: (9px * S.k);
+                                            width: (8px * S.k);
+                                            height: self.width;
+                                            border-radius: self.width / 2;
+                                            background: k.focused ? Theme.accent : #cfe0ff;
+                                            drop-shadow-blur: (6px * S.k);
+                                            drop-shadow-color: #8fb6ff;
                                         }
                                         TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.wifi-join, r * 100 + c); } }
                                     }
                                 }
                             }
                             Rectangle { height: (24px * S.k); }
-                            // The buttons that do the same without moving there.
+                            // The buttons that do the same without moving there. None of them does
+                            // anything while connecting (it can't be cancelled), so they fade out.
                             HorizontalLayout {
                                 alignment: center;
                                 spacing: (22px * S.k);
+                                opacity: root.wj-busy ? 0 : 1;
+                                animate opacity { duration: 200ms; }
                                 for h in root.pad-hints
-                                    ? [{ key: "□", what: "Delete" }, { key: "△", what: "Space" }, { key: "L1", what: "Shift" }, { key: "R2", what: "Join" }, { key: "○", what: "Cancel" }]
-                                    : [{ key: "Enter", what: root.wj-enter-joins ? "Join" : "Press the key" }, { key: "Tab", what: "Show password" }, { key: "Esc", what: "Cancel" }]: HorizontalLayout {
+                                    ? [{ key: "□", what: "Delete" }, { key: "△", what: "Space" }, { key: "L1", what: "Shift" }, { key: "R1", what: "Symbols" }, { key: "R2", what: "Join" }, { key: "○", what: "Cancel" }]
+                                    : [{ key: "Enter", what: root.wj-enter-joins ? "Join" : "Press the key" }, { key: "Tab", what: root.wj-show ? "Hide password" : "Show password" }, { key: "Esc", what: "Cancel" }]: HorizontalLayout {
                                     spacing: (8px * S.k);
                                     KeyCap { text: h.key; round: root.pad-hints && h.key.character-count == 1; }
                                     Text { text: h.what; font-size: (16px * S.k); color: Theme.text3; vertical-alignment: center; }

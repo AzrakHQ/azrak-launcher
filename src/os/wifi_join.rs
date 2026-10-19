@@ -24,7 +24,7 @@ enum Action {
     Join,
 }
 const ACTIONS: [(Action, f32); 6] = [
-    (Action::Shift, 1.5), (Action::Layer, 1.0), (Action::Space, 3.0), (Action::Delete, 1.5), (Action::Show, 1.5), (Action::Join, 1.5),
+    (Action::Shift, 1.5), (Action::Layer, 1.5), (Action::Space, 2.5), (Action::Delete, 1.5), (Action::Show, 1.5), (Action::Join, 1.5),
 ];
 
 #[derive(Default)]
@@ -297,27 +297,30 @@ impl App {
         let w = &self.wj;
         ui.set_wj_ssid(w.ssid.clone().into());
         ui.set_wj_sub(format!("Secured · {}", w.signal).into());
-        ui.set_wj_field(if w.show { w.text.clone() } else { "•".repeat(w.text.chars().count()) }.into());
+        ui.set_wj_field(if w.show { w.text.clone() } else { "●".repeat(w.text.chars().count()) }.into());
         ui.set_wj_show(w.show);
         ui.set_wj_error(w.error.clone().into());
         ui.set_wj_note(w.note.clone().into());
         ui.set_wj_enter_joins(w.enter_joins());
         ui.set_wj_busy(w.busy);
-        let key = |label: String, width: f32, focused: bool, accent: bool, on: bool| crate::WjKey { label: label.into(), w: width, focused, accent, on };
+        let key = |label: &str, width: f32, focused: bool, accent: bool, on: bool, icon: &str|
+            crate::WjKey { label: label.into(), w: width, focused, accent, on, icon: icon.into() };
         let rows: Vec<Vec<crate::WjKey>> = (0..4).map(|r| (0..COLS).map(|c| {
             let label = w.char_at(r, c).map(|ch| if ch == ' ' { "␣".to_string() } else { ch.to_string() }).unwrap_or_default();
-            key(label, 1.0, w.row == r && w.col == c, false, false)
+            key(&label, 1.0, w.row == r && w.col == c, false, false, "")
         }).collect()).collect();
+        // Shift and Show are switches: when on they're filled and lit, which the white
+        // highlight never is, so only one key ever looks selected.
         let actions: Vec<crate::WjKey> = ACTIONS.iter().enumerate().map(|(i, (a, width))| {
-            let (label, on) = match a {
-                Action::Shift => ("Shift".to_string(), w.shift),
-                Action::Layer => (if w.symbols { "abc" } else { "#+=" }.to_string(), w.symbols),
-                Action::Space => ("Space".to_string(), false),
-                Action::Delete => ("Delete".to_string(), false),
-                Action::Show => (if w.show { "Hide" } else { "Show" }.to_string(), w.show),
-                Action::Join => ("Join".to_string(), false),
+            let (label, on, icon) = match a {
+                Action::Shift => ("Shift", w.shift, "shift"),
+                Action::Layer => (if w.symbols { "ABC" } else { "Symbols" }, false, ""),
+                Action::Space => ("Space", false, ""),
+                Action::Delete => ("Delete", false, ""),
+                Action::Show => (if w.show { "Hide" } else { "Show" }, w.show, if w.show { "eye-off" } else { "eye" }),
+                Action::Join => ("Join", false, ""),
             };
-            key(label, *width, w.row == 4 && w.col == i, *a == Action::Join, on)
+            key(label, *width, w.row == 4 && w.col == i, *a == Action::Join, on, icon)
         }).collect();
         let m = |v: Vec<crate::WjKey>| -> slint::ModelRc<crate::WjKey> { std::rc::Rc::new(slint::VecModel::from(v)).into() };
         let mut rows = rows.into_iter();

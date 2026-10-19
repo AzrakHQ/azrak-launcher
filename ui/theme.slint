@@ -64,6 +64,9 @@ export global Icons {
     out property <image> spinner: @image-url("../assets/icons/spinner.svg");
     out property <image> wifi: @image-url("../assets/icons/wifi.svg");
     out property <image> lock: @image-url("../assets/icons/lock.svg");
+    out property <image> shift: @image-url("../assets/icons/shift.svg");
+    out property <image> eye: @image-url("../assets/icons/eye.svg");
+    out property <image> eye-off: @image-url("../assets/icons/eye-off.svg");
     out property <image> none;
 
     public pure function get(name: string) -> image {
@@ -71,7 +74,8 @@ export global Icons {
             : name == "grid" ? grid : name == "web" ? web : name == "disk" ? disk : name == "cal" ? cal
             : name == "user" ? user : name == "tag" ? tag : name == "star" ? star : name == "bag" ? bag
             : name == "power" ? power : name == "search" ? search : name == "gear" ? gear
-            : name == "check" ? check : name == "folder" ? folder : name == "log" ? log : none;
+            : name == "check" ? check : name == "folder" ? folder : name == "log" ? log
+            : name == "lock" ? lock : name == "shift" ? shift : name == "eye" ? eye : name == "eye-off" ? eye-off : none;
     }
 }
 
@@ -211,8 +215,9 @@ export struct BootStep { label: string, detail: string, state: int }
 
 // A disk on the AzrakOS installer's list: its model, size and notes, warn when Windows is on it.
 export struct OsiDisk { label: string, detail: string, warn: bool }
-// A key on the Wi-Fi password keyboard: w is its width in keys; on: a toggle that's on (Shift).
-export struct WjKey { label: string, w: float, focused: bool, accent: bool, on: bool }
+// A key on the Wi-Fi password keyboard: w is its width in keys; on: a switch that's on (Shift,
+// Show); icon: Icons.get name shown before the label.
+export struct WjKey { label: string, w: float, focused: bool, accent: bool, on: bool, icon: string }
 
 // action: what clicking the notification does (empty: nothing).
 export struct ToastData { id: int, text: string, sub: string, kind: int, image: image, has-image: bool, app: bool, action: string }
