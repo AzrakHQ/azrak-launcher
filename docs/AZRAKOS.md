@@ -26,7 +26,7 @@ the OS can expect from the launcher. Change both sides together, and keep old ve
 | System updates | `rpm-ostree status --json` (a staged deployment means "Restart to update") | `azrak-os-update.timer` runs `/usr/libexec/azrak-os/update` daily: it stages the next version (and switches an NVIDIA PC to `:minimal-nvidia`), never restarts by itself |
 | Restart, shut down | `systemctl reboot` / `poweroff` | logind (the active local session may) |
 | This PC | `lspci` | pciutils |
-| The session | — | greetd logs `player` in and runs `/usr/libexec/azrak-os/session`: it starts `~/.local/bin/azrak` (copied from `/usr/share/azrak-os/release` the first time, and again if the copy doesn't answer `--version`) in Gamescope, or in cage when Gamescope can't run |
+| The session | Logs `window shown` (on stdout, which the session appends to `~/.cache/azrak-os.log`) as soon as its window is up | greetd logs `player` in and runs `/usr/libexec/azrak-os/session`: it starts `~/.local/bin/azrak` (copied from `/usr/share/azrak-os/release` the first time, and again if the copy doesn't answer `--version`) in Gamescope, or in cage when Gamescope can't run. If no `window shown` (or, from older launchers, `welcome screen ready` / `home screen shown`) comes within 90 s, it starts the launcher again. |
 
 ## The installer (USB stick only)
 

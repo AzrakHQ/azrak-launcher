@@ -573,6 +573,9 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         if quit("window closed") { slint::CloseRequestResponse::HideWindow } else { slint::CloseRequestResponse::KeepWindowShown }
     });
     ui.show().expect("could not open window");
+    // AzrakOS's session waits for this line to know something is on screen, whichever screen comes
+    // first (its watchdog starts the launcher again otherwise; docs/AZRAKOS.md).
+    crate::log!("window shown");
     crate::display::place_window(&ui, target_monitor.as_ref(), windowed);
     slint::run_event_loop().expect("event loop failed");
     drop(tick);
