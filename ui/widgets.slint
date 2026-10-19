@@ -49,7 +49,7 @@ export component KeyCap inherits Rectangle {
     background: bg;
     border-width: 1px;
     border-color: #ffffff1f;
-    t := Text { text: root.text; font-size: (14px * S.k); font-weight: 700; color: root.fg; }
+    t := Text { text: root.text; font-size: (15px * S.k); font-weight: 700; color: root.fg; }
 }
 
 // Quiet navigation, not another primary action. Shortcut appears on hover; no layout jump.
@@ -73,7 +73,7 @@ export component BackButton inherits Rectangle {
         }
         Text { text: "Back"; font-size: (18px * S.k); font-weight: 500; color: Theme.text; vertical-alignment: center; }
         Text {
-            text: root.pad ? "○" : "Esc"; font-size: (13px * S.k); color: root.pad ? #ff8f9c : Theme.text3;
+            text: root.pad ? "○" : "Esc"; font-size: (15px * S.k); color: root.pad ? #ff8f9c : Theme.text3;
             vertical-alignment: center; opacity: root.pad || ta.has-hover ? 1 : 0;
             animate opacity { duration: 120ms; }
         }
