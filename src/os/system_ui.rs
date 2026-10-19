@@ -4,6 +4,7 @@
 
 use crate::app::*;
 use crate::settings::SId;
+use crate::os::power::Power;
 use crate::os::system::{self, Device, Network, Output, Update, Wifi};
 use crate::SettingData;
 
@@ -17,14 +18,22 @@ pub struct SysUi {
     /// The Wi-Fi list is open, and what it found.
     pub wifi_open: bool,
     pub wifi: Vec<Wifi>,
+    /// "More networks…" was pressed: the list shows them all, not only the strongest.
+    pub wifi_all: bool,
     /// Devices in pairing mode found by the last search.
     pub found: Vec<Device>,
     /// Something in progress, shown on its row: (row, text).
     pub busy: Option<(SId, String)>,
     /// A paired device pressed once: pressing it again within a few seconds forgets it.
     pub forget: Option<(usize, f64)>,
+    /// While searching for devices: when the search ends, and a timer counting down to it.
+    scan_until: f64,
+    scan_tick: slint::Timer,
     polling: bool,
     pub polled: f64,
+    /// Bumped when the launcher itself changes the system (joins a network, pairs): a reading
+    /// started before that is out of date and is read again.
+    epoch: u32,
 }
 
 fn row(kind: i32, label: &str) -> SettingData {
@@ -39,9 +48,14 @@ impl App {
             return;
         }
         self.sys.polling = true;
-        std::thread::spawn(|| {
+        let epoch = self.sys.epoch;
+        std::thread::spawn(move || {
             let (network, paired, (outputs, output), update) = (system::network(), system::bt_paired(), system::outputs(), system::update_status());
             let _ = slint::invoke_from_event_loop(move || with_app(move |app| {
+                if app.sys.epoch != epoch {
+                    (app.sys.polling, app.sys.polled) = (false, 0.0);
+                    return app.sys_poll();
+                }
                 let changed = app.sys.network != network || app.sys.paired != paired || app.sys.outputs != outputs
                     || app.sys.output != output || app.sys.update != update;
                 (app.sys.network, app.sys.paired, app.sys.outputs, app.sys.output, app.sys.update) = (network, paired, outputs, output, update);
@@ -76,19 +90,34 @@ impl App {
             (None, "Cable") => ("Cable · Connected".into(), 1),
             (None, kind) => (format!("{kind} · {}", s.network.name).into(), 1),
         };
-        r.hint = if s.wifi_open { "Choose a network below" } else { "Press to see Wi-Fi networks" }.into();
+        let cable = s.network.kind == "Cable";
+        r.hint = match (s.wifi_open, cable) {
+            (true, true) => "Press a network to join · the cable is used while it's plugged in",
+            (true, false) => "Press a network to join",
+            (false, _) => "Press to see Wi-Fi networks",
+        }.into();
         rows.push((SId::Internet, r));
         if s.wifi_open {
-            for (i, w) in s.wifi.iter().enumerate() {
+            // The strongest few, so the rest of SYSTEM (pairing a controller) stays in sight.
+            let shown = if s.wifi_all { s.wifi.len() } else { s.wifi.len().min(WIFI_SHOWN) };
+            for (i, w) in s.wifi.iter().enumerate().take(shown) {
                 let mut r = row(4, &w.ssid);
+                (r.signal, r.lock) = (bars(w.signal), w.secured);
                 if let Some(text) = busy(SId::WifiNet(i as u16)) {
                     r.value = text.into();
                 } else if w.in_use {
-                    (r.value, r.value_kind) = ("Connected".into(), 1);
-                } else {
-                    r.value = format!("{} · {}", if w.secured { "Secured" } else { "Open" }, strength(w.signal)).into();
+                    // With a cable in, Wi-Fi stays connected but isn't the one used.
+                    let text = if cable { "Connected · backup" } else { "Connected" };
+                    (r.value, r.value_kind, r.icon) = (text.into(), 1, "check".into());
+                } else if !w.secured {
+                    r.value = "Open · no password".into();
                 }
                 rows.push((SId::WifiNet(i as u16), r));
+            }
+            if shown < s.wifi.len() {
+                let mut r = row(4, "More networks…");
+                (r.value, r.value_kind) = (format!("{} more", s.wifi.len() - shown).into(), 3);
+                rows.push((SId::WifiMore, r));
             }
         }
 
@@ -101,7 +130,8 @@ impl App {
         }
         let mut r = row(4, "Pair a controller or headset");
         (r.value, r.value_kind) = match busy(SId::BtPair) {
-            Some(text) => (text.into(), 0),
+            // Counting down, so a long search never looks stuck.
+            Some(_) => (format!("Searching · {} s", (s.scan_until - crate::util::now_secs()).ceil().max(1.0)).into(), 0),
             None => ("Search".into(), 3),
         };
         r.hint = "DualSense: hold PS and Create until the light flashes · Xbox: hold the pair button".into();
@@ -121,6 +151,7 @@ impl App {
                 None if *on => ("Connected".into(), 1),
                 None => ("Not connected".into(), 0),
             };
+            r.hint = if *on { "Press twice to forget it" } else { "Press to connect · press again to forget" }.into();
             rows.push((SId::BtDevice(i as u16), r));
         }
 
@@ -129,6 +160,12 @@ impl App {
 
     /// Sound output and system updates.
     fn system_rows_rest(&self, mut rows: Vec<(SId, SettingData)>) -> Vec<(SId, SettingData)> {
+        // Whatever is in progress turns a spinner on its row.
+        if let Some((id, _)) = &self.sys.busy {
+            for (_, r) in rows.iter_mut().filter(|(row_id, _)| row_id == id) {
+                r.busy = true;
+            }
+        }
         let s = &self.sys;
         if !s.outputs.is_empty() {
             let mut r = row(3, "Sound output");
@@ -139,7 +176,7 @@ impl App {
         if let Some(u) = &s.update {
             let mut r = row(4, "System");
             (r.value, r.value_kind, r.hint) = match &u.staged {
-                Some(next) => (format!("Restart to update to {next}").into(), 3, format!("Running {}", u.version).into()),
+                Some(next) => (format!("Restart to update to {next}").into(), 3, format!("Press to restart and update · now running {}", u.version).into()),
                 None => (format!("{} · Up to date", u.version).into(), 1, "Updates download by themselves and wait for a restart".into()),
             };
             rows.push((SId::SystemUpdate, r));
@@ -152,12 +189,21 @@ impl App {
         match id {
             SId::Internet => {
                 self.sys.wifi_open = !self.sys.wifi_open;
+                self.sys.wifi_all = false;
                 if self.sys.wifi_open {
                     self.sys_task(SId::Internet, "Looking for Wi-Fi…", |app, list: Result<Vec<Wifi>, String>| match list {
                         Ok(list) => app.sys.wifi = list,
                         Err(e) => app.toast("Wi-Fi isn't available", &e, 2),
                     }, system::wifi_list);
                 }
+            }
+            SId::WifiMore => {
+                self.sys.wifi_all = true;
+                crate::audio::play(crate::audio::Sound::Select);
+                self.refresh_settings();
+                // The first of the networks just shown, where "More networks…" was.
+                self.select_setting(SId::WifiNet(WIFI_SHOWN as u16));
+                return true;
             }
             SId::WifiNet(i) => {
                 let Some(w) = self.sys.wifi.get(i as usize).cloned() else { return true };
@@ -166,7 +212,7 @@ impl App {
                 }
                 // Saved networks and open ones connect straight away; others ask for the password.
                 if w.secured && !saved_wifi(&w.ssid) {
-                    self.wifi_join_open(&w.ssid, strength(w.signal));
+                    self.wifi_join_open(&w.ssid, strength(w.signal), w.wep);
                     return true;
                 }
                 self.wifi_connect(i);
@@ -175,7 +221,14 @@ impl App {
                 if self.sys.busy.is_some() || !system::bt_available() {
                     return true;
                 }
-                self.sys_task(SId::BtPair, "Searching for 15 seconds…", |app, found: Vec<Device>| {
+                self.sys.scan_until = crate::util::now_secs() + 15.0;
+                self.sys.scan_tick.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(1), || with_app(|app| {
+                    if app.overlay == Overlay::Settings {
+                        app.refresh_settings();
+                    }
+                }));
+                self.sys_task(SId::BtPair, "Searching…", |app, found: Vec<Device>| {
+                    app.sys.scan_tick.stop();
                     if found.is_empty() {
                         app.toast("Nothing found", "Put the controller in pairing mode, then search again.", 0);
                     }
@@ -190,44 +243,77 @@ impl App {
                 let address = d.address.clone();
                 self.sys_task(SId::BtFound(i), "Pairing…", move |app, r: Result<(), String>| {
                     match r {
-                        Ok(()) => { app.toast("Paired", &d.name, 1); app.sys.found.retain(|f| f != &d); }
+                        Ok(()) => {
+                            app.toast("Paired", &d.name, 1);
+                            app.sys.found.retain(|f| f != &d);
+                            // Listed (and selected) at once: its row in "Found" is gone.
+                            if !app.sys.paired.iter().any(|(p, _)| p.address == d.address) {
+                                app.sys.paired.push((d.clone(), true));
+                            }
+                            if app.overlay == Overlay::Settings {
+                                app.refresh_settings();
+                                if let Some(i) = app.sys.paired.iter().position(|(p, _)| p.address == d.address) {
+                                    app.select_setting(SId::BtDevice(i as u16));
+                                }
+                            }
+                        }
                         Err(e) => app.toast("Couldn't pair", &e, 2),
                     }
-                    app.sys.polled = 0.0;
-                    app.sys_poll();
+                    app.sys_changed();
                 }, move || system::bt_pair(&address));
             }
             SId::BtDevice(i) => {
                 let i = i as usize;
-                let Some((d, _)) = self.sys.paired.get(i).cloned() else { return true };
+                let Some((d, on)) = self.sys.paired.get(i).cloned() else { return true };
+                if self.sys.busy.is_some() {
+                    return true;
+                }
                 let now = crate::util::now_secs();
                 if self.sys.forget.is_some_and(|(j, at)| j == i && now - at < 5.0) {
                     self.sys.forget = None;
                     let address = d.address.clone();
                     self.sys_task(SId::BtDevice(i as u16), "Forgetting…", move |app, r: Result<(), String>| {
                         if let Err(e) = r { app.toast("Couldn't forget it", &e, 2) } else { app.toast("Forgotten", &d.name, 1) }
-                        app.sys.polled = 0.0;
-                        app.sys_poll();
+                        app.sys_changed();
                     }, move || system::bt_remove(&address));
+                } else if !on {
+                    // Not connected: connect it. If that fails (it's off, or gone for good), a
+                    // second press forgets it, as the hint says.
+                    let address = d.address.clone();
+                    self.sys_task(SId::BtDevice(i as u16), "Connecting…", move |app, r: Result<(), String>| {
+                        match r {
+                            Ok(()) => app.toast("Connected", &d.name, 1),
+                            Err(_) => {
+                                app.toast("Couldn't connect", &format!("Turn {} on and press it again, or press again now to forget it.", d.name), 2);
+                                app.sys_forget_soon(i);
+                            }
+                        }
+                        app.sys_changed();
+                    }, move || system::bt_connect(&address));
                 } else {
-                    self.sys.forget = Some((i, now));
-                    slint::Timer::single_shot(std::time::Duration::from_secs(5), || with_app(|app| {
-                        if app.overlay == Overlay::Settings { app.refresh_settings(); }
-                    }));
+                    self.sys_forget_soon(i);
                 }
             }
+
             SId::SoundOutput => {
                 self.system_change(id, 1);
                 return true;
             }
             SId::SystemUpdate => {
                 if self.sys.update.as_ref().is_some_and(|u| u.staged.is_some()) {
-                    self.power(true);
+                    self.power_ask(Power::Update);
                 }
+                return true;
             }
             SId::InstallOs => self.os_install_open(),
-            SId::Restart => self.power(true),
-            SId::ShutDown => self.power(false),
+            SId::Restart => {
+                self.power_ask(Power::Restart);
+                return true;
+            }
+            SId::ShutDown => {
+                self.power_ask(Power::ShutDown);
+                return true;
+            }
             _ => return false,
         }
         crate::audio::play(crate::audio::Sound::Select);
@@ -247,9 +333,21 @@ impl App {
             return true;
         }
         self.sys.output = Some(next);
+        // Say where it went (a TV's speakers and a headset can both be silent for other
+        // reasons); stepping through several outputs leaves one notification, the latest.
+        self.toasts.retain(|t| !t.text.starts_with(SOUND_NOW));
+        self.toast(&format!("{SOUND_NOW} {}", self.sys.outputs[next].label), "", 1);
         crate::audio::play(crate::audio::Sound::Move);
         self.refresh_settings();
         true
+    }
+
+    /// Arm forgetting paired device `i`: a press within 5 s forgets it.
+    fn sys_forget_soon(&mut self, i: usize) {
+        self.sys.forget = Some((i, crate::util::now_secs()));
+        slint::Timer::single_shot(std::time::Duration::from_secs(5), || with_app(|app| {
+            if app.overlay == Overlay::Settings { app.refresh_settings(); }
+        }));
     }
 
     /// A saved or open network: it connects without a password.
@@ -258,27 +356,39 @@ impl App {
         let ssid = w.ssid.clone();
         self.sys_task(SId::WifiNet(i), "Connecting…", move |app, r: Result<(), String>| {
             match r {
-                Ok(()) => {
-                    app.toast("Connected", &w.ssid, 1);
-                    app.sys.wifi_open = false;
-                }
+                Ok(()) => app.wifi_joined(&w.ssid),
                 Err(e) => app.toast("Couldn't connect", &if e.contains("Secrets were required") || e.contains("password") {
                     "Check the password and try again.".to_string() } else { e }, 2),
             }
-            app.sys.polled = 0.0;
-            app.sys_poll();
+            app.sys_changed();
         }, move || system::wifi_connect(&ssid, None));
     }
 
-    fn power(&mut self, restart: bool) {
-        if !self.live.is_empty() {
-            self.toast("A game is running", "Close it first, so its progress is saved.", 2);
-            return;
+    /// A network was joined (from the list or the Join card): show it at once, without waiting
+    /// for the next reading, and select the Internet row, which now names it. The list closes,
+    /// so the selection must not stay where the network was.
+    pub fn wifi_joined(&mut self, ssid: &str) {
+        self.toast("Connected", ssid, 1);
+        for w in &mut self.sys.wifi {
+            w.in_use = w.ssid == ssid;
         }
-        let result = if restart { system::restart() } else { system::shut_down() };
-        if let Err(e) = result {
-            self.toast(if restart { "Couldn't restart" } else { "Couldn't shut down" }, &e, 2);
+        self.sys.network.wifi = ssid.into();
+        if self.sys.network.kind != "Cable" {
+            self.sys.network = Network { kind: "Wi-Fi", name: ssid.into(), wifi: ssid.into() };
         }
+        self.sys.wifi_open = false;
+        self.sys_changed();
+        if self.overlay == Overlay::Settings {
+            self.refresh_settings();
+            self.select_setting(SId::Internet);
+        }
+    }
+
+    /// The launcher changed the system: read it again now.
+    pub fn sys_changed(&mut self) {
+        self.sys.epoch += 1;
+        self.sys.polled = 0.0;
+        self.sys_poll();
     }
 
     /// Run `job` off the UI thread with `text` on row `id`, then `done` with its result.
@@ -302,6 +412,21 @@ impl App {
 fn saved_wifi(ssid: &str) -> bool {
     std::process::Command::new("nmcli").args(["-t", "-f", "NAME,TYPE", "connection", "show"]).output()
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.replace("\\:", ":").strip_suffix(":802-11-wireless") == Some(ssid)))
+}
+
+const SOUND_NOW: &str = "Sound now plays through";
+
+/// Networks listed before "More networks…".
+const WIFI_SHOWN: usize = 6;
+
+/// Signal bars (1–4) for a signal strength in percent.
+fn bars(signal: u8) -> i32 {
+    match signal {
+        75.. => 4,
+        50..=74 => 3,
+        30..=49 => 2,
+        _ => 1,
+    }
 }
 
 fn strength(signal: u8) -> &'static str {

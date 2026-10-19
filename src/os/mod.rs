@@ -6,9 +6,11 @@
 //! - system: the OS's tools (NetworkManager, BlueZ, PipeWire, bootc/rpm-ostree, the installer)
 //! - system_ui: Settings → SYSTEM (internet, controllers and headsets, sound, updates, power)
 //! - wifi_join: the password for a Wi-Fi network, with an on-screen keyboard
+//! - power: "Restart now?" and "Shut down now?"
 //! - install: "Install AzrakOS on this PC", on the AzrakOS USB stick
 
 pub mod install;
+pub mod power;
 pub mod system;
 pub mod system_ui;
 pub mod wifi_join;

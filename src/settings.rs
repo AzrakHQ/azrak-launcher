@@ -12,6 +12,7 @@ pub enum SId {
     // System (AzrakOS only; see os/system_ui.rs)
     Internet,
     WifiNet(u16),
+    WifiMore,
     BtPair,
     BtFound(u16),
     BtDevice(u16),
@@ -65,6 +66,15 @@ fn row(kind: i32, label: &str) -> SettingData {
 /// What Settings shows about VPNs, to notice when one connects or drops.
 pub fn vpn_signature() -> String {
     crate::vpn::list().iter().map(|v| format!("{}:{} ", v.name, v.connected)).collect()
+}
+
+/// Where a row went after Settings was rebuilt: the same row and name; else the same kind of row
+/// with that name (a device that moved in the list); else the same row.
+fn same_row(row: (SId, &str), rows: &[(SId, &str)]) -> Option<usize> {
+    let kind = std::mem::discriminant(&row.0);
+    rows.iter().position(|r| *r == row)
+        .or_else(|| rows.iter().position(|r| std::mem::discriminant(&r.0) == kind && r.1 == row.1))
+        .or_else(|| rows.iter().position(|r| r.0 == row.0))
 }
 
 fn plural(n: usize, one: &str) -> String {
@@ -367,12 +377,12 @@ impl App {
             if i as i32 == self.idx {
                 target = y;
             }
-            // Hints wrap at about 76 characters (the panel's width at 15 px, at any scale).
-            let hint_lines = row.hint.chars().count().div_ceil(76) as f32;
+            // Hints wrap at about 66 characters (the panel's width at 17 px, at any scale).
+            let hint_lines = row.hint.chars().count().div_ceil(66) as f32;
             y += match row.kind {
                 0 if row.label.is_empty() => 20.0 + 12.0,
                 0 => 36.0 + 20.0 * r + 12.0,
-                _ => 28.0 + 36.0 * r + if hint_lines > 0.0 { 4.0 + hint_lines * 19.0 * r } else { 0.0 } + if self.edit_index == i as i32 { 54.0 * r } else { 0.0 },
+                _ => 28.0 + 36.0 * r + if hint_lines > 0.0 { 4.0 + hint_lines * 21.0 * r } else { 0.0 } + if self.edit_index == i as i32 { 54.0 * r } else { 0.0 },
             };
         }
         y += 36.0 + (20.0 + 180.0) * r + 12.0; // About card under the last row
@@ -392,8 +402,35 @@ impl App {
     }
 
     pub fn refresh_settings(&mut self) {
+        // Rows come and go (the Wi-Fi list, devices found or paired): the selection stays on the
+        // same row, not at the same place, or the next press would land on a stranger.
+        let before: Vec<(SId, String)> = self.settings_ids.iter().zip(&self.settings_rows).map(|(id, r)| (*id, r.label.to_string())).collect();
         self.build_settings();
         self.push_settings();
+        if self.overlay != Overlay::Settings || self.zone != Z_SETTINGS || self.edit_index >= 0 {
+            return;
+        }
+        let after: Vec<(SId, &str)> = self.settings_ids.iter().zip(&self.settings_rows).map(|(id, r)| (*id, r.label.as_str())).collect();
+        // A row that's gone (a network once the list closes) leaves the selection on the nearest
+        // row above it that's still there (Internet).
+        let Some(i) = before.iter().take(self.idx as usize + 1).rev()
+            .filter(|(id, _)| *id != SId::Header)
+            .find_map(|(id, label)| same_row((*id, label), &after)) else { return };
+        if i as i32 != self.idx {
+            self.set_focus(Z_SETTINGS, i as i32);
+            self.scroll_settings();
+        }
+    }
+
+    /// Select a row of Settings while it's open (e.g. Internet once a network is joined).
+    pub fn select_setting(&mut self, id: SId) {
+        if self.overlay != Overlay::Settings {
+            return;
+        }
+        if let Some(i) = self.settings_ids.iter().position(|s| *s == id) {
+            self.set_focus(Z_SETTINGS, i as i32);
+            self.scroll_settings();
+        }
     }
 
     pub fn settings_change(&mut self, i: usize, dir: i32) {
@@ -724,5 +761,22 @@ impl App {
         }
         self.toast(&format!("Moving to {label}…"), "The launcher restarts on that display.", 0);
         slint::Timer::single_shot(std::time::Duration::from_millis(600), || with_app(|app| app.app_restart()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_follows_its_row() {
+        let rows = [(SId::Header, "SYSTEM"), (SId::Internet, "Internet"), (SId::BtPair, "Pair"),
+            (SId::BtDevice(0), "DualSense"), (SId::BtDevice(1), "Xbox")];
+        // The Wi-Fi list closed above it: still Pair, not whatever took its place.
+        assert_eq!(same_row((SId::BtPair, "Pair"), &rows), Some(2));
+        // A device that moved in the list is followed by its name.
+        assert_eq!(same_row((SId::BtDevice(0), "Xbox"), &rows), Some(4));
+        // A network row that's gone has no place.
+        assert_eq!(same_row((SId::WifiNet(3), "Office"), &rows), None);
     }
 }

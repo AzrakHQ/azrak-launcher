@@ -274,12 +274,21 @@ export component AppWindow inherits Window {
     in property <string> wj-field;
     in property <bool> wj-show;
     in property <string> wj-error;
+    in property <string> wj-note;          // not tried yet (too short): said gently, not in red
+    in property <bool> wj-enter-joins;     // a keyboard's Enter joins now (after typing, or on Join)
     in property <bool> wj-busy;
     in property <[WjKey]> wj-row0;
     in property <[WjKey]> wj-row1;
     in property <[WjKey]> wj-row2;
     in property <[WjKey]> wj-row3;
     in property <[WjKey]> wj-row4;
+    // "Restart now?" / "Shut down now?" (os/power.rs): busy once confirmed, with no buttons.
+    in property <string> power-title;
+    in property <string> power-text;
+    in property <[string]> power-buttons;
+    in property <bool> power-danger;
+    in property <int> power-sel;
+    in property <bool> power-busy;
 
     in property <string> menu-title;
     in property <[MenuItem]> menu-items;
@@ -907,8 +916,10 @@ export component AppWindow inherits Window {
             background: #070a14e6;
             border-width: 1px;
             border-color: Theme.line;
-            // Hidden over the library grid so it never covers game titles.
-            visible: root.overlay != 4 && root.overlay != 3 && root.overlay != 6 && root.overlay != 7 && (root.view == 0 || root.overlay != 0);
+            // Hidden over the library grid so it never covers game titles, and under a card that
+            // asks something (Join Wi-Fi, Restart now?): the card shows its own keys.
+            visible: root.overlay != 4 && root.overlay != 3 && root.overlay != 6 && root.overlay != 7 && root.overlay != 12 && root.overlay != 13
+                && (root.view == 0 || root.overlay != 0);
             hints := HorizontalLayout {
                 padding-left: (20px * S.k);
                 padding-right: (22px * S.k);
@@ -1163,7 +1174,9 @@ export component AppWindow inherits Window {
         }
 
         // ------------------------------------------------------------ SETTINGS
-        if root.overlay == 2: Rectangle {
+        // Also behind the cards opened from it (Join Wi-Fi, Restart now?), so it's clear where
+        // they lead back to.
+        if root.overlay == 2 || root.overlay == 12 || root.overlay == 13: Rectangle {
             property <bool> entered: false;
             init => { entered = true; }
             background: entered ? #03050ccc : #03050c00;
@@ -1263,12 +1276,42 @@ export component AppWindow inherits Window {
                                             Text { text: s.value; font-size: (19px * S.t); color: Theme.text; vertical-alignment: center; }
                                             Image { source: Icons.chevr; colorize: f ? Theme.text : Theme.text3; width: (22px * S.k); height: (22px * S.k); y: (7px * S.k); }
                                         }
-                                        if s.kind == 4 && s.value != "": Text {
-                                            text: s.value;
-                                            font-size: (17px * S.t);
-                                            font-weight: s.value-kind == 3 ? 600 : 400;
-                                            color: s.value-kind == 1 ? Theme.ok : s.value-kind == 2 ? Theme.danger : s.value-kind == 3 ? #7ab4ff : Theme.text3;
-                                            vertical-alignment: center;
+                                        if s.kind == 4 && (s.value != "" || s.icon != "" || s.signal > 0): HorizontalLayout {
+                                            spacing: (8px * S.k);
+                                            if s.busy: Image {
+                                                source: Icons.spinner;
+                                                width: (20px * S.k);
+                                                height: self.width;
+                                                y: (8px * S.k);
+                                                transform-rotation: animation-tick() / 1ms * 0.4deg;
+                                            }
+                                            if s.icon != "": Image {
+                                                source: Icons.get(s.icon);
+                                                colorize: s.value-kind == 1 ? Theme.ok : s.value-kind == 2 ? Theme.danger : Theme.text2;
+                                                width: (20px * S.k);
+                                                height: self.width;
+                                                y: (8px * S.k);
+                                            }
+                                            if s.value != "": Text {
+                                                text: s.value;
+                                                font-size: (17px * S.t);
+                                                font-weight: s.value-kind == 3 ? 600 : 400;
+                                                color: s.value-kind == 1 ? Theme.ok : s.value-kind == 2 ? Theme.danger : s.value-kind == 3 ? #7ab4ff : Theme.hint;
+                                                vertical-alignment: center;
+                                            }
+                                            // A Wi-Fi network: a lock when it needs a password, then its bars,
+                                            // each in its own column so they line up down the list.
+                                            if s.signal > 0: Rectangle {
+                                                width: (22px * S.k);
+                                                if s.lock: Image { source: Icons.lock; colorize: Theme.text2; width: (18px * S.k); height: self.width; }
+                                            }
+                                            if s.signal > 0: Image {
+                                                source: Icons.signal[s.signal - 1];
+                                                colorize: s.signal >= 3 ? Theme.text : s.signal == 2 ? Theme.text2 : Theme.warn;
+                                                width: (24px * S.k);
+                                                height: self.width;
+                                                y: (6px * S.k);
+                                            }
                                         }
                                     }
                                     if s.kind == 1 && root.edit-index == i: Rectangle {
@@ -1294,9 +1337,9 @@ export component AppWindow inherits Window {
                                     }
                                     if s.hint != "": Text {
                                         text: s.hint;
-                                        font-size: (15px * S.t);
+                                        font-size: (17px * S.t);
                                         wrap: word-wrap;
-                                        color: s.hint-kind == 1 ? Theme.ok : s.hint-kind == 2 ? Theme.danger : Theme.text3;
+                                        color: s.hint-kind == 1 ? Theme.ok : s.hint-kind == 2 ? Theme.danger : Theme.hint;
                                     }
                                 }
                             }
@@ -2122,8 +2165,8 @@ export component AppWindow inherits Window {
                                     HorizontalLayout {
                                         spacing: (6px * S.k);
                                         alignment: start;
-                                        Image { source: Icons.lock; colorize: Theme.text3; width: (15px * S.k); height: self.width; y: (2px * S.k); }
-                                        Text { text: root.wj-sub; font-size: (17px * S.k); color: Theme.text3; }
+                                        Image { source: Icons.lock; colorize: Theme.hint; width: (16px * S.k); height: self.width; y: (2px * S.k); }
+                                        Text { text: root.wj-sub; font-size: (18px * S.k); color: Theme.hint; }
                                     }
                                 }
                             }
@@ -2158,8 +2201,8 @@ export component AppWindow inherits Window {
                                     }
                                     if root.wj-field != "": Text {
                                         text: root.wj-field;
-                                        font-size: root.wj-show ? (24px * S.k) : (28px * S.k);
-                                        letter-spacing: root.wj-show ? 0 : (3px * S.k);
+                                        font-size: (24px * S.k);
+                                        letter-spacing: root.wj-show ? 0 : (5px * S.k);
                                         color: Theme.text;
                                         vertical-alignment: center;
                                         overflow: elide;
@@ -2181,10 +2224,10 @@ export component AppWindow inherits Window {
                                 spacing: (10px * S.k);
                                 if root.wj-busy: Image { source: Icons.spinner; width: (20px * S.k); height: self.width; y: (2px * S.k); transform-rotation: wj.t * 400deg; }
                                 Text {
-                                    text: root.wj-busy ? "Connecting to " + root.wj-ssid + "…" : root.wj-error != "" ? root.wj-error
+                                    text: root.wj-busy ? "Connecting to " + root.wj-ssid + "…" : root.wj-error != "" ? root.wj-error : root.wj-note != "" ? root.wj-note
                                         : root.pad-hints ? "Choose the letters below" : "Type with your keyboard, or choose the letters below";
                                     font-size: (17px * S.k);
-                                    color: root.wj-error != "" && !root.wj-busy ? Theme.danger : Theme.text2;
+                                    color: root.wj-busy ? Theme.text2 : root.wj-error != "" ? Theme.danger : root.wj-note != "" ? Theme.warn : Theme.text2;
                                     vertical-alignment: center;
                                 }
                             }
@@ -2201,36 +2244,146 @@ export component AppWindow inherits Window {
                                         width: wj.key * k.w + wj.gap * (k.w - 1);
                                         height: r == 4 ? (62px * S.k) : (58px * S.k);
                                         border-radius: (14px * S.k);
+                                        // White is the highlight only; a switch that's on is filled blue and lit.
                                         background: k.focused ? (k.accent ? Theme.accent : #ffffff)
-                                            : k.accent ? Theme.accent.with-alpha(0.35) : k.on ? #3d8bff40 : #ffffff12;
-                                        border-width: k.on && !k.focused ? (2px * S.k) : 1px;
-                                        border-color: k.on && !k.focused ? #8fb6ff : #ffffff14;
+                                            : k.on ? #2f6fe0 : k.accent ? Theme.accent.with-alpha(0.35) : #ffffff12;
+                                        border-width: 1px;
+                                        border-color: k.on && !k.focused ? #8fb6ff66 : #ffffff14;
                                         drop-shadow-blur: k.focused ? (22px * S.k) : 0;
                                         drop-shadow-color: k.accent ? #0a6cffaa : #8cb9ff99;
                                         transform-scale: k.focused ? 1.06 : 1.0;
                                         animate background, transform-scale { duration: 120ms; }
-                                        Text {
-                                            text: k.label;
-                                            font-size: k.w > 1 ? (18px * S.k) : (24px * S.k);
-                                            font-weight: k.w > 1 ? 600 : 500;
-                                            color: k.focused && !k.accent ? #0a0d18 : Theme.text;
+                                        HorizontalLayout {
+                                            alignment: center;
+                                            spacing: (8px * S.k);
+                                            if k.icon != "": Image {
+                                                source: Icons.get(k.icon);
+                                                colorize: k.focused && !k.accent ? (k.on ? Theme.accent : #0a0d18) : Theme.text;
+                                                width: (20px * S.k);
+                                                height: self.width;
+                                                y: (parent.height - self.height) / 2;
+                                            }
+                                            Text {
+                                                text: k.label;
+                                                font-size: k.w > 1 ? (18px * S.k) : (24px * S.k);
+                                                font-weight: k.w > 1 ? 600 : 500;
+                                                color: k.focused && !k.accent ? #0a0d18 : Theme.text;
+                                                vertical-alignment: center;
+                                            }
+                                        }
+                                        // The switch's light, like Caps Lock's.
+                                        if k.on: Rectangle {
+                                            x: parent.width - self.width - (9px * S.k);
+                                            y: (9px * S.k);
+                                            width: (8px * S.k);
+                                            height: self.width;
+                                            border-radius: self.width / 2;
+                                            background: k.focused ? Theme.accent : #cfe0ff;
+                                            drop-shadow-blur: (6px * S.k);
+                                            drop-shadow-color: #8fb6ff;
                                         }
                                         TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.wifi-join, r * 100 + c); } }
                                     }
                                 }
                             }
                             Rectangle { height: (24px * S.k); }
-                            // The buttons that do the same without moving there.
+                            // The buttons that do the same without moving there. None of them does
+                            // anything while connecting (it can't be cancelled), so they fade out.
                             HorizontalLayout {
                                 alignment: center;
                                 spacing: (22px * S.k);
+                                opacity: root.wj-busy ? 0 : 1;
+                                animate opacity { duration: 200ms; }
                                 for h in root.pad-hints
-                                    ? [{ key: "□", what: "Delete" }, { key: "△", what: "Space" }, { key: "L1", what: "Shift" }, { key: "R2", what: "Join" }, { key: "○", what: "Cancel" }]
-                                    : [{ key: "Enter", what: "Press the key" }, { key: "Tab", what: "Show password" }, { key: "Esc", what: "Cancel" }]: HorizontalLayout {
+                                    ? [{ key: "□", what: "Delete" }, { key: "△", what: "Space" }, { key: "L1", what: "Shift" }, { key: "R1", what: "Symbols" }, { key: "R2", what: "Join" }, { key: "○", what: "Cancel" }]
+                                    : [{ key: "Enter", what: root.wj-enter-joins ? "Join" : "Press the key" }, { key: "Tab", what: root.wj-show ? "Hide password" : "Show password" }, { key: "Esc", what: "Cancel" }]: HorizontalLayout {
                                     spacing: (8px * S.k);
                                     KeyCap { text: h.key; round: root.pad-hints && h.key.character-count == 1; }
-                                    Text { text: h.what; font-size: (16px * S.k); color: Theme.text3; vertical-alignment: center; }
+                                    Text { text: h.what; font-size: (17px * S.k); color: Theme.hint; vertical-alignment: center; }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------ RESTART NOW? / SHUT DOWN NOW?
+        if root.overlay == 13: pw := Rectangle {
+            property <float> t: animation-tick() / 1ms / 1000;
+            property <bool> entered: false;
+            init => { entered = true; }
+            background: entered ? #03050cd9 : #03050c00;
+            animate background { duration: 200ms; }
+            TouchArea { clicked => { root.click(Zone.power, -1); } }
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: (680px * S.k);
+                        border-radius: (26px * S.k);
+                        background: @linear-gradient(180deg, #121c38 0%, #0a1024 100%);
+                        border-width: 1px;
+                        border-color: Theme.line;
+                        drop-shadow-blur: (60px * S.k);
+                        drop-shadow-color: #000000aa;
+                        opacity: pw.entered ? 1 : 0;
+                        transform-scale: pw.entered ? 1.0 : 0.94;
+                        animate opacity { duration: 180ms; easing: ease-out-quad; }
+                        animate transform-scale { duration: 320ms; easing: ease-out-back; }
+                        TouchArea {}
+                        VerticalLayout {
+                            padding: (44px * S.k);
+                            spacing: 0;
+                            HorizontalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: (64px * S.k);
+                                    height: self.width;
+                                    border-radius: (18px * S.k);
+                                    background: root.power-danger ? Theme.danger.with-alpha(0.16) : Theme.accent.with-alpha(0.16);
+                                    if root.power-busy: Image { source: Icons.spinner; width: (32px * S.k); height: self.width; transform-rotation: pw.t * 400deg; }
+                                    if !root.power-busy: Image { source: Icons.power; colorize: root.power-danger ? #ff8f9c : #8fb6ff; width: (32px * S.k); height: self.width; }
+                                }
+                            }
+                            Rectangle { height: (22px * S.k); }
+                            Text { text: root.power-title; font-size: (34px * S.k); font-weight: 700; color: Theme.text; horizontal-alignment: center; }
+                            Rectangle { height: (10px * S.k); }
+                            Text { text: root.power-text; font-size: (20px * S.k); color: Theme.text2; horizontal-alignment: center; wrap: word-wrap; }
+                            if !root.power-busy: Rectangle { height: (34px * S.k); }
+                            if !root.power-busy: HorizontalLayout {
+                                alignment: center;
+                                spacing: (16px * S.k);
+                                for b[i] in root.power-buttons: Rectangle {
+                                    property <bool> f: i == root.power-sel;
+                                    property <bool> danger: root.power-danger && i == 0;
+                                    height: (62px * S.k);
+                                    width: max((180px * S.k), pl.preferred-width + (56px * S.k));
+                                    border-radius: (31px * S.k);
+                                    background: f ? (danger ? Theme.danger : #ffffff) : #ffffff14;
+                                    border-width: 1px;
+                                    border-color: #ffffff2e;
+                                    drop-shadow-blur: f ? (26px * S.k) : 0;
+                                    drop-shadow-color: danger ? #ff5a6a88 : #8cb9ffaa;
+                                    transform-scale: f ? 1.0 : 0.97;
+                                    animate background { duration: 200ms; }
+                                    animate transform-scale { duration: 300ms; easing: ease-out-back; }
+                                    pl := HorizontalLayout {
+                                        alignment: center;
+                                        spacing: (12px * S.k);
+                                        if f: KeyCap { text: root.pad-hints ? "✕" : "Enter"; round: root.pad-hints; fg: #ffffff; bg: #0a0d18; y: (16px * S.k); }
+                                        Text { text: b; font-size: (20px * S.k); font-weight: 600; color: f ? (danger ? #ffffff : #0a0d18) : Theme.text; vertical-alignment: center; }
+                                    }
+                                    TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.power, i); } }
+                                }
+                            }
+                            if !root.power-busy: Rectangle { height: (24px * S.k); }
+                            if !root.power-busy: HorizontalLayout {
+                                alignment: center;
+                                spacing: (10px * S.k);
+                                KeyCap { text: root.pad-hints ? "○" : "Esc"; round: root.pad-hints; fg: root.pad-hints ? #ff8f9c : #ffffff; }
+                                Text { text: "Cancel"; font-size: (17px * S.k); color: Theme.text2; vertical-alignment: center; }
                             }
                         }
                     }
