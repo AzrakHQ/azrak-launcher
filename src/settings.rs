@@ -82,7 +82,7 @@ impl App {
         header(&mut rows, "GAMES");
         let mut r = row(1, "Game folders");
         r.value = cfg.game_dirs.iter().map(|d| util::display_path(d)).collect::<Vec<_>>().join("; ").into();
-        r.hint = format!("{} found · separate several folders with ;", plural(self.locals.len(), "installed game")).into();
+        r.hint = format!("{} found · more than one folder? Put a ; between them", plural(self.locals.len(), "installed game")).into();
         rows.push((SId::Dirs, r));
         let mut r = row(1, "Install new games to");
         r.value = util::display_path(&cfg.install_dir).into();
@@ -151,8 +151,10 @@ impl App {
         r.on = cfg.seed_after_download;
         r.hint = "Helps other players download faster · uploads at most 128 KiB/s".into();
         rows.push((SId::SeedCompleted, r));
+        // No controller button opens Downloads (the top bar's icon does), so a controller player
+        // just presses this row; Ctrl+D is only worth showing to keyboard players.
         let mut r = row(4, "Open downloads");
-        r.value = "Ctrl+D".into();
+        r.value = if self.pad_hints { "Open".into() } else { "Open · Ctrl+D".into() };
         rows.push((SId::Downloads, r));
 
         header(&mut rows, "UPDATES");
@@ -392,8 +394,21 @@ impl App {
     }
 
     pub fn refresh_settings(&mut self) {
+        // Rows come and go while Settings is open (a Bluetooth device found, a VPN connecting):
+        // the selection stays on the same row, not on whatever moved into its place.
+        let focused = (self.overlay == Overlay::Settings && self.zone == Z_SETTINGS && self.edit_index < 0)
+            .then(|| self.settings_ids.get(self.idx.max(0) as usize).copied()).flatten();
         self.build_settings();
         self.push_settings();
+        if let Some(id) = focused {
+            let old = self.idx.max(0) as usize;
+            let nearest = self.settings_ids.iter().enumerate().filter(|(_, s)| **s == id)
+                .min_by_key(|(i, _)| i.abs_diff(old)).map(|(i, _)| i);
+            if let Some(i) = nearest.filter(|i| *i != old) {
+                self.set_focus(Z_SETTINGS, i as i32);
+                self.scroll_settings();
+            }
+        }
     }
 
     pub fn settings_change(&mut self, i: usize, dir: i32) {

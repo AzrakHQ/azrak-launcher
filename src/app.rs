@@ -1446,6 +1446,8 @@ impl App {
         if !self.pad_hints {
             self.pad_hints = true;
             self.ui().set_pad_hints(true);
+            // Settings names keyboard shortcuts only to keyboard players.
+            if self.overlay == Overlay::Settings { self.refresh_settings(); }
         }
         let act = match p {
             Pad::Up => Act::Up,
@@ -1485,6 +1487,7 @@ impl App {
         if self.pad_hints {
             self.pad_hints = false;
             self.ui().set_pad_hints(false);
+            if self.overlay == Overlay::Settings { self.refresh_settings(); }
         }
         let k = |key: Key| SharedString::from(key) == text;
         let dir = if k(Key::UpArrow) {
