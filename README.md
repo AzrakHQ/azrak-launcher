@@ -40,43 +40,18 @@ To uninstall: `./azrak-linux-x86_64/install.sh --uninstall`
 
 ## Or turn a spare PC into a console
 
-**AzrakOS** makes a PC start straight into the launcher, like a console. It's
-[Bazzite](https://bazzite.gg), a gaming Linux, with the launcher built in. The launcher, its
-emulators and the system all keep themselves up to date. It's built in
-[AzrakHQ/azrak-os](https://github.com/AzrakHQ/azrak-os).
+**AzrakOS** makes a PC start straight into the launcher, like a console: no desktop, set up
+with a controller, and the launcher, its emulators and the system keep themselves up to date.
+It's built in [AzrakHQ/azrak-os](https://github.com/AzrakHQ/azrak-os).
 
-**You need:**
-- A USB stick (2 GB or more) and an internet connection, cable or Wi-Fi.
-- A PC that can run the games: a 4-core CPU from 2013 or later (Intel Haswell or AMD Excavator
-  and newer), 8 GB RAM (16 GB for PS5 games), a graphics card with Vulkan 1.3 (AMD, NVIDIA or
-  Intel) and a 64 GB disk.
+1. Download [AzrakOS](https://github.com/AzrakHQ/azrak-os/releases/latest/download/azrak-os-x86_64.iso)
+   (1.8 GB) and put it on a USB stick of 4 GB or more with [balenaEtcher](https://etcher.balena.io).
+2. Start the PC from the USB stick (press F12, F11, F8 or Esc while it starts). AzrakOS starts
+   from the stick, and nothing on the PC changes.
+3. Choose **Try AzrakOS**, or **Install on this PC**: pick the disk (it's erased), and restart.
 
-**Installing erases the disk you pick.**
-
-1. Download [azrak-os-x86_64.iso](https://github.com/AzrakHQ/azrak-os/releases/latest/download/azrak-os-x86_64.iso)
-   and write it to the USB stick with [balenaEtcher](https://etcher.balena.io) or
-   [Fedora Media Writer](https://fedoraproject.org/workstation/download).
-2. Start the PC from the USB stick (press F12, F11, F8 or Esc while it starts) and choose
-   **Install AzrakOS**.
-3. In the installer, choose your language, then on the summary screen:
-   - **Network & Host Name:** connect to Wi-Fi if you have no cable.
-   - **Installation Destination:** pick the disk and press **Done**. Leave **Encrypt my data**
-     off, or the PC asks for a passphrase every time it starts.
-   - **Time & Date:** pick your city (the launcher shows the time).
-   - **User Creation:** your name and a password.
-
-   Then **Begin Installation**. It downloads the system (about 7 GB), so it takes a while. The
-   installer says "Fedora": Bazzite is built on Fedora and uses its installer.
-4. Press **Reboot System**, remove the USB stick and stay at the PC. If Secure Boot is on, a blue
-   **Perform MOK management** screen appears once and waits about 5 minutes. Use the arrow keys
-   and Enter: **Enroll MOK**, **Continue**, then **Yes** (it starts on No), type `universalblue`,
-   Enter, then **Reboot**. Missed it, and now the PC stops with "bad shim signature"? Start
-   from the USB stick again, choose **Troubleshooting → Enroll the Secure Boot key again**, and
-   the blue screen comes back.
-
-The PC now starts straight into Azrak Launcher, and it picks the NVIDIA version of the system by
-itself when it finds an NVIDIA graphics card. To get to the desktop, quit the launcher
-(**Settings → Quit**); it opens again at the next start or from the app menu.
+What the PC needs, and help with the install, is in
+[AzrakOS's README](https://github.com/AzrakHQ/azrak-os#readme).
 
 ## Getting started
 
