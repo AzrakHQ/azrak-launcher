@@ -254,8 +254,14 @@ export component AppWindow inherits Window {
     // 3 installing, 4 done, 5 failed. Buttons are numbered from osi-button-base (after the disks).
     in property <int> osi-phase;
     in property <string> osi-title;
+    // The disk's name and size under the title (last check); osi-text-warn: Windows is on it.
+    in property <string> osi-sub;
     in property <string> osi-text;
+    in property <bool> osi-text-warn;
+    // Installed, and Secure Boot's blue key screen (MokManager) comes at the restart.
+    in property <bool> osi-mok;
     in property <string> osi-note;
+    in property <string> osi-small;
     in property <int> osi-sel;
     in property <float> osi-progress;
     in property <bool> osi-busy;
@@ -279,6 +285,9 @@ export component AppWindow inherits Window {
     in property <[MenuItem]> menu-items;
 
     in property <bool> boot-first;
+    // Started with "Try AzrakOS" on the USB stick, right after "Welcome to AzrakOS": this screen
+    // carries on from it instead of welcoming again.
+    in property <bool> boot-stick;
     in property <bool> boot-ready;
     in property <float> boot-progress;
     in property <string> boot-status;
@@ -289,6 +298,7 @@ export component AppWindow inherits Window {
     // ---------------------------------------------------------------- callbacks to Rust
     callback key(string, bool, bool, bool) -> bool;   // text, ctrl, alt, repeat
     callback click(int, int);                         // zone, index
+    callback hover(int, int);                         // zone, index: the mouse moved onto it
     callback row-wheel(float);
     callback grid-scrolled();
     callback grid-wheel(float);
@@ -1603,10 +1613,10 @@ export component AppWindow inherits Window {
                     }
                 }
                 Rectangle { height: (24px * S.k); }
-                Text { text: "AZRAK LAUNCHER"; font-size: (19px * S.k); font-weight: 600; letter-spacing: (3px * S.k); color: Theme.text2; horizontal-alignment: center; }
+                Text { text: root.boot-stick ? "AZRAKOS" : "AZRAK LAUNCHER"; font-size: (19px * S.k); font-weight: 600; letter-spacing: (3px * S.k); color: Theme.text2; horizontal-alignment: center; }
                 Rectangle { height: (18px * S.k); }
                 if root.boot-first: Text {
-                    text: "Welcome";
+                    text: root.boot-stick ? "Getting AzrakOS ready" : "Welcome";
                     font-size: (64px * S.k);
                     font-weight: 700;
                     color: Theme.text;
@@ -1616,6 +1626,13 @@ export component AppWindow inherits Window {
                     text: "Setting up Azrak Launcher";
                     font-size: (23px * S.k);
                     color: Theme.text2;
+                    horizontal-alignment: center;
+                }
+                if root.boot-first && root.boot-stick: Rectangle { height: (6px * S.k); }
+                if root.boot-first && root.boot-stick: Text {
+                    text: "You can install it later from Settings.";
+                    font-size: (19px * S.k);
+                    color: Theme.text3;
                     horizontal-alignment: center;
                 }
                 Rectangle { height: root.boot-first ? (44px * S.k) : (6px * S.k); }
@@ -1790,6 +1807,22 @@ export component AppWindow inherits Window {
                 height: self.width;
                 background: @radial-gradient(circle, #1f4fd133 0%, #1f4fd100 65%);
             }
+            // The start screen's two drifting lights, so the screen is alive even before (or
+            // without) covers to drift behind it.
+            Rectangle {
+                x: root.width * (0.30 + 0.06 * sin(osi.t * 9deg)) - self.width / 2;
+                y: root.height * (0.35 + 0.05 * cos(osi.t * 7deg)) - self.height / 2;
+                width: (1100px * S.k);
+                height: self.width;
+                background: @radial-gradient(circle, #1f4fd12e 0%, #1f4fd100 65%);
+            }
+            Rectangle {
+                x: root.width * (0.70 + 0.05 * cos(osi.t * 8deg)) - self.width / 2;
+                y: root.height * (0.62 + 0.06 * sin(osi.t * 6deg)) - self.height / 2;
+                width: (1000px * S.k);
+                height: self.width;
+                background: @radial-gradient(circle, #8b5cf62e 0%, #8b5cf600 65%);
+            }
 
             VerticalLayout {
                 alignment: center;
@@ -1802,6 +1835,19 @@ export component AppWindow inherits Window {
                 Text { text: "AZRAKOS"; font-size: (18px * S.k); font-weight: 600; letter-spacing: (4px * S.k); color: Theme.text2; horizontal-alignment: center; }
                 Rectangle { height: (14px * S.k); }
                 Text { text: root.osi-title; font-size: (52px * S.k); font-weight: 700; color: Theme.text; horizontal-alignment: center; }
+                if root.osi-sub != "": Rectangle { height: (8px * S.k); }
+                if root.osi-sub != "": HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.osi-sub;
+                        max-width: (900px * S.k);
+                        font-size: (26px * S.k);
+                        font-weight: 600;
+                        color: Theme.text;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                    }
+                }
                 Rectangle { height: (14px * S.k); }
                 HorizontalLayout {
                     alignment: center;
@@ -1809,7 +1855,8 @@ export component AppWindow inherits Window {
                         text: root.osi-text;
                         width: (780px * S.k);
                         font-size: (22px * S.k);
-                        color: Theme.text2;
+                        font-weight: root.osi-text-warn ? 700 : 400;
+                        color: root.osi-text-warn ? Theme.warn : Theme.text2;
                         horizontal-alignment: center;
                         wrap: word-wrap;
                     }
@@ -1844,7 +1891,12 @@ export component AppWindow inherits Window {
                                     Text { text: d.detail; font-size: (17px * S.k); color: d.warn ? Theme.warn : Theme.text2; }
                                 }
                             }
-                            TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.os-install, i); } }
+                            // The highlight follows the mouse, so it shows what a click (or ✕) does.
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.click(Zone.os-install, i); }
+                                changed has-hover => { if self.has-hover { root.hover(Zone.os-install, i); } }
+                            }
                         }
                     }
                 }
@@ -1882,18 +1934,96 @@ export component AppWindow inherits Window {
                     Text { text: round(root.osi-progress * 100) + "%"; font-size: (18px * S.k); font-weight: 600; color: Theme.text2; min-width: (48px * S.k); }
                 }
 
-                if root.osi-note != "": Rectangle { height: (22px * S.k); }
+                if root.osi-note != "": Rectangle { height: root.osi-phase == 3 ? (30px * S.k) : (22px * S.k); }
                 if root.osi-note != "": HorizontalLayout {
                     alignment: center;
+                    // Installing: "Keep the PC on" is the one thing to know, so it's large.
                     Text {
                         text: root.osi-note;
                         width: (720px * S.k);
-                        font-size: (18px * S.k);
-                        color: root.osi-phase == 2 ? Theme.warn : Theme.text3;
+                        font-size: root.osi-phase == 3 ? (28px * S.k) : (18px * S.k);
+                        font-weight: root.osi-phase == 3 ? 700 : 400;
+                        color: root.osi-phase == 2 ? Theme.warn : root.osi-phase == 3 ? Theme.text : Theme.text3;
                         horizontal-alignment: center;
                         wrap: word-wrap;
                     }
                 }
+                if root.osi-small != "": Rectangle { height: (8px * S.k); }
+                if root.osi-small != "": HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.osi-small;
+                        width: (720px * S.k);
+                        font-size: (15px * S.k);
+                        color: Theme.text3;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+
+                // Installed with Secure Boot on: what to press on the blue key screen, one step
+                // per line. It takes a keyboard (the controller doesn't work there yet).
+                if root.osi-phase == 4 && root.osi-mok: HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: (680px * S.k);
+                        height: mok.preferred-height;
+                        border-radius: (18px * S.k);
+                        background: #ffb54712;
+                        border-width: 1px;
+                        border-color: #ffb54759;
+                        clip: true;
+                        Rectangle { x: 0; width: (5px * S.k); background: Theme.warn; }
+                        mok := VerticalLayout {
+                            padding: (26px * S.k);
+                            padding-left: (34px * S.k);
+                            spacing: (10px * S.k);
+                            HorizontalLayout {
+                                spacing: (10px * S.k);
+                                Image { source: Icons.lock; colorize: Theme.warn; width: (22px * S.k); height: self.width; y: (3px * S.k); }
+                                Text { text: "Before you restart"; font-size: (24px * S.k); font-weight: 700; color: Theme.warn; }
+                            }
+                            Text {
+                                text: "A blue screen comes up once after the restart. On it, use a keyboard's arrow keys and Enter:";
+                                width: (620px * S.k);
+                                font-size: (18px * S.k);
+                                color: Theme.text2;
+                                wrap: word-wrap;
+                            }
+                            Rectangle { height: (2px * S.k); }
+                            for st[n] in [
+                                { a: "Choose ", b: "“Enroll MOK”" },
+                                { a: "", b: "“Continue”" },
+                                { a: "", b: "“Yes”" },
+                                { a: "Type the password ", b: "universalblue" },
+                                { a: "", b: "“Reboot”" },
+                            ]: HorizontalLayout {
+                                spacing: (14px * S.k);
+                                Rectangle {
+                                    width: (28px * S.k);
+                                    height: self.width;
+                                    border-radius: self.width / 2;
+                                    background: #ffb54726;
+                                    Text { text: n + 1; font-size: (15px * S.k); font-weight: 700; color: Theme.warn; }
+                                }
+                                HorizontalLayout {
+                                    alignment: start;
+                                    if st.a != "": Text { text: st.a; font-size: (20px * S.k); color: Theme.text2; vertical-alignment: center; }
+                                    Text { text: st.b; font-size: (20px * S.k); font-weight: 700; color: n == 3 ? Theme.warn : Theme.text; vertical-alignment: center; }
+                                }
+                            }
+                            Rectangle { height: (4px * S.k); }
+                            Text {
+                                text: "This lets NVIDIA's graphics driver start. Skipped it? AzrakOS still starts; the PC asks again later.";
+                                width: (620px * S.k);
+                                font-size: (16px * S.k);
+                                color: Theme.text3;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+
                 Rectangle { height: (40px * S.k); }
 
                 HorizontalLayout {
@@ -1906,9 +2036,10 @@ export component AppWindow inherits Window {
                         height: (62px * S.k);
                         width: bl.preferred-width + (56px * S.k);
                         border-radius: (31px * S.k);
-                        background: f ? (danger ? Theme.danger : #ffffff) : #ffffff14;
-                        border-width: 1px;
-                        border-color: #ffffff2e;
+                        // Erasing stays red even unfocused, so it never passes for a harmless button.
+                        background: f ? (danger ? Theme.danger : #ffffff) : (danger ? #ff5a6a26 : #ffffff14);
+                        border-width: danger ? (2px * S.k) : 1px;
+                        border-color: danger ? Theme.danger : #ffffff2e;
                         drop-shadow-blur: f ? (26px * S.k) + (6px * S.k) * sin(osi.t * 150deg) : 0;
                         drop-shadow-color: danger ? #ff5a6a88 : #8cb9ffaa;
                         transform-scale: f ? 1.0 : 0.97;
@@ -1918,11 +2049,37 @@ export component AppWindow inherits Window {
                             alignment: center;
                             spacing: (12px * S.k);
                             if f: KeyCap { text: root.pad-hints ? "✕" : "Enter"; round: root.pad-hints; fg: #ffffff; bg: #0a0d18; y: (16px * S.k); }
-                            Text { text: b; font-size: (20px * S.k); font-weight: 600; color: f ? (danger ? #ffffff : #0a0d18) : Theme.text; vertical-alignment: center; }
+                            Text { text: b; font-size: (20px * S.k); font-weight: 600; color: f ? (danger ? #ffffff : #0a0d18) : (danger ? #ff8f9c : Theme.text); vertical-alignment: center; }
                         }
-                        TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.os-install, parent.i); } }
+                        TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { root.click(Zone.os-install, parent.i); }
+                            changed has-hover => { if self.has-hover { root.hover(Zone.os-install, parent.i); } }
+                        }
                     }
                 }
+            }
+
+            // Where Back goes is never on screen as a button (disks, last check, failed): its
+            // key is, like on the launcher's other screens. Clicking it goes back too.
+            if root.osi-phase == 1 || root.osi-phase == 2 || root.osi-phase == 5: Rectangle {
+                x: root.width - self.width - (76px * S.k);
+                y: root.height - self.height - (30px * S.k);
+                width: osi-hint.preferred-width;
+                height: (50px * S.k);
+                border-radius: (25px * S.k);
+                background: #070a14e6;
+                border-width: 1px;
+                border-color: Theme.line;
+                osi-hint := HorizontalLayout {
+                    padding-left: (20px * S.k);
+                    padding-right: (22px * S.k);
+                    spacing: (10px * S.k);
+                    alignment: center;
+                    KeyCap { text: root.pad-hints ? "○" : "Esc"; round: root.pad-hints; fg: root.pad-hints ? #ff8f9c : #ffffff; y: (10px * S.k); }
+                    Text { text: "Back"; font-size: (17px * S.k); color: Theme.text2; vertical-alignment: center; }
+                }
+                TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.os-install, -1); } }
             }
         }
 

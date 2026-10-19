@@ -598,6 +598,7 @@ impl App {
 fn wire_callbacks(ui: &AppWindow) {
     ui.on_key(|text, ctrl, alt, repeat| with_app_ret(|app| app.on_key(&text, ctrl, alt, repeat)));
     ui.on_click(|zone, idx| with_app(move |app| app.on_click(zone, idx)));
+    ui.on_hover(|zone, idx| with_app(move |app| app.on_hover(zone, idx)));
     ui.on_row_wheel(|d| {
         with_app(move |app| {
             if d.abs() >= 1.0 {
@@ -1637,6 +1638,13 @@ impl App {
         };
         self.act(act);
         true
+    }
+
+    /// The mouse moved onto something: where the controller's highlight follows it.
+    pub fn on_hover(&mut self, zone: i32, idx: i32) {
+        if zone == Z_OS_INSTALL && self.overlay == Overlay::OsInstall {
+            self.hover_os_install(idx);
+        }
     }
 
     pub fn on_click(&mut self, zone: i32, idx: i32) {
