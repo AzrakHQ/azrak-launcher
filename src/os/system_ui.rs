@@ -175,7 +175,7 @@ impl App {
                 }
                 // Saved networks and open ones connect straight away; others ask for the password.
                 if w.secured && !saved_wifi(&w.ssid) {
-                    self.wifi_join_open(&w.ssid, strength(w.signal));
+                    self.wifi_join_open(&w.ssid, strength(w.signal), w.wep);
                     return true;
                 }
                 self.wifi_connect(i);

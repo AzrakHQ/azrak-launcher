@@ -1,8 +1,9 @@
 //! Joining a secured Wi-Fi network (Settings → Internet): a card with the network, its password
 //! and an on-screen keyboard, so a controller is all it takes; a keyboard types straight in.
 //! Controller: ✕ presses the key, □ deletes, △ adds a space, L1 shift, R1 symbols, R2 or Options
-//! joins, ○ cancels. Keyboard: Enter presses the highlighted key, and typing moves the highlight
-//! to Join (so typing then Enter joins); Esc cancels, Tab shows the password.
+//! joins, ○ cancels. Keyboard: typing leaves the highlight where it is; Enter right after typing
+//! joins, Enter after moving with the arrows presses the highlighted key. Esc cancels, Tab shows
+//! the password.
 
 use crate::app::*;
 use crate::audio::{self, Sound};
@@ -37,7 +38,15 @@ pub struct WifiJoin {
     pub row: usize,
     pub col: usize,
     pub busy: bool,
+    /// A wrong password (red).
     pub error: String,
+    /// Not tried yet: nothing typed, or too short to be a Wi-Fi password.
+    pub note: String,
+    /// WEP takes passwords from 5 characters; everything newer from 8.
+    pub wep: bool,
+    /// The last input was typed on a keyboard (a character or Backspace), so Enter means "done".
+    /// After moving with the arrows it presses the highlighted key instead.
+    pub typed: bool,
 }
 
 impl WifiJoin {
@@ -52,14 +61,103 @@ impl WifiJoin {
             self.text.push(c);
         }
         self.error.clear();
+        self.note.clear();
+    }
+
+    fn delete(&mut self) {
+        self.text.pop();
+        self.error.clear();
+        self.note.clear();
+    }
+
+    /// A character typed on a keyboard: the highlight stays, so a typo is never "joined".
+    fn key_typed(&mut self, c: char) {
+        self.type_char(c);
+        self.typed = true;
+    }
+
+    fn key_backspace(&mut self) {
+        self.delete();
+        self.typed = true;
+    }
+
+    /// Move the highlight. False at the keyboard's edge.
+    fn step(&mut self, a: Act) -> bool {
+        self.typed = false;
+        match a {
+            Act::Up if self.row > 0 => {
+                if self.row == 4 {
+                    self.col = action_to_col(self.col);
+                }
+                self.row -= 1;
+            }
+            Act::Down if self.row < 4 => {
+                self.row += 1;
+                if self.row == 4 {
+                    self.col = col_to_action(self.col);
+                }
+            }
+            Act::Left if self.col > 0 => self.col -= 1,
+            Act::Right if self.col + 1 < if self.row == 4 { ACTIONS.len() } else { COLS } => self.col += 1,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Press the highlighted key. True when it's Join.
+    fn press(&mut self) -> bool {
+        self.typed = false;
+        if self.row < 4 {
+            if let Some(c) = self.char_at(self.row, self.col) {
+                self.type_char(c);
+                // Shift is for one letter, as on a phone.
+                if c.is_alphabetic() {
+                    self.shift = false;
+                }
+            }
+            return false;
+        }
+        match ACTIONS[self.col].0 {
+            Action::Shift => self.shift = !self.shift,
+            Action::Layer => self.symbols = !self.symbols,
+            Action::Space => self.type_char(' '),
+            Action::Delete => self.delete(),
+            Action::Show => self.show = !self.show,
+            Action::Join => return true,
+        }
+        false
+    }
+
+    /// Enter on a keyboard: right after typing it joins; otherwise it presses the highlighted
+    /// key. True when it joins.
+    fn enter(&mut self) -> bool {
+        self.typed || self.press()
+    }
+
+    /// Enter on a keyboard would join (for its hint).
+    fn enter_joins(&self) -> bool {
+        self.typed || (self.row == 4 && ACTIONS[self.col].0 == Action::Join)
+    }
+
+    /// Why the password isn't worth trying yet: nothing typed, or shorter than any Wi-Fi password
+    /// (a sure "wrong password" after a long wait).
+    fn not_ready(&self) -> Option<String> {
+        let (n, min) = (self.text.chars().count(), if self.wep { 5 } else { 8 });
+        if n == 0 {
+            Some("Type the password first".into())
+        } else if n < min {
+            Some(format!("Wi-Fi passwords have at least {min} characters"))
+        } else {
+            None
+        }
     }
 }
 
 impl App {
     /// Settings → Internet: a secured network that isn't saved yet asks for its password here.
-    pub fn wifi_join_open(&mut self, ssid: &str, signal: &str) {
+    pub fn wifi_join_open(&mut self, ssid: &str, signal: &str, wep: bool) {
         audio::play(Sound::Select);
-        self.wj = WifiJoin { ssid: ssid.into(), signal: signal.into(), row: 1, ..Default::default() };
+        self.wj = WifiJoin { ssid: ssid.into(), signal: signal.into(), wep, row: 1, ..Default::default() };
         self.push_overlay(Overlay::WifiJoin, Z_WIFI_JOIN, 0);
         self.wj_push();
     }
@@ -81,10 +179,14 @@ impl App {
         if k(Key::Escape) {
             self.wj_close();
         } else if k(Key::Return) {
-            self.wj_press();
+            if self.wj.enter() {
+                self.wj_join();
+            } else {
+                audio::play(Sound::Move);
+                self.wj_push();
+            }
         } else if k(Key::Backspace) {
-            self.wj.text.pop();
-            self.wj.error.clear();
+            self.wj.key_backspace();
             self.wj_push();
         } else if k(Key::Tab) {
             self.wj.show = !self.wj.show;
@@ -101,8 +203,7 @@ impl App {
             let mut chars = text.chars();
             if let (Some(c), None) = (chars.next(), chars.next()) {
                 if !c.is_control() {
-                    self.wj.type_char(c);
-                    (self.wj.row, self.wj.col) = (4, ACTIONS.len() - 1);
+                    self.wj.key_typed(c);
                     self.wj_push();
                 }
             }
@@ -128,26 +229,14 @@ impl App {
         }
         let w = &mut self.wj;
         match a {
-            Act::Up if w.row > 0 => {
-                if w.row == 4 {
-                    w.col = action_to_col(w.col);
-                }
-                w.row -= 1;
-            }
-            Act::Down if w.row < 4 => {
-                w.row += 1;
-                if w.row == 4 {
-                    w.col = col_to_action(w.col);
+            Act::Up | Act::Down | Act::Left | Act::Right => {
+                if !w.step(a) {
+                    return;
                 }
             }
-            Act::Left if w.col > 0 => w.col -= 1,
-            Act::Right if w.col + 1 < if w.row == 4 { ACTIONS.len() } else { COLS } => w.col += 1,
             Act::Confirm => return self.wj_press(),
             Act::Back => return self.wj_close(),
-            Act::Trailer => {
-                w.text.pop();
-                w.error.clear();
-            }
+            Act::Trailer => w.delete(),
             Act::Search => w.type_char(' '),
             Act::TabPrev => w.shift = !w.shift,
             Act::TabNext => w.symbols = !w.symbols,
@@ -159,35 +248,17 @@ impl App {
     }
 
     fn wj_press(&mut self) {
-        let w = &mut self.wj;
-        if w.row < 4 {
-            if let Some(c) = w.char_at(w.row, w.col) {
-                w.type_char(c);
-                // Shift is for one letter, as on a phone.
-                if c.is_alphabetic() {
-                    w.shift = false;
-                }
-            }
-        } else {
-            match ACTIONS[w.col].0 {
-                Action::Shift => w.shift = !w.shift,
-                Action::Layer => w.symbols = !w.symbols,
-                Action::Space => w.type_char(' '),
-                Action::Delete => {
-                    w.text.pop();
-                }
-                Action::Show => w.show = !w.show,
-                Action::Join => return self.wj_join(),
-            }
+        if self.wj.press() {
+            return self.wj_join();
         }
         audio::play(Sound::Move);
         self.wj_push();
     }
 
     fn wj_join(&mut self) {
-        if self.wj.text.is_empty() {
-            self.wj.error = "Type the password first".into();
-            audio::play(Sound::Error);
+        if let Some(note) = self.wj.not_ready() {
+            self.wj.note = note;
+            audio::play(Sound::Back);
             return self.wj_push();
         }
         audio::play(Sound::Select);
@@ -229,6 +300,8 @@ impl App {
         ui.set_wj_field(if w.show { w.text.clone() } else { "•".repeat(w.text.chars().count()) }.into());
         ui.set_wj_show(w.show);
         ui.set_wj_error(w.error.clone().into());
+        ui.set_wj_note(w.note.clone().into());
+        ui.set_wj_enter_joins(w.enter_joins());
         ui.set_wj_busy(w.busy);
         let key = |label: String, width: f32, focused: bool, accent: bool, on: bool| crate::WjKey { label: label.into(), w: width, focused, accent, on };
         let rows: Vec<Vec<crate::WjKey>> = (0..4).map(|r| (0..COLS).map(|c| {
@@ -289,5 +362,44 @@ mod tests {
         assert!((0..ACTIONS.len()).all(|a| col_to_action(action_to_col(a)) == a));
         let w = WifiJoin { shift: true, ..Default::default() };
         assert_eq!((w.char_at(1, 0), w.char_at(0, 0)), (Some('Q'), Some('1')));
+    }
+
+    #[test]
+    fn enter_after_typing_joins_after_arrows_presses() {
+        let mut w = WifiJoin { row: 1, ..Default::default() };
+        // Typing leaves the highlight on q; Enter right after it means "done".
+        w.key_typed('a');
+        assert_eq!((w.row, w.col, w.text.as_str()), (1, 0, "a"));
+        assert!(w.enter_joins() && w.enter());
+        // After the arrows, Enter presses the highlighted key (w), and again (w).
+        assert!(w.step(Act::Right));
+        assert!(!w.enter_joins());
+        assert!(!w.enter() && !w.enter());
+        assert_eq!(w.text, "aww");
+        // Backspace counts as typing.
+        w.key_backspace();
+        assert!(w.enter());
+        assert_eq!(w.text, "aw");
+        // On Join, Enter joins whatever came last.
+        assert!(w.step(Act::Down) && w.step(Act::Down) && w.step(Act::Down));
+        while w.step(Act::Right) {}
+        assert!(w.enter_joins() && w.enter());
+    }
+
+    #[test]
+    fn too_short_to_try() {
+        let mut w = WifiJoin::default();
+        assert_eq!(w.not_ready().as_deref(), Some("Type the password first"));
+        w.text = "letmein".into();
+        assert_eq!(w.not_ready().as_deref(), Some("Wi-Fi passwords have at least 8 characters"));
+        w.text.push('1');
+        assert_eq!(w.not_ready(), None);
+        // WEP keys can be 5 characters.
+        let w = WifiJoin { wep: true, text: "abcde".into(), ..Default::default() };
+        assert_eq!(w.not_ready(), None);
+        // Typing again clears the note.
+        let mut w = WifiJoin { note: "Type the password first".into(), ..Default::default() };
+        w.key_typed('x');
+        assert!(w.note.is_empty());
     }
 }

@@ -268,6 +268,8 @@ export component AppWindow inherits Window {
     in property <string> wj-field;
     in property <bool> wj-show;
     in property <string> wj-error;
+    in property <string> wj-note;          // not tried yet (too short): said gently, not in red
+    in property <bool> wj-enter-joins;     // a keyboard's Enter joins now (after typing, or on Join)
     in property <bool> wj-busy;
     in property <[WjKey]> wj-row0;
     in property <[WjKey]> wj-row1;
@@ -2045,10 +2047,10 @@ export component AppWindow inherits Window {
                                 spacing: (10px * S.k);
                                 if root.wj-busy: Image { source: Icons.spinner; width: (20px * S.k); height: self.width; y: (2px * S.k); transform-rotation: wj.t * 400deg; }
                                 Text {
-                                    text: root.wj-busy ? "Connecting to " + root.wj-ssid + "…" : root.wj-error != "" ? root.wj-error
+                                    text: root.wj-busy ? "Connecting to " + root.wj-ssid + "…" : root.wj-error != "" ? root.wj-error : root.wj-note != "" ? root.wj-note
                                         : root.pad-hints ? "Choose the letters below" : "Type with your keyboard, or choose the letters below";
                                     font-size: (17px * S.k);
-                                    color: root.wj-error != "" && !root.wj-busy ? Theme.danger : Theme.text2;
+                                    color: root.wj-busy ? Theme.text2 : root.wj-error != "" ? Theme.danger : root.wj-note != "" ? Theme.warn : Theme.text2;
                                     vertical-alignment: center;
                                 }
                             }
@@ -2090,7 +2092,7 @@ export component AppWindow inherits Window {
                                 spacing: (22px * S.k);
                                 for h in root.pad-hints
                                     ? [{ key: "□", what: "Delete" }, { key: "△", what: "Space" }, { key: "L1", what: "Shift" }, { key: "R2", what: "Join" }, { key: "○", what: "Cancel" }]
-                                    : [{ key: "Enter", what: "Press the key" }, { key: "Tab", what: "Show password" }, { key: "Esc", what: "Cancel" }]: HorizontalLayout {
+                                    : [{ key: "Enter", what: root.wj-enter-joins ? "Join" : "Press the key" }, { key: "Tab", what: "Show password" }, { key: "Esc", what: "Cancel" }]: HorizontalLayout {
                                     spacing: (8px * S.k);
                                     KeyCap { text: h.key; round: root.pad-hints && h.key.character-count == 1; }
                                     Text { text: h.what; font-size: (16px * S.k); color: Theme.text3; vertical-alignment: center; }

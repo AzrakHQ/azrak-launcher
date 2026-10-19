@@ -87,6 +87,8 @@ pub struct Wifi {
     pub ssid: String,
     pub signal: u8,
     pub secured: bool,
+    /// The old WEP security, whose passwords can be as short as 5 characters.
+    pub wep: bool,
     pub in_use: bool,
 }
 
@@ -101,6 +103,7 @@ fn parse_wifi(text: &str) -> Vec<Wifi> {
         ssid: f[1].clone(),
         signal: f[2].parse().unwrap_or(0),
         secured: !f[3].is_empty() && f[3] != "--",
+        wep: f[3].contains("WEP"),
     }).collect();
     list.sort_by(|a, b| b.in_use.cmp(&a.in_use).then(b.signal.cmp(&a.signal)));
     let mut seen = std::collections::HashSet::new();
@@ -364,9 +367,10 @@ mod tests {
             Network { kind: "Wi-Fi", name: "Home: 5G".into() });
         assert_eq!(parse_network("ethernet:connected:Wired connection 1\nwifi:connected:Home\n").kind, "Cable");
         assert_eq!(parse_network("wifi:disconnected:\n"), Network::default());
-        let list = parse_wifi(":Cafe:40:\n*:Home\\: 5G:78:WPA2\n:Neighbour:90:WPA1 WPA2\n:Neighbour:30:WPA2\n::70:WPA2\n");
+        let list = parse_wifi(":Cafe:40:\n*:Home\\: 5G:78:WPA2\n:Neighbour:90:WPA1 WPA2\n:Neighbour:30:WPA2\n::70:WPA2\n:Old:20:WEP\n");
         let names: Vec<_> = list.iter().map(|w| (w.ssid.as_str(), w.signal, w.secured, w.in_use)).collect();
-        assert_eq!(names, vec![("Home: 5G", 78, true, true), ("Neighbour", 90, true, false), ("Cafe", 40, false, false)]);
+        assert_eq!(names, vec![("Home: 5G", 78, true, true), ("Neighbour", 90, true, false), ("Cafe", 40, false, false), ("Old", 20, true, false)]);
+        assert_eq!(list.iter().map(|w| w.wep).collect::<Vec<_>>(), vec![false, false, false, true]);
     }
 
     #[test]
