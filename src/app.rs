@@ -43,6 +43,7 @@ pub const Z_TRAILER: i32 = 18;
 pub const Z_CONTROLS: i32 = 19;
 pub const Z_OS_INSTALL: i32 = 20;
 pub const Z_WIFI_JOIN: i32 = 21;
+pub const Z_POWER: i32 = 22;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Overlay {
@@ -60,6 +61,8 @@ pub enum Overlay {
     OsInstall = 11,
     /// The password for a Wi-Fi network (os/wifi_join.rs).
     WifiJoin = 12,
+    /// "Restart now?" / "Shut down now?" (os/power.rs).
+    Power = 13,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -265,6 +268,10 @@ pub struct App {
     /// "Try AzrakOS" (os/install.rs).
     pub held_start: Option<(bool, bool)>,
     pub wj: crate::os::wifi_join::WifiJoin,
+    pub power: crate::os::power::PowerAsk,
+    /// Notifications that arrived while a card (Join Wi-Fi, Restart now?) was open: they wait
+    /// for it to close instead of covering it.
+    held_toasts: Vec<(String, String, i32, Option<slint::Image>, bool, String)>,
     /// This PC's processor, memory and graphics (read in the background at start).
     pub pc: Option<crate::pc::Specs>,
     pub pc_checking: bool,
@@ -433,6 +440,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         osi: Default::default(),
         held_start: None,
         wj: Default::default(),
+        power: Default::default(),
+        held_toasts: Vec::new(),
         pc: None,
         pc_checking: false,
         boot: Default::default(),
@@ -1576,6 +1585,9 @@ impl App {
         if zone == Z_WIFI_JOIN && self.overlay == Overlay::WifiJoin {
             return self.click_wifi_join(idx);
         }
+        if zone == Z_POWER && self.overlay == Overlay::Power {
+            return self.click_power(idx);
+        }
         if zone == Z_OS_INSTALL && self.overlay == Overlay::OsInstall {
             if idx < 0 {
                 self.act_os_install(Act::Back);
@@ -1690,6 +1702,7 @@ impl App {
             Overlay::Menu => self.act_menu(a),
             Overlay::OsInstall => self.act_os_install(a),
             Overlay::WifiJoin => self.act_wifi_join(a),
+            Overlay::Power => self.act_power(a),
             Overlay::Settings => self.act_settings(a),
             Overlay::Hub => self.act_hub(a),
             Overlay::Downloads => self.act_downloads(a),
@@ -2106,6 +2119,7 @@ impl App {
             self.overlay = ov;
             self.ui().set_overlay(ov as i32);
             self.set_focus(zone, idx);
+            self.release_toasts();
             if ov == Overlay::None {
                 self.ui().set_hub_open(false);
                 self.hub = None;
@@ -2806,7 +2820,26 @@ impl App {
         }
     }
 
+    /// A card that asks something (Join Wi-Fi, Restart now?) is open.
+    pub fn modal_open(&self) -> bool {
+        matches!(self.overlay, Overlay::WifiJoin | Overlay::Power)
+    }
+
+    /// Show the notifications held while a card was open.
+    fn release_toasts(&mut self) {
+        if !self.modal_open() {
+            for (text, sub, kind, image, app, action) in std::mem::take(&mut self.held_toasts) {
+                self.toast_with(&text, &sub, kind, image, app, &action);
+            }
+        }
+    }
+
     pub fn toast_with(&mut self, text: &str, sub: &str, kind: i32, image: Option<slint::Image>, app: bool, action: &str) {
+        // A card is a question being answered: news can wait until it closes, errors can't.
+        if self.modal_open() && kind != 2 {
+            self.held_toasts.push((text.into(), sub.into(), kind, image, app, action.into()));
+            return;
+        }
         self.toast_seq += 1;
         let id = self.toast_seq;
         self.toasts.push(ToastData {

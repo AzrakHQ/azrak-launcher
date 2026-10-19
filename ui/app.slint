@@ -274,6 +274,13 @@ export component AppWindow inherits Window {
     in property <[WjKey]> wj-row2;
     in property <[WjKey]> wj-row3;
     in property <[WjKey]> wj-row4;
+    // "Restart now?" / "Shut down now?" (os/power.rs): busy once confirmed, with no buttons.
+    in property <string> power-title;
+    in property <string> power-text;
+    in property <[string]> power-buttons;
+    in property <bool> power-danger;
+    in property <int> power-sel;
+    in property <bool> power-busy;
 
     in property <string> menu-title;
     in property <[MenuItem]> menu-items;
@@ -897,8 +904,10 @@ export component AppWindow inherits Window {
             background: #070a14e6;
             border-width: 1px;
             border-color: Theme.line;
-            // Hidden over the library grid so it never covers game titles.
-            visible: root.overlay != 4 && root.overlay != 3 && root.overlay != 6 && root.overlay != 7 && (root.view == 0 || root.overlay != 0);
+            // Hidden over the library grid so it never covers game titles, and under a card that
+            // asks something (Join Wi-Fi, Restart now?): the card shows its own keys.
+            visible: root.overlay != 4 && root.overlay != 3 && root.overlay != 6 && root.overlay != 7 && root.overlay != 12 && root.overlay != 13
+                && (root.view == 0 || root.overlay != 0);
             hints := HorizontalLayout {
                 padding-left: (20px * S.k);
                 padding-right: (22px * S.k);
@@ -1153,7 +1162,9 @@ export component AppWindow inherits Window {
         }
 
         // ------------------------------------------------------------ SETTINGS
-        if root.overlay == 2: Rectangle {
+        // Also behind the cards opened from it (Join Wi-Fi, Restart now?), so it's clear where
+        // they lead back to.
+        if root.overlay == 2 || root.overlay == 12 || root.overlay == 13: Rectangle {
             property <bool> entered: false;
             init => { entered = true; }
             background: entered ? #03050ccc : #03050c00;
@@ -2074,6 +2085,89 @@ export component AppWindow inherits Window {
                                     KeyCap { text: h.key; round: root.pad-hints && h.key.character-count == 1; }
                                     Text { text: h.what; font-size: (16px * S.k); color: Theme.text3; vertical-alignment: center; }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------ RESTART NOW? / SHUT DOWN NOW?
+        if root.overlay == 13: pw := Rectangle {
+            property <float> t: animation-tick() / 1ms / 1000;
+            property <bool> entered: false;
+            init => { entered = true; }
+            background: entered ? #03050cd9 : #03050c00;
+            animate background { duration: 200ms; }
+            TouchArea { clicked => { root.click(Zone.power, -1); } }
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: (680px * S.k);
+                        border-radius: (26px * S.k);
+                        background: @linear-gradient(180deg, #121c38 0%, #0a1024 100%);
+                        border-width: 1px;
+                        border-color: Theme.line;
+                        drop-shadow-blur: (60px * S.k);
+                        drop-shadow-color: #000000aa;
+                        opacity: pw.entered ? 1 : 0;
+                        transform-scale: pw.entered ? 1.0 : 0.94;
+                        animate opacity { duration: 180ms; easing: ease-out-quad; }
+                        animate transform-scale { duration: 320ms; easing: ease-out-back; }
+                        TouchArea {}
+                        VerticalLayout {
+                            padding: (44px * S.k);
+                            spacing: 0;
+                            HorizontalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: (64px * S.k);
+                                    height: self.width;
+                                    border-radius: (18px * S.k);
+                                    background: root.power-danger ? Theme.danger.with-alpha(0.16) : Theme.accent.with-alpha(0.16);
+                                    if root.power-busy: Image { source: Icons.spinner; width: (32px * S.k); height: self.width; transform-rotation: pw.t * 400deg; }
+                                    if !root.power-busy: Image { source: Icons.power; colorize: root.power-danger ? #ff8f9c : #8fb6ff; width: (32px * S.k); height: self.width; }
+                                }
+                            }
+                            Rectangle { height: (22px * S.k); }
+                            Text { text: root.power-title; font-size: (34px * S.k); font-weight: 700; color: Theme.text; horizontal-alignment: center; }
+                            Rectangle { height: (10px * S.k); }
+                            Text { text: root.power-text; font-size: (20px * S.k); color: Theme.text2; horizontal-alignment: center; wrap: word-wrap; }
+                            if !root.power-busy: Rectangle { height: (34px * S.k); }
+                            if !root.power-busy: HorizontalLayout {
+                                alignment: center;
+                                spacing: (16px * S.k);
+                                for b[i] in root.power-buttons: Rectangle {
+                                    property <bool> f: i == root.power-sel;
+                                    property <bool> danger: root.power-danger && i == 0;
+                                    height: (62px * S.k);
+                                    width: max((180px * S.k), pl.preferred-width + (56px * S.k));
+                                    border-radius: (31px * S.k);
+                                    background: f ? (danger ? Theme.danger : #ffffff) : #ffffff14;
+                                    border-width: 1px;
+                                    border-color: #ffffff2e;
+                                    drop-shadow-blur: f ? (26px * S.k) : 0;
+                                    drop-shadow-color: danger ? #ff5a6a88 : #8cb9ffaa;
+                                    transform-scale: f ? 1.0 : 0.97;
+                                    animate background { duration: 200ms; }
+                                    animate transform-scale { duration: 300ms; easing: ease-out-back; }
+                                    pl := HorizontalLayout {
+                                        alignment: center;
+                                        spacing: (12px * S.k);
+                                        if f: KeyCap { text: root.pad-hints ? "✕" : "Enter"; round: root.pad-hints; fg: #ffffff; bg: #0a0d18; y: (16px * S.k); }
+                                        Text { text: b; font-size: (20px * S.k); font-weight: 600; color: f ? (danger ? #ffffff : #0a0d18) : Theme.text; vertical-alignment: center; }
+                                    }
+                                    TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.power, i); } }
+                                }
+                            }
+                            if !root.power-busy: Rectangle { height: (24px * S.k); }
+                            if !root.power-busy: HorizontalLayout {
+                                alignment: center;
+                                spacing: (10px * S.k);
+                                KeyCap { text: root.pad-hints ? "○" : "Esc"; round: root.pad-hints; fg: root.pad-hints ? #ff8f9c : #ffffff; }
+                                Text { text: "Cancel"; font-size: (17px * S.k); color: Theme.text2; vertical-alignment: center; }
                             }
                         }
                     }

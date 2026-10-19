@@ -4,6 +4,7 @@
 
 use crate::app::*;
 use crate::settings::SId;
+use crate::os::power::Power;
 use crate::os::system::{self, Device, Network, Output, Update, Wifi};
 use crate::SettingData;
 
@@ -139,7 +140,7 @@ impl App {
         if let Some(u) = &s.update {
             let mut r = row(4, "System");
             (r.value, r.value_kind, r.hint) = match &u.staged {
-                Some(next) => (format!("Restart to update to {next}").into(), 3, format!("Running {}", u.version).into()),
+                Some(next) => (format!("Restart to update to {next}").into(), 3, format!("Press to restart and update · now running {}", u.version).into()),
                 None => (format!("{} · Up to date", u.version).into(), 1, "Updates download by themselves and wait for a restart".into()),
             };
             rows.push((SId::SystemUpdate, r));
@@ -222,12 +223,19 @@ impl App {
             }
             SId::SystemUpdate => {
                 if self.sys.update.as_ref().is_some_and(|u| u.staged.is_some()) {
-                    self.power(true);
+                    self.power_ask(Power::Update);
                 }
+                return true;
             }
             SId::InstallOs => self.os_install_open(),
-            SId::Restart => self.power(true),
-            SId::ShutDown => self.power(false),
+            SId::Restart => {
+                self.power_ask(Power::Restart);
+                return true;
+            }
+            SId::ShutDown => {
+                self.power_ask(Power::ShutDown);
+                return true;
+            }
             _ => return false,
         }
         crate::audio::play(crate::audio::Sound::Select);
@@ -268,17 +276,6 @@ impl App {
             app.sys.polled = 0.0;
             app.sys_poll();
         }, move || system::wifi_connect(&ssid, None));
-    }
-
-    fn power(&mut self, restart: bool) {
-        if !self.live.is_empty() {
-            self.toast("A game is running", "Close it first, so its progress is saved.", 2);
-            return;
-        }
-        let result = if restart { system::restart() } else { system::shut_down() };
-        if let Err(e) = result {
-            self.toast(if restart { "Couldn't restart" } else { "Couldn't shut down" }, &e, 2);
-        }
     }
 
     /// Run `job` off the UI thread with `text` on row `id`, then `done` with its result.
