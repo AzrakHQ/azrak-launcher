@@ -42,6 +42,7 @@ pub const Z_DENSITY: i32 = 17;
 pub const Z_TRAILER: i32 = 18;
 pub const Z_CONTROLS: i32 = 19;
 pub const Z_OS_INSTALL: i32 = 20;
+pub const Z_WIFI_JOIN: i32 = 21;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Overlay {
@@ -57,6 +58,8 @@ pub enum Overlay {
     Controls = 10,
     /// Install AzrakOS from the USB stick (os_install.rs).
     OsInstall = 11,
+    /// The password for a Wi-Fi network (wifi_join.rs).
+    WifiJoin = 12,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -261,6 +264,7 @@ pub struct App {
     /// On the AzrakOS USB stick the launcher's own start (first run?, catalog stale?) waits for
     /// "Try AzrakOS" (os_install.rs).
     pub held_start: Option<(bool, bool)>,
+    pub wj: crate::wifi_join::WifiJoin,
     /// This PC's processor, memory and graphics (read in the background at start).
     pub pc: Option<crate::pc::Specs>,
     pub pc_checking: bool,
@@ -428,6 +432,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         sys: Default::default(),
         osi: Default::default(),
         held_start: None,
+        wj: Default::default(),
         pc: None,
         pc_checking: false,
         boot: Default::default(),
@@ -1460,6 +1465,9 @@ impl App {
             None
         };
 
+        if self.overlay == Overlay::WifiJoin {
+            return self.wifi_join_key(text, ctrl, alt);
+        }
         // Text editing: the TextInput handles typing; we get what it doesn't use.
         if self.overlay == Overlay::Downloads && self.ui().get_download_consent()
             && !self.ui().get_download_editing() && !ctrl && !alt && k(Key::Tab) {
@@ -1564,6 +1572,9 @@ impl App {
         if self.edit_index >= 0 && !(zone == Z_SETTINGS && idx == self.edit_index) {
             let cur = self.ui().get_edit_text().to_string();
             self.finish_edit(Some(cur));
+        }
+        if zone == Z_WIFI_JOIN && self.overlay == Overlay::WifiJoin {
+            return self.click_wifi_join(idx);
         }
         if zone == Z_OS_INSTALL && self.overlay == Overlay::OsInstall {
             if idx < 0 {
@@ -1678,6 +1689,7 @@ impl App {
             },
             Overlay::Menu => self.act_menu(a),
             Overlay::OsInstall => self.act_os_install(a),
+            Overlay::WifiJoin => self.act_wifi_join(a),
             Overlay::Settings => self.act_settings(a),
             Overlay::Hub => self.act_hub(a),
             Overlay::Downloads => self.act_downloads(a),

@@ -18,6 +18,7 @@ mod pcgame;
 mod system;
 mod system_ui;
 mod os_install;
+mod wifi_join;
 mod exfat;
 mod results;
 mod trailer;

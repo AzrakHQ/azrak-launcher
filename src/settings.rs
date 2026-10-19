@@ -600,9 +600,6 @@ impl App {
 
     pub fn settings_commit_text(&mut self, i: usize, text: String) {
         let Some(id) = self.settings_ids.get(i).copied() else { return };
-        if self.system_commit_text(id, text.clone()) {
-            return;
-        }
         let t = text.trim().to_string();
         match id {
             SId::Emulator => {

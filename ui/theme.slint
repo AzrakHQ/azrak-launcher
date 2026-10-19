@@ -62,6 +62,8 @@ export global Icons {
     out property <image> alert: @image-url("../assets/icons/alert.svg");
     out property <image> app: @image-url("../assets/icons/app-icon.svg");
     out property <image> spinner: @image-url("../assets/icons/spinner.svg");
+    out property <image> wifi: @image-url("../assets/icons/wifi.svg");
+    out property <image> lock: @image-url("../assets/icons/lock.svg");
     out property <image> none;
 
     public pure function get(name: string) -> image {
@@ -96,6 +98,7 @@ export global Zone {
     out property <int> trailer: 18;
     out property <int> controls: 19;
     out property <int> os-install: 20;
+    out property <int> wifi-join: 21;
 }
 
 // dot: KytyPS5 compatibility level (0 none, 1 in-game, 2 menus, 3 boots, 4 doesn't boot, 5 untested)
@@ -206,6 +209,8 @@ export struct BootStep { label: string, detail: string, state: int }
 
 // A disk on the AzrakOS installer's list: its model, size and notes, warn when Windows is on it.
 export struct OsiDisk { label: string, detail: string, warn: bool }
+// A key on the Wi-Fi password keyboard: w is its width in keys; on: a toggle that's on (Shift).
+export struct WjKey { label: string, w: float, focused: bool, accent: bool, on: bool }
 
 // action: what clicking the notification does (empty: nothing).
 export struct ToastData { id: int, text: string, sub: string, kind: int, image: image, has-image: bool, app: bool, action: string }

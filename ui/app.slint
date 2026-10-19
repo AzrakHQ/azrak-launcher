@@ -1,4 +1,4 @@
-import { S, Theme, Icons, Zone, DownloadData, BootStep, OsiDisk, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, ToastData, MenuItem, RunningData } from "theme.slint";
+import { S, Theme, Icons, Zone, DownloadData, BootStep, OsiDisk, WjKey, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, ToastData, MenuItem, RunningData } from "theme.slint";
 import { FocusRing, Chip, Btn, Kicker, Badge, Switch, KeyCap, BackButton, Shimmer, Cover } from "widgets.slint";
 import { DownloadsSheet, DownloadConsent } from "downloads.slint";
 import { LibraryFilter, LibrarySortPicker } from "library.slint";
@@ -262,6 +262,18 @@ export component AppWindow inherits Window {
     in property <[OsiDisk]> osi-disks;
     in property <[string]> osi-buttons;
     in property <int> osi-button-base;
+    // Joining a secured Wi-Fi network (wifi_join.rs): the field shows dots unless wj-show.
+    in property <string> wj-ssid;
+    in property <string> wj-sub;
+    in property <string> wj-field;
+    in property <bool> wj-show;
+    in property <string> wj-error;
+    in property <bool> wj-busy;
+    in property <[WjKey]> wj-row0;
+    in property <[WjKey]> wj-row1;
+    in property <[WjKey]> wj-row2;
+    in property <[WjKey]> wj-row3;
+    in property <[WjKey]> wj-row4;
 
     in property <string> menu-title;
     in property <[MenuItem]> menu-items;
@@ -1909,6 +1921,161 @@ export component AppWindow inherits Window {
                             Text { text: b; font-size: (20px * S.k); font-weight: 600; color: f ? (danger ? #ffffff : #0a0d18) : Theme.text; vertical-alignment: center; }
                         }
                         TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.os-install, parent.i); } }
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------ JOIN A WI-FI NETWORK
+        if root.overlay == 12: wj := Rectangle {
+            property <float> t: animation-tick() / 1ms / 1000;
+            property <length> key: (74px * S.k);
+            property <length> gap: (10px * S.k);
+            background: #03050cd9;
+            TouchArea { clicked => { root.click(Zone.wifi-join, -1); } }
+            VerticalLayout {
+                alignment: center;
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        border-radius: (26px * S.k);
+                        background: @linear-gradient(180deg, #121c38 0%, #0a1024 100%);
+                        border-width: 1px;
+                        border-color: Theme.line;
+                        drop-shadow-blur: (60px * S.k);
+                        drop-shadow-color: #000000aa;
+                        TouchArea {}
+                        VerticalLayout {
+                            padding: (40px * S.k);
+                            spacing: 0;
+                            // The network.
+                            HorizontalLayout {
+                                spacing: (18px * S.k);
+                                Rectangle {
+                                    width: (58px * S.k);
+                                    height: self.width;
+                                    border-radius: (16px * S.k);
+                                    background: Theme.accent.with-alpha(0.16);
+                                    Image { source: Icons.wifi; colorize: #8fb6ff; width: (30px * S.k); height: self.width; }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: (4px * S.k);
+                                    Text { text: "Join " + root.wj-ssid; font-size: (30px * S.k); font-weight: 700; color: Theme.text; overflow: elide; }
+                                    HorizontalLayout {
+                                        spacing: (6px * S.k);
+                                        alignment: start;
+                                        Image { source: Icons.lock; colorize: Theme.text3; width: (15px * S.k); height: self.width; y: (2px * S.k); }
+                                        Text { text: root.wj-sub; font-size: (17px * S.k); color: Theme.text3; }
+                                    }
+                                }
+                            }
+                            Rectangle { height: (28px * S.k); }
+                            // The password.
+                            Rectangle {
+                                height: (68px * S.k);
+                                border-radius: (16px * S.k);
+                                background: #050913;
+                                border-width: root.wj-error != "" ? (2px * S.k) : 1px;
+                                border-color: root.wj-error != "" ? Theme.danger : #3d8bff88;
+                                drop-shadow-blur: (18px * S.k);
+                                drop-shadow-color: root.wj-error != "" ? #ff5a6a33 : #3d8bff33;
+                                HorizontalLayout {
+                                    padding-left: (22px * S.k);
+                                    padding-right: (22px * S.k);
+                                    spacing: (4px * S.k);
+                                    alignment: start;
+                                    // Before the placeholder, after what's typed.
+                                    if !root.wj-busy && root.wj-field == "": Rectangle {
+                                        width: (2px * S.k);
+                                        height: (30px * S.k);
+                                        y: (19px * S.k);
+                                        background: #8fb6ff;
+                                        opacity: mod(wj.t, 1.0) < 0.55 ? 1 : 0;
+                                    }
+                                    if root.wj-field == "": Text {
+                                        text: "Password";
+                                        font-size: (22px * S.k);
+                                        color: Theme.text3;
+                                        vertical-alignment: center;
+                                    }
+                                    if root.wj-field != "": Text {
+                                        text: root.wj-field;
+                                        font-size: root.wj-show ? (24px * S.k) : (28px * S.k);
+                                        letter-spacing: root.wj-show ? 0 : (3px * S.k);
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    // The caret, blinking while it waits for the next key.
+                                    if !root.wj-busy && root.wj-field != "": Rectangle {
+                                        width: (2px * S.k);
+                                        height: (30px * S.k);
+                                        y: (19px * S.k);
+                                        background: #8fb6ff;
+                                        opacity: mod(wj.t, 1.0) < 0.55 ? 1 : 0;
+                                    }
+                                }
+                            }
+                            Rectangle { height: (14px * S.k); }
+                            // What's happening: connecting, a wrong password, or how to type.
+                            HorizontalLayout {
+                                height: (24px * S.k);
+                                spacing: (10px * S.k);
+                                if root.wj-busy: Image { source: Icons.spinner; width: (20px * S.k); height: self.width; y: (2px * S.k); transform-rotation: wj.t * 400deg; }
+                                Text {
+                                    text: root.wj-busy ? "Connecting to " + root.wj-ssid + "…" : root.wj-error != "" ? root.wj-error
+                                        : root.pad-hints ? "Choose the letters below" : "Type with your keyboard, or choose the letters below";
+                                    font-size: (17px * S.k);
+                                    color: root.wj-error != "" && !root.wj-busy ? Theme.danger : Theme.text2;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            Rectangle { height: (22px * S.k); }
+                            // The keyboard.
+                            VerticalLayout {
+                                spacing: wj.gap;
+                                opacity: root.wj-busy ? 0.4 : 1;
+                                animate opacity { duration: 200ms; }
+                                for row[r] in [root.wj-row0, root.wj-row1, root.wj-row2, root.wj-row3, root.wj-row4]: HorizontalLayout {
+                                    spacing: wj.gap;
+                                    alignment: center;
+                                    for k[c] in row: Rectangle {
+                                        width: wj.key * k.w + wj.gap * (k.w - 1);
+                                        height: r == 4 ? (62px * S.k) : (58px * S.k);
+                                        border-radius: (14px * S.k);
+                                        background: k.focused ? (k.accent ? Theme.accent : #ffffff)
+                                            : k.accent ? Theme.accent.with-alpha(0.35) : k.on ? #3d8bff40 : #ffffff12;
+                                        border-width: k.on && !k.focused ? (2px * S.k) : 1px;
+                                        border-color: k.on && !k.focused ? #8fb6ff : #ffffff14;
+                                        drop-shadow-blur: k.focused ? (22px * S.k) : 0;
+                                        drop-shadow-color: k.accent ? #0a6cffaa : #8cb9ff99;
+                                        transform-scale: k.focused ? 1.06 : 1.0;
+                                        animate background, transform-scale { duration: 120ms; }
+                                        Text {
+                                            text: k.label;
+                                            font-size: k.w > 1 ? (18px * S.k) : (24px * S.k);
+                                            font-weight: k.w > 1 ? 600 : 500;
+                                            color: k.focused && !k.accent ? #0a0d18 : Theme.text;
+                                        }
+                                        TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.wifi-join, r * 100 + c); } }
+                                    }
+                                }
+                            }
+                            Rectangle { height: (24px * S.k); }
+                            // The buttons that do the same without moving there.
+                            HorizontalLayout {
+                                alignment: center;
+                                spacing: (22px * S.k);
+                                for h in root.pad-hints
+                                    ? [{ key: "□", what: "Delete" }, { key: "△", what: "Space" }, { key: "L1", what: "Shift" }, { key: "R2", what: "Join" }, { key: "○", what: "Cancel" }]
+                                    : [{ key: "Enter", what: "Press the key" }, { key: "Tab", what: "Show password" }, { key: "Esc", what: "Cancel" }]: HorizontalLayout {
+                                    spacing: (8px * S.k);
+                                    KeyCap { text: h.key; round: root.pad-hints && h.key.character-count == 1; }
+                                    Text { text: h.what; font-size: (16px * S.k); color: Theme.text3; vertical-alignment: center; }
+                                }
+                            }
+                        }
                     }
                 }
             }
