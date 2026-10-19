@@ -362,29 +362,46 @@ pub fn quit(why: &str) -> bool {
     true
 }
 
-/// A launcher ended by a signal (`pkill`, the session ending) used to vanish without a word in
-/// the log. SIGTERM, SIGINT and SIGHUP now wait on a thread of their own, which logs the signal
-/// and who sent it, then closes the launcher the usual way (downloads and installs stop
-/// cleanly). A second signal, or a launcher that hasn't closed 5 s later, ends it at once.
-/// Call before any thread starts: threads inherit the blocked signals, so only this one gets them.
-pub fn watch_exit_signals() {
+/// The write end of the pipe the exit-signal handler writes to, and who sent the last signal.
+static EXIT_SIGNAL_PIPE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+static EXIT_SIGNAL_FROM: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+extern "C" fn on_exit_signal(sig: libc::c_int, info: *mut libc::siginfo_t, _: *mut libc::c_void) {
+    // Only what's safe in a signal handler: remember the sender, write one byte.
+    use std::sync::atomic::Ordering::Relaxed;
     unsafe {
-        let mut set: libc::sigset_t = std::mem::zeroed();
-        libc::sigemptyset(&mut set);
-        for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
-            libc::sigaddset(&mut set, sig);
+        if !info.is_null() {
+            EXIT_SIGNAL_FROM.store((*info).si_pid(), Relaxed);
         }
-        // Games and tools started with std::process get a clean signal mask, so they still stop.
-        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        let byte = sig as u8;
+        libc::write(EXIT_SIGNAL_PIPE.load(Relaxed), &byte as *const u8 as *const libc::c_void, 1);
+    }
+}
+
+/// A launcher ended by a signal (`pkill`, the session ending) used to vanish without a word in
+/// the log. SIGTERM, SIGINT and SIGHUP now go to a handler that hands them to a thread of their
+/// own, which logs the signal and who sent it, then closes the launcher the usual way (downloads
+/// and installs stop cleanly). A second signal, or a launcher that hasn't closed 5 s later, ends
+/// it at once. A handler rather than blocking the signals: a blocked signal stays blocked in every
+/// program the launcher starts (games, emulators, the USB stick's installer), which then can't be
+/// stopped (the installer hung at 96% in a VM), while a handler is reset in them.
+pub fn watch_exit_signals() {
+    use std::io::Read;
+    use std::os::fd::FromRawFd;
+    use std::sync::atomic::Ordering::Relaxed;
+    unsafe {
+        let mut fds = [0 as libc::c_int; 2];
+        if libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) != 0 {
+            return;
+        }
+        EXIT_SIGNAL_PIPE.store(fds[1], Relaxed);
+        let mut reader = std::fs::File::from_raw_fd(fds[0]);
         std::thread::spawn(move || {
             let mut asked = false;
-            loop {
-                let mut info: libc::siginfo_t = std::mem::zeroed();
-                let sig = libc::sigwaitinfo(&set, &mut info);
-                if sig < 0 {
-                    continue;
-                }
-                let pid = info.si_pid();
+            let mut byte = [0u8; 1];
+            while reader.read_exact(&mut byte).is_ok() {
+                let sig = byte[0] as libc::c_int;
+                let pid = EXIT_SIGNAL_FROM.load(Relaxed);
                 // Its command line, on one log line (`bash -c` scripts span several).
                 let sender: String = std::fs::read(format!("/proc/{pid}/cmdline"))
                     .map(|c| String::from_utf8_lossy(&c).chars().map(|c| if c.is_control() { ' ' } else { c }).take(200).collect())
@@ -404,6 +421,13 @@ pub fn watch_exit_signals() {
                 });
             }
         });
+        for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+            let mut action: libc::sigaction = std::mem::zeroed();
+            action.sa_sigaction = on_exit_signal as *const () as usize;
+            action.sa_flags = libc::SA_SIGINFO | libc::SA_RESTART;
+            libc::sigemptyset(&mut action.sa_mask);
+            libc::sigaction(sig, &action, std::ptr::null_mut());
+        }
     }
 }
 
