@@ -307,6 +307,9 @@ export component AppWindow inherits Window {
 
     public function focus-root() { scope.focus(); }
     public function focus-search() { search-input.focus(); search-input.select-all(); }
+    // After type-to-search put the first letter in: keep typing after it, not over it. Offsets
+    // are UTF-8 bytes (4 per character at most) and clamped to the end of the text.
+    public function search-cursor-to-end() { search-input.set-selection-offsets(root.query.character-count * 4, root.query.character-count * 4); }
 
     changed width => { root.resized(); }
     changed height => { root.resized(); }

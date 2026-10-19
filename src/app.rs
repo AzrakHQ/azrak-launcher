@@ -1547,11 +1547,14 @@ impl App {
         } else if k(Key::Tab) {
             Act::TabNext
         } else if self.overlay == Overlay::None && self.view == 1 && text.chars().count() == 1 && text.chars().all(|c| c.is_alphanumeric()) {
-            // Type-to-search in the library.
-            self.start_search_edit();
+            // Type-to-search in the library. The letter goes after what's there, and typing carries
+            // on after it: focusing the field selects everything, so the cursor moves to the end
+            // (otherwise "wolverine" came out as "olverinew").
             let q = format!("{}{}", self.query, text);
             self.ui().set_query(q.clone().into());
             self.on_search(q);
+            self.start_search_edit();
+            self.ui().invoke_search_cursor_to_end();
             return true;
         } else if (text == "f" || text == "s") && self.overlay == Overlay::None {
             Act::Search
