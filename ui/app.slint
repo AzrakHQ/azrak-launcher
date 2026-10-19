@@ -285,6 +285,9 @@ export component AppWindow inherits Window {
     in property <[MenuItem]> menu-items;
 
     in property <bool> boot-first;
+    // Started with "Try AzrakOS" on the USB stick, right after "Welcome to AzrakOS": this screen
+    // carries on from it instead of welcoming again.
+    in property <bool> boot-stick;
     in property <bool> boot-ready;
     in property <float> boot-progress;
     in property <string> boot-status;
@@ -1610,10 +1613,10 @@ export component AppWindow inherits Window {
                     }
                 }
                 Rectangle { height: (24px * S.k); }
-                Text { text: "AZRAK LAUNCHER"; font-size: (19px * S.k); font-weight: 600; letter-spacing: (3px * S.k); color: Theme.text2; horizontal-alignment: center; }
+                Text { text: root.boot-stick ? "AZRAKOS" : "AZRAK LAUNCHER"; font-size: (19px * S.k); font-weight: 600; letter-spacing: (3px * S.k); color: Theme.text2; horizontal-alignment: center; }
                 Rectangle { height: (18px * S.k); }
                 if root.boot-first: Text {
-                    text: "Welcome";
+                    text: root.boot-stick ? "Getting AzrakOS ready" : "Welcome";
                     font-size: (64px * S.k);
                     font-weight: 700;
                     color: Theme.text;
@@ -1623,6 +1626,13 @@ export component AppWindow inherits Window {
                     text: "Setting up Azrak Launcher";
                     font-size: (23px * S.k);
                     color: Theme.text2;
+                    horizontal-alignment: center;
+                }
+                if root.boot-first && root.boot-stick: Rectangle { height: (6px * S.k); }
+                if root.boot-first && root.boot-stick: Text {
+                    text: "You can install it later from Settings.";
+                    font-size: (19px * S.k);
+                    color: Theme.text3;
                     horizontal-alignment: center;
                 }
                 Rectangle { height: root.boot-first ? (44px * S.k) : (6px * S.k); }

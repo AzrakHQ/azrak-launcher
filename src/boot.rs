@@ -74,6 +74,8 @@ impl App {
         let ui = self.ui();
         ui.set_overlay(OVERLAY_BOOT);
         ui.set_boot_first(first);
+        // On the USB stick this comes right after "Welcome to AzrakOS" (Try): not a second welcome.
+        ui.set_boot_stick(crate::os::system::on_usb());
         ui.set_boot_ready(false);
         ui.set_boot_progress(0.0);
         self.boot.kyty_note = if cfg.emulator_ok() && !kyty_needed {
