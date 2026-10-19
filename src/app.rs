@@ -41,6 +41,7 @@ pub const Z_SORT_PICKER: i32 = 16;
 pub const Z_DENSITY: i32 = 17;
 pub const Z_TRAILER: i32 = 18;
 pub const Z_CONTROLS: i32 = 19;
+pub const Z_WIFI_JOIN: i32 = 21;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Overlay {
@@ -54,6 +55,8 @@ pub enum Overlay {
     Sort = 8,
     Trailer = 9,
     Controls = 10,
+    /// The password for a Wi-Fi network (wifi_join.rs).
+    WifiJoin = 12,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -254,6 +257,7 @@ pub struct App {
     net_retry: NetRetry,
     /// Settings → SYSTEM on AzrakOS.
     pub sys: crate::system_ui::SysUi,
+    pub wj: crate::wifi_join::WifiJoin,
     /// This PC's processor, memory and graphics (read in the background at start).
     pub pc: Option<crate::pc::Specs>,
     pub pc_checking: bool,
@@ -419,6 +423,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         net_watch: slint::Timer::default(),
         net_retry: NetRetry::default(),
         sys: Default::default(),
+        wj: Default::default(),
         pc: None,
         pc_checking: false,
         boot: Default::default(),
@@ -1437,6 +1442,9 @@ impl App {
             None
         };
 
+        if self.overlay == Overlay::WifiJoin {
+            return self.wifi_join_key(text, ctrl, alt);
+        }
         // Text editing: the TextInput handles typing; we get what it doesn't use.
         if self.overlay == Overlay::Downloads && self.ui().get_download_consent()
             && !self.ui().get_download_editing() && !ctrl && !alt && k(Key::Tab) {
@@ -1542,6 +1550,9 @@ impl App {
             let cur = self.ui().get_edit_text().to_string();
             self.finish_edit(Some(cur));
         }
+        if zone == Z_WIFI_JOIN && self.overlay == Overlay::WifiJoin {
+            return self.click_wifi_join(idx);
+        }
         // Clicks on an overlay backdrop close it.
         if idx < 0 {
             self.back();
@@ -1646,6 +1657,7 @@ impl App {
                 _ => {}
             },
             Overlay::Menu => self.act_menu(a),
+            Overlay::WifiJoin => self.act_wifi_join(a),
             Overlay::Settings => self.act_settings(a),
             Overlay::Hub => self.act_hub(a),
             Overlay::Downloads => self.act_downloads(a),

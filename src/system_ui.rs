@@ -21,12 +21,10 @@ pub struct SysUi {
     pub found: Vec<Device>,
     /// Something in progress, shown on its row: (row, text).
     pub busy: Option<(SId, String)>,
-    /// A Wi-Fi network waiting for its password.
-    pub password_for: Option<usize>,
     /// A paired device pressed once: pressing it again within a few seconds forgets it.
     pub forget: Option<(usize, f64)>,
     polling: bool,
-    polled: f64,
+    pub polled: f64,
 }
 
 fn row(kind: i32, label: &str) -> SettingData {
@@ -76,19 +74,13 @@ impl App {
         rows.push((SId::Internet, r));
         if s.wifi_open {
             for (i, w) in s.wifi.iter().enumerate() {
-                // Only while its password is being typed; cancelling returns it to a normal row.
-                let typing = s.password_for == Some(i) && self.edit_index >= 0;
-                let mut r = row(if typing { 1 } else { 4 }, &w.ssid);
-                r.secret = typing;
+                let mut r = row(4, &w.ssid);
                 if let Some(text) = busy(SId::WifiNet(i as u16)) {
                     r.value = text.into();
                 } else if w.in_use {
                     (r.value, r.value_kind) = ("Connected".into(), 1);
-                } else if !typing {
+                } else {
                     r.value = format!("{} · {}", if w.secured { "Secured" } else { "Open" }, strength(w.signal)).into();
-                }
-                if typing {
-                    r.hint = "Type the Wi-Fi password, then press Enter".into();
                 }
                 rows.push((SId::WifiNet(i as u16), r));
             }
@@ -150,11 +142,10 @@ impl App {
     }
 
     /// Activate a SYSTEM row. Returns false for rows that aren't SYSTEM rows.
-    pub fn system_activate(&mut self, id: SId, index: usize) -> bool {
+    pub fn system_activate(&mut self, id: SId, _index: usize) -> bool {
         match id {
             SId::Internet => {
                 self.sys.wifi_open = !self.sys.wifi_open;
-                self.sys.password_for = None;
                 if self.sys.wifi_open {
                     self.sys_task(SId::Internet, "Looking for Wi-Fi…", |app, list: Result<Vec<Wifi>, String>| match list {
                         Ok(list) => app.sys.wifi = list,
@@ -169,16 +160,10 @@ impl App {
                 }
                 // Saved networks and open ones connect straight away; others ask for the password.
                 if w.secured && !saved_wifi(&w.ssid) {
-                    // Editing first: the row is rebuilt as the password field only while it's edited.
-                    self.sys.password_for = Some(i as usize);
-                    self.edit_index = index as i32;
-                    self.refresh_settings();
-                    let ui = self.ui();
-                    ui.set_edit_text("".into());
-                    ui.set_edit_index(index as i32);
+                    self.wifi_join_open(&w.ssid, strength(w.signal));
                     return true;
                 }
-                self.wifi_connect(i, None);
+                self.wifi_connect(i);
             }
             SId::BtPair => {
                 if self.sys.busy.is_some() || !system::bt_available() {
@@ -260,17 +245,8 @@ impl App {
         true
     }
 
-    /// The Wi-Fi password row was confirmed.
-    pub fn system_commit_text(&mut self, id: SId, text: String) -> bool {
-        let SId::WifiNet(i) = id else { return false };
-        self.sys.password_for = None;
-        if !text.is_empty() {
-            self.wifi_connect(i, Some(text));
-        }
-        true
-    }
-
-    fn wifi_connect(&mut self, i: u16, password: Option<String>) {
+    /// A saved or open network: it connects without a password.
+    fn wifi_connect(&mut self, i: u16) {
         let Some(w) = self.sys.wifi.get(i as usize).cloned() else { return };
         let ssid = w.ssid.clone();
         self.sys_task(SId::WifiNet(i), "Connecting…", move |app, r: Result<(), String>| {
@@ -284,7 +260,7 @@ impl App {
             }
             app.sys.polled = 0.0;
             app.sys_poll();
-        }, move || system::wifi_connect(&ssid, password.as_deref()));
+        }, move || system::wifi_connect(&ssid, None));
     }
 
     fn power(&mut self, restart: bool) {
