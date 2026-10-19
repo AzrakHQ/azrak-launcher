@@ -159,14 +159,16 @@ impl App {
         } else {
             step("Pictures and details", "Done".into(), 2)
         });
+        // What games run on (today the PS5 emulator; PS4's and PC games' come as they're needed),
+        // named for all of them: the launcher isn't a PS5 app.
         steps.push(if !b.kyty_needed {
-            if self.cfg.lock().unwrap().emulator_ok() { step("PS5 support", "Ready".into(), 2) } else { step("PS5 support", "Not installed".into(), 3) }
+            if self.cfg.lock().unwrap().emulator_ok() { step("Game support", "Ready".into(), 2) } else { step("Game support", "Not installed".into(), 3) }
         } else if b.waiting_kyty {
-            step("PS5 support", if b.f_kyty > 0.0 { format!("{}%", (b.f_kyty * 100.0).round()) } else { "Checking…".into() }, 1)
+            step("Game support", if b.f_kyty > 0.0 { format!("{}%", (b.f_kyty * 100.0).round()) } else { "Checking…".into() }, 1)
         } else if b.kyty_note.starts_with("Could not") {
-            step("PS5 support", "Failed · retry in Settings".into(), 3)
+            step("Game support", "Failed · retry in Settings".into(), 3)
         } else {
-            step("PS5 support", "Ready".into(), 2)
+            step("Game support", "Ready".into(), 2)
         });
         steps.push(if b.waiting_catalog || b.waiting_art {
             step("Your Home screen", String::new(), 0)
