@@ -166,6 +166,79 @@ impl Entry {
 
 pub type Db = HashMap<String, Entry>;
 
+/// Will it play here? One headline for the Game Hub, from the player's side: the emulator's
+/// result (Linux, or yours) and this PC's verdict, folded together so the two can never
+/// contradict each other ("Reaches gameplay" next to "Won't start", or a green "Should run well"
+/// next to "Intro logos, then stops").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Outlook {
+    /// Reaches gameplay on Linux, and this PC has what the game needs.
+    PlaysHere,
+    /// Reaches gameplay on Linux; this PC wasn't checked (or the check couldn't finish).
+    Plays,
+    /// Reaches gameplay on Linux, but this PC is below what the game needs.
+    PlaysSlowly,
+    /// Gets to its menus or intro logos, then stops (on Linux, or even elsewhere).
+    StopsEarly,
+    /// Doesn't start in its emulator.
+    DoesntStart,
+    /// This PC lacks what the emulator needs (graphics card, processor).
+    CantRunHere,
+    /// Nobody has tested it on Linux, and nothing says it stops early.
+    Untested,
+}
+
+impl Outlook {
+    pub fn of(entry: Option<&Entry>, pc: Option<&crate::pc::Verdict>) -> Outlook {
+        use crate::pc::Verdict;
+        if matches!(pc, Some(Verdict::No(_))) {
+            return Outlook::CantRunHere;
+        }
+        let Some(e) = entry else { return Outlook::Untested };
+        match e.status {
+            // Gameplay on Windows says little about Linux: it's untested here. A worse result
+            // elsewhere still counts, though: a game that stops at its logos on Windows is no
+            // safe bet on Linux.
+            Status::InGame if !e.on_linux => Outlook::Untested,
+            Status::InGame => match pc {
+                Some(Verdict::Good) => Outlook::PlaysHere,
+                Some(Verdict::Slow(_)) => Outlook::PlaysSlowly,
+                _ => Outlook::Plays,
+            },
+            Status::MainMenu | Status::Logo => Outlook::StopsEarly,
+            Status::DoesntBoot => Outlook::DoesntStart,
+        }
+    }
+
+    pub fn headline(self) -> &'static str {
+        match self {
+            Outlook::PlaysHere => "Plays on this PC",
+            Outlook::Plays => "Playable",
+            Outlook::PlaysSlowly => "Playable, but may run slowly here",
+            Outlook::StopsEarly => "Starts, but may stop early",
+            Outlook::DoesntStart => "Doesn't start yet",
+            Outlook::CantRunHere => "Doesn't start on this PC",
+            Outlook::Untested => "Not tested yet",
+        }
+    }
+
+    /// 1 good (green), 2 warning (amber), 3 bad (red), 0 unknown (grey): the Fact colours.
+    pub fn kind(self) -> i32 {
+        match self {
+            Outlook::PlaysHere | Outlook::Plays => 1,
+            Outlook::PlaysSlowly | Outlook::StopsEarly => 2,
+            Outlook::DoesntStart | Outlook::CantRunHere => 3,
+            Outlook::Untested => 0,
+        }
+    }
+
+    /// Downloading it is unlikely to end in playing it: Download steps back from being the
+    /// strongest button (it stays there, for anyone who wants to try).
+    pub fn discourages_download(self) -> bool {
+        matches!(self, Outlook::DoesntStart | Outlook::CantRunHere)
+    }
+}
+
 fn path() -> std::path::PathBuf {
     cache_dir().join("compatibility.json")
 }
@@ -493,6 +566,44 @@ mod tests {
         assert_eq!(db["PPSA9"].tag().as_deref(), Some("Playable"));
         assert!(db["PPSA9"].in_game());
         assert!(!e.in_game(), "your Boots on this PC counts, not Windows' In-game");
+    }
+
+    #[test]
+    fn one_verdict_from_the_players_side() {
+        use crate::pc::Verdict;
+        let json = br#"{"LIN":{"status":"InGame","platforms":{"linux":{"status":"InGame"}}},
+            "WIN":{"status":"InGame","platforms":{"windows":{"status":"InGame"}}},
+            "WOLV":{"status":"Logo","platforms":{"windows":{"status":"Logo"}}},
+            "MENU":{"status":"InGame","platforms":{"windows":{"status":"InGame"},"linux":{"status":"MainMenu"}}},
+            "DEAD":{"status":"DoesntBoot","platforms":{"linux":{"status":"DoesntBoot"}}}}"#;
+        let db = parse(json).unwrap();
+        let good = Verdict::Good;
+        let of = |id: &str, pc: Option<&Verdict>| Outlook::of(db.get(id), pc);
+        assert_eq!(of("LIN", Some(&good)), Outlook::PlaysHere);
+        assert_eq!(of("LIN", None), Outlook::Plays, "an unchecked PC makes no promise");
+        assert_eq!(of("LIN", Some(&Verdict::Slow("integrated GPU".into()))), Outlook::PlaysSlowly);
+        // Windows' gameplay isn't a Linux result: never green.
+        assert_eq!(of("WIN", Some(&good)), Outlook::Untested);
+        assert_eq!(of("WIN", Some(&good)).kind(), 0);
+        // Marvel's Wolverine: intro logos on Windows, next to a PC that's up to it. Not green.
+        assert_eq!(of("WOLV", Some(&good)), Outlook::StopsEarly);
+        assert_eq!(of("WOLV", Some(&good)).kind(), 2);
+        // The Linux result wins over a better one elsewhere.
+        assert_eq!(of("MENU", Some(&good)), Outlook::StopsEarly);
+        assert_eq!(of("DEAD", Some(&good)), Outlook::DoesntStart);
+        assert_eq!(of("DEAD", Some(&good)).headline(), "Doesn't start yet");
+        assert_eq!(of("NONE", None), Outlook::Untested);
+        // A PC that can't run the emulator outranks any result.
+        let no = Verdict::No("missing features".into());
+        assert_eq!(of("LIN", Some(&no)), Outlook::CantRunHere);
+        assert_eq!(of("NONE", Some(&no)), Outlook::CantRunHere);
+        assert!(of("LIN", Some(&no)).discourages_download() && of("DEAD", None).discourages_download());
+        assert!(!of("WOLV", None).discourages_download() && !of("NONE", None).discourages_download());
+        // Your own result on this PC counts as a Linux result.
+        let mut mine = crate::results::Results::default();
+        mine.rate("WIN", "Win", Status::InGame, "b", 1.0, "");
+        let db = with_mine(db, &mine);
+        assert_eq!(Outlook::of(db.get("WIN"), Some(&good)), Outlook::PlaysHere);
     }
 
     #[test]

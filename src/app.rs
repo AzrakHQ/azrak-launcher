@@ -1126,6 +1126,21 @@ impl App {
         self.compat.get(&tid.to_uppercase())
     }
 
+    /// Will it play here, from the emulator's results and this PC's verdict. `None` for PC
+    /// games, which have no emulator list (their Hub shows ProtonDB or "Native game").
+    pub fn outlook(&self, t: Target) -> Option<crate::compat::Outlook> {
+        let platform = self.target_platform(t);
+        (platform != crate::platform::Platform::Pc)
+            .then(|| crate::compat::Outlook::of(self.target_compat(t), self.pc_verdict(platform).as_ref()))
+    }
+
+    /// A game's releases, oldest version first, so "Version 3 of 3" is the newest one.
+    pub fn release_order(&self, index: usize) -> Vec<usize> {
+        let mut members = self.groups.releases(index).to_vec();
+        members.sort_by_key(|i| (crate::game_groups::version_key(&self.games[*i].g.version), self.games[*i].g.id));
+        members
+    }
+
     /// Refresh the community list in the background (at start and every 6 hours).
     pub fn compat_start(&mut self) {
         // Now and then, remind about results that haven't been shared yet.
@@ -2309,14 +2324,21 @@ impl App {
         } else if t.local.is_none() && t.game.is_some_and(|g| !self.games[g].g.magnet.is_empty()) {
             let job = self.download_for_target(t);
             let installing = job.as_ref().is_some_and(|job| self.installer.snapshot().iter().any(|record| record.key == job.key && record.state.active()));
+            // A game that doesn't start (or can't on this PC) can still be downloaded, but it
+            // isn't offered as the obvious next step.
+            let discouraged = job.is_none() && self.outlook(t).is_some_and(|o| o.discourages_download());
             let (id, label) = if installing { ("download", "Installing…") }
                 else if job.as_ref().is_some_and(|job| job.state == crate::downloads::State::Complete) { ("install", "Install") }
                 else if job.is_some() { ("download", "View download") }
+                else if discouraged { ("download", "Download anyway") }
                 else { ("download", "Download") };
-            a.push(mk(id, label, "disk", a.is_empty()));
+            a.push(mk(id, label, "disk", a.is_empty() && !discouraged));
         }
+        let discouraged = a.iter().any(|x| x.label == "Download anyway");
         if crate::trailer::available() && info.as_ref().is_some_and(|i| !i.video.is_empty()) {
-            a.push(mk("trailer", "Trailer", "film", false));
+            // Ahead of "Download anyway", so the Hub doesn't open with the download selected.
+            let at = if discouraged { a.iter().position(|x| x.id == "download").unwrap_or(a.len()) } else { a.len() };
+            a.insert(at, mk("trailer", "Trailer", "film", false));
         }
         if t.game.is_some() {
             a.push(ActionDef { round: true, ..mk("web", "Open web page", "web", false) });
@@ -2325,7 +2347,7 @@ impl App {
             let label = if self.target_platform(t) == crate::platform::Platform::Pc { "Steam page" } else { "PlayStation Store" };
             a.push(ActionDef { round: true, ..mk("store", label, "bag", false) });
         }
-        if !a.iter().any(|x| x.primary) {
+        if !a.iter().any(|x| x.primary) && !discouraged {
             if let Some(f) = a.first_mut() {
                 f.primary = true;
             }
@@ -2623,7 +2645,7 @@ impl App {
         if self.overlay != Overlay::Hub { return; }
         let Some(t) = self.hub else { return; };
         let Some(current) = t.game else { return; };
-        let members = self.groups.releases(current);
+        let members = self.release_order(current);
         if members.len() < 2 { return; }
         let position = members.iter().position(|i| *i == current).unwrap_or(0) as i32;
         let next = members[(position + delta).rem_euclid(members.len() as i32) as usize];

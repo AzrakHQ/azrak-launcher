@@ -88,14 +88,17 @@ The English snapshot is embedded in the binary, so catalog browsing works offlin
 without Chrome or a source checkout. All release topics are retained, but the
 Library shows **one card per game**: matching title IDs, region aliases and normalized
 names group editions/versions together. Sequels and remasters with distinct identities
-remain separate. Use the **release selector in the Game Hub** to switch exact
-versions, regions, peer counts and download magnets. Search matches every release
-in a group without duplicating its card. Cards show download size, release count
-and **seeders/leechers from the snapshot**, with its date in the Library header.
-The Game Hub presents peers and snapshot date on one line, three key overview
-facts, and expandable **Technical details** for title ID, languages, firmware,
-release provenance and installation information.
-Missing counts are unknown, not zero. These are **not live tracker/client counts**.
+remain separate. Use the **version picker in the Game Hub** ("Version 3 of 3 (newest)",
+numbered oldest first; **Choose another version**) to switch exact versions, regions and
+download magnets. Search matches every release in a group without duplicating its card.
+Cards show download size, release count and **Availability: Good / Low / None** (green /
+amber / grey), derived from the snapshot's seeder count (3 or more is Good, 1–2 Low);
+the Library header says **List updated <date>**. The Game Hub leads with one verdict
+(see the README's "Will it run?"), says under **Download** what it means (size, the folder it
+goes to, then press Install; a warning when that disk lacks the space), shows three overview
+facts, and expandable **Technical details** for the seeder/leecher counts and when they were
+counted, title ID, languages, firmware, source and installation information. Topic numbers
+aren't shown. Missing counts are unknown, not zero. These are **not live tracker/client counts**.
 
 ### Library layout and controls
 
