@@ -1286,7 +1286,7 @@ export component AppWindow inherits Window {
                                                 text: s.value;
                                                 font-size: (17px * S.t);
                                                 font-weight: s.value-kind == 3 ? 600 : 400;
-                                                color: s.value-kind == 1 ? Theme.ok : s.value-kind == 2 ? Theme.danger : s.value-kind == 3 ? #7ab4ff : Theme.text3;
+                                                color: s.value-kind == 1 ? Theme.ok : s.value-kind == 2 ? Theme.danger : s.value-kind == 3 ? #7ab4ff : Theme.hint;
                                                 vertical-alignment: center;
                                             }
                                             // A Wi-Fi network: a lock when it needs a password, then its bars,
@@ -1327,9 +1327,9 @@ export component AppWindow inherits Window {
                                     }
                                     if s.hint != "": Text {
                                         text: s.hint;
-                                        font-size: (15px * S.t);
+                                        font-size: (17px * S.t);
                                         wrap: word-wrap;
-                                        color: s.hint-kind == 1 ? Theme.ok : s.hint-kind == 2 ? Theme.danger : Theme.text3;
+                                        color: s.hint-kind == 1 ? Theme.ok : s.hint-kind == 2 ? Theme.danger : Theme.hint;
                                     }
                                 }
                             }
@@ -2008,8 +2008,8 @@ export component AppWindow inherits Window {
                                     HorizontalLayout {
                                         spacing: (6px * S.k);
                                         alignment: start;
-                                        Image { source: Icons.lock; colorize: Theme.text3; width: (15px * S.k); height: self.width; y: (2px * S.k); }
-                                        Text { text: root.wj-sub; font-size: (17px * S.k); color: Theme.text3; }
+                                        Image { source: Icons.lock; colorize: Theme.hint; width: (16px * S.k); height: self.width; y: (2px * S.k); }
+                                        Text { text: root.wj-sub; font-size: (18px * S.k); color: Theme.hint; }
                                     }
                                 }
                             }
@@ -2142,7 +2142,7 @@ export component AppWindow inherits Window {
                                     : [{ key: "Enter", what: root.wj-enter-joins ? "Join" : "Press the key" }, { key: "Tab", what: root.wj-show ? "Hide password" : "Show password" }, { key: "Esc", what: "Cancel" }]: HorizontalLayout {
                                     spacing: (8px * S.k);
                                     KeyCap { text: h.key; round: root.pad-hints && h.key.character-count == 1; }
-                                    Text { text: h.what; font-size: (16px * S.k); color: Theme.text3; vertical-alignment: center; }
+                                    Text { text: h.what; font-size: (17px * S.k); color: Theme.hint; vertical-alignment: center; }
                                 }
                             }
                         }

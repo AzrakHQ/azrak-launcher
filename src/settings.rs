@@ -377,12 +377,12 @@ impl App {
             if i as i32 == self.idx {
                 target = y;
             }
-            // Hints wrap at about 76 characters (the panel's width at 15 px, at any scale).
-            let hint_lines = row.hint.chars().count().div_ceil(76) as f32;
+            // Hints wrap at about 66 characters (the panel's width at 17 px, at any scale).
+            let hint_lines = row.hint.chars().count().div_ceil(66) as f32;
             y += match row.kind {
                 0 if row.label.is_empty() => 20.0 + 12.0,
                 0 => 36.0 + 20.0 * r + 12.0,
-                _ => 28.0 + 36.0 * r + if hint_lines > 0.0 { 4.0 + hint_lines * 19.0 * r } else { 0.0 } + if self.edit_index == i as i32 { 54.0 * r } else { 0.0 },
+                _ => 28.0 + 36.0 * r + if hint_lines > 0.0 { 4.0 + hint_lines * 21.0 * r } else { 0.0 } + if self.edit_index == i as i32 { 54.0 * r } else { 0.0 },
             };
         }
         y += 36.0 + (20.0 + 180.0) * r + 12.0; // About card under the last row
