@@ -139,39 +139,39 @@ impl App {
         } else {
             "This only happens once. Skip anytime — downloads continue in the background.".to_string()
         };
-        // The step list.
+        // The step list, in players' words: Settings → Updates has the emulators' names and builds.
         let step = |label: &str, detail: String, state: i32| crate::BootStep { label: label.into(), detail: detail.into(), state };
         let frac = |t: &str| t.rsplit(' ').next().filter(|x| x.contains('/')).map(|x| x.replace('/', " / ")).unwrap_or_default();
         let mut steps = Vec::new();
         steps.push(if b.cat_failed {
-            step("RuTracker catalog", "Using offline snapshot".into(), 3)
+            step("Game list", "Using the saved list".into(), 3)
         } else if b.waiting_catalog {
-            step("RuTracker catalog", "Loading local snapshot".into(), 1)
+            step("Game list", "Loading…".into(), 1)
         } else {
-            step("RuTracker catalog", format!("{} release topics", self.games.len()), 2)
+            step("Game list", format!("{} games", self.groups.members.len()), 2)
         });
         steps.push(if b.waiting_catalog {
-            step("Official artwork & details", String::new(), 0)
+            step("Pictures and details", String::new(), 0)
         } else if b.waiting_art {
-            step("Official artwork & details", frac(&b.art_text), 1)
+            step("Pictures and details", frac(&b.art_text), 1)
         } else {
-            step("Official artwork & details", "Done".into(), 2)
+            step("Pictures and details", "Done".into(), 2)
         });
         steps.push(if !b.kyty_needed {
-            if self.cfg.lock().unwrap().emulator_ok() { step("KytyPS5 emulator", "Found".into(), 2) } else { step("KytyPS5 emulator", "Not installed".into(), 3) }
+            if self.cfg.lock().unwrap().emulator_ok() { step("PS5 support", "Ready".into(), 2) } else { step("PS5 support", "Not installed".into(), 3) }
         } else if b.waiting_kyty {
-            step("KytyPS5 emulator", if b.f_kyty > 0.0 { format!("{}%", (b.f_kyty * 100.0).round()) } else { "Checking…".into() }, 1)
+            step("PS5 support", if b.f_kyty > 0.0 { format!("{}%", (b.f_kyty * 100.0).round()) } else { "Checking…".into() }, 1)
         } else if b.kyty_note.starts_with("Could not") {
-            step("KytyPS5 emulator", "Failed · retry in Settings".into(), 3)
+            step("PS5 support", "Failed · retry in Settings".into(), 3)
         } else {
-            step("KytyPS5 emulator", "Latest build".into(), 2)
+            step("PS5 support", "Ready".into(), 2)
         });
         steps.push(if b.waiting_catalog || b.waiting_art {
-            step("Covers & Home screen", String::new(), 0)
+            step("Your Home screen", String::new(), 0)
         } else if !b.ready {
-            step("Covers & Home screen", frac(&b.covers_text), 1)
+            step("Your Home screen", frac(&b.covers_text), 1)
         } else {
-            step("Covers & Home screen", "Ready".into(), 2)
+            step("Your Home screen", "Ready".into(), 2)
         });
         let progress = self.boot_progress();
         let ui = self.ui();

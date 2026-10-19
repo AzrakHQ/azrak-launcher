@@ -39,6 +39,7 @@ mod rename;
 mod sessions;
 mod settings;
 mod util;
+mod words;
 
 slint::include_modules!();
 

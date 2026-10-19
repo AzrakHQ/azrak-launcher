@@ -81,7 +81,7 @@ impl App {
 
     /// PS4 games need shadPS4: download it now, then start the game.
     pub fn shad_install_then_launch(&mut self, game_id: String) {
-        self.toast("Getting shadPS4 for PS4 games", "It downloads once (about 35 MB), then your game starts.", 0);
+        self.toast("Getting PS4 support", "It downloads once (about 35 MB), then your game starts.", 0);
         self.shad.launch_after = Some(game_id);
         if self.shad.busy {
             return;
@@ -142,8 +142,12 @@ impl App {
                 app.set_status("", false);
                 match res {
                     Ok(()) => {
-                        let what = if updating { "shadPS4 updated" } else { "shadPS4 installed" };
-                        app.toast(what, &format!("PS4 games run on shadPS4 {}.", shad::pretty(&rel.tag)), 1);
+                        // What it means for the player; the version is in Settings → Updates.
+                        if updating {
+                            app.toast("PS4 support updated", "Version details are in Settings → Updates.", 1);
+                        } else {
+                            app.toast("PS4 games are ready to play", "", 1);
+                        }
                         if let Some(id) = launch_after.or(app.shad.launch_after.take()) {
                             app.shad.launch_after = None;
                             if let Some(l) = app.locals.iter().position(|g| g.l.id == id) {

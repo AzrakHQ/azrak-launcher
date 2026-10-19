@@ -2845,7 +2845,8 @@ impl App {
             self.status = text.to_string();
             self.status_busy = busy;
             let ui = self.ui();
-            ui.set_status(text.into());
+            // The welcome screen reads the raw progress; the Home screen's line says what it's for.
+            ui.set_status(crate::words::status(text).into());
             ui.set_status_busy(busy);
         }
     }
