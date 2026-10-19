@@ -225,14 +225,6 @@ pub fn on_usb() -> bool {
         && std::fs::read_to_string("/proc/cmdline").is_ok_and(|c| c.split_whitespace().any(|a| a == "rd.live.image"))
 }
 
-/// An NVIDIA graphics card is in the PC (its driver comes separately; see the installer).
-pub fn has_nvidia() -> bool {
-    std::fs::read_dir("/sys/bus/pci/devices").is_ok_and(|d| d.flatten().any(|e| {
-        let read = |f: &str| std::fs::read_to_string(e.path().join(f)).unwrap_or_default();
-        read("vendor").trim() == "0x10de" && read("class").starts_with("0x03")
-    }))
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Disk {
     pub path: String,
@@ -275,9 +267,9 @@ fn parse_disks(text: &str) -> Vec<Disk> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum InstallEvent {
     Progress(f32, String),
-    /// Installed; the edition (`minimal` or `minimal-nvidia`) and whether Secure Boot's key
-    /// screen comes at the restart.
-    Done { tag: String, mok: bool },
+    /// Installed; the edition (`minimal` or `minimal-nvidia`), whether Secure Boot's key screen
+    /// comes at the restart, and whether NVIDIA's driver downloads on the installed system.
+    Done { tag: String, mok: bool, nvidia_later: bool },
     Failed(String),
 }
 
@@ -291,7 +283,8 @@ pub fn parse_install_line(line: &str) -> Option<InstallEvent> {
         "done" => {
             let mut f = rest.split_whitespace();
             let tag = f.next().unwrap_or("minimal").to_string();
-            Some(InstallEvent::Done { tag, mok: f.any(|w| w == "mok") })
+            let flags: Vec<&str> = f.collect();
+            Some(InstallEvent::Done { tag, mok: flags.contains(&"mok"), nvidia_later: flags.contains(&"nvidia-later") })
         }
         "error" => Some(InstallEvent::Failed(rest.to_string())),
         _ => None,
@@ -398,8 +391,9 @@ mod tests {
         assert_eq!((disks[0].model.as_str(), disks[0].size(), disks[0].windows, disks[0].usb), ("Samsung SSD 970 EVO", "512 GB".to_string(), true, false));
         assert_eq!((disks[1].size(), disks[1].usb), ("2 TB".to_string(), true));
         assert_eq!(parse_install_line("progress 35 Copying AzrakOS"), Some(InstallEvent::Progress(0.35, "Copying AzrakOS".into())));
-        assert_eq!(parse_install_line("done minimal-nvidia mok"), Some(InstallEvent::Done { tag: "minimal-nvidia".into(), mok: true }));
-        assert_eq!(parse_install_line("done minimal"), Some(InstallEvent::Done { tag: "minimal".into(), mok: false }));
+        assert_eq!(parse_install_line("done minimal-nvidia mok"), Some(InstallEvent::Done { tag: "minimal-nvidia".into(), mok: true, nvidia_later: false }));
+        assert_eq!(parse_install_line("done minimal nvidia-later"), Some(InstallEvent::Done { tag: "minimal".into(), mok: false, nvidia_later: true }));
+        assert_eq!(parse_install_line("done minimal"), Some(InstallEvent::Done { tag: "minimal".into(), mok: false, nvidia_later: false }));
         assert_eq!(parse_install_line("error Installing on /dev/sda failed."), Some(InstallEvent::Failed("Installing on /dev/sda failed.".into())));
         assert_eq!(parse_install_line("Deploying container image"), None);
     }

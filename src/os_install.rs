@@ -232,7 +232,7 @@ impl App {
             Phase::Installing => ("Installing AzrakOS".into(), s.step.clone(), "This takes a few minutes. Keep the PC on.".into()),
             Phase::Done => {
                 let (mok, nvidia_later) = match &s.end {
-                    Some(InstallEvent::Done { tag, mok }) => (*mok, tag == "minimal" && system::has_nvidia()),
+                    Some(InstallEvent::Done { mok, nvidia_later, .. }) => (*mok, *nvidia_later),
                     _ => (false, false),
                 };
                 ("AzrakOS is installed".into(),
