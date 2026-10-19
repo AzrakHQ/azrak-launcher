@@ -110,7 +110,7 @@ smaller windows reduce the column count and maintain readable caption text. Dens
 changes retain the current scroll position's game rather than jumping back to the start.
 Artwork caching, visible-row virtualization and look-ahead prefetching are unchanged.
 
-**All / Installed / In-game** filters (In-game: Linux results only; covers likewise show only a
+**All / Installed / Playable** filters (Playable: Linux results only; covers likewise show only a
 Linux result, the Game Hub every OS's) are separate from the **GENRE** row,
 and can be combined with genres and search. Counts reflect those combinations without
 duplicating release variants. Genre-row arrows expose options beyond the viewport.
@@ -141,7 +141,7 @@ Source precedence is:
 
 The source-specific cache is independent of the old SuperPSX cache. Invalid,
 partial or untranslated imports do not overwrite a known-good catalog. Posting
-dates were not collected, so **Newest topics** sorts by topic ID; collection and
+dates were not collected, so **Newest uploads** sorts by topic ID; collection and
 game-release dates are not misrepresented as dates added to the site.
 
 To collect fresh metadata, use the separate [browser collector](../scripts/rutracker-list/README.md),
@@ -465,8 +465,8 @@ A `Platform` (PS5 or PS4) travels with each installed game and catalog release
   category `gp`, same title ID; beside it or inside its folder) is placed beside the game as
   `<game>-patch`, the same as from a PKG. It is never listed as a game.
 - **Compatibility:** shadPS4's published `compatibility_data.json` (per-OS results) is merged
-  with KytyPS5's list (title IDs never collide: CUSA vs PPSA). playable/ingame → In-game,
-  menus → Menus, boots → Boots, nothing → Doesn't boot. PS4 ratings go to the
+  with KytyPS5's list (title IDs never collide: CUSA vs PPSA). playable/ingame → Playable,
+  menus → Menus only, boots → Logos only, nothing → Doesn't start. PS4 ratings go to the
   shadps4-game-compatibility issue form, whose checklist (own dump, unmodified, official release)
   the player must confirm themselves.
 - **Catalog:** each console's RuTracker snapshot has its own source, cache and bundled copy

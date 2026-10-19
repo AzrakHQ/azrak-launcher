@@ -573,21 +573,25 @@ export component AppWindow inherits Window {
                                         vertical-alignment: center;
                                     }
                                 }
-                                Badge { x: (10px * S.k); y: (10px * S.k); text: c.badge; size: (12px * S.k); }
+                                Badge { x: (10px * S.k); y: (10px * S.k); text: c.badge; size: (14px * S.k); }
+                                // The console, big enough to tell Hades on PS5, PS4 and PC apart at a
+                                // glance: each has its own colour.
                                 if c.console != "": Rectangle {
-                                    x: parent.width - self.width - (10px * S.k);
-                                    y: (10px * S.k);
-                                    width: cl.preferred-width + (14px * S.k);
-                                    height: (22px * S.k);
-                                    border-radius: (6px * S.k);
-                                    background: #000000c4;
-                                    cl := Text { text: c.console; font-size: (12px * S.k); font-weight: 700; color: c.console == "PS4" ? #8fc2ff : #ffffff; }
+                                    x: parent.width - self.width - (8px * S.k);
+                                    y: (8px * S.k);
+                                    width: cl.preferred-width + (18px * S.k);
+                                    height: (30px * S.k);
+                                    border-radius: (8px * S.k);
+                                    background: c.console == "PS4" ? #12306be8 : c.console == "PC" ? #12452fe8 : #000000d9;
+                                    border-width: 1px;
+                                    border-color: c.console == "PS4" ? #8fc2ff80 : c.console == "PC" ? #7ee2b080 : #ffffff59;
+                                    cl := Text { text: c.console; font-size: (17px * root.library-type-scale); font-weight: 800; letter-spacing: (0.5px * S.k); color: c.console == "PS4" ? #b8d8ff : c.console == "PC" ? #a8f0cc : #ffffff; }
                                 }
                                 if c.compat != "": Rectangle {
                                     x: (10px * S.k);
                                     y: parent.height - self.height - (10px * S.k);
                                     width: cp.preferred-width + (30px * S.k);
-                                    height: (26px * S.k);
+                                    height: (28px * S.k);
                                     border-radius: (6px * S.k);
                                     background: #000000c4;
                                     Rectangle {
@@ -600,7 +604,7 @@ export component AppWindow inherits Window {
                                     cp := Text {
                                         x: (23px * S.k);
                                         text: c.compat;
-                                        font-size: (13px * S.k);
+                                        font-size: (15px * root.library-type-scale);
                                         font-weight: 700;
                                         color: #ffffff;
                                     }
@@ -644,14 +648,20 @@ export component AppWindow inherits Window {
                                 spacing: (6px * S.k);
                                 Text { text: c.meta; font-size: (18px * root.library-type-scale); font-weight: 500; color: Theme.text2; overflow: elide; }
                                 Rectangle { horizontal-stretch: 1; }
-                                if c.releases != "": Text { text: c.releases; font-size: (14px * root.library-type-scale); color: Theme.text3; overflow: elide; }
+                                if c.releases != "": Text { text: c.releases; font-size: (15px * root.library-type-scale); color: Theme.text3; overflow: elide; }
                             }
+                            // How easy it is to download; the seeder counts are in the Game Hub's details.
                             HorizontalLayout {
                                 height: (24px * root.library-type-scale);
-                                spacing: (8px * S.k);
+                                spacing: (6px * S.k);
                                 alignment: start;
-                                Text { text: "↑ " + c.seeders; font-size: (16px * root.library-type-scale); font-weight: 500; color: c.seeders == "—" ? Theme.text3 : Theme.ok; }
-                                Text { text: "↓ " + c.leechers; font-size: (16px * root.library-type-scale); font-weight: 500; color: c.leechers == "—" ? Theme.text3 : Theme.danger; }
+                                Text { text: "Availability:"; font-size: (16px * root.library-type-scale); color: Theme.text3; overflow: elide; }
+                                Text {
+                                    text: c.availability;
+                                    font-size: (16px * root.library-type-scale);
+                                    font-weight: 600;
+                                    color: c.availability-kind == 1 ? Theme.ok : c.availability-kind == 2 ? Theme.warn : Theme.text3;
+                                }
                             }
                         }
                         TouchArea {
@@ -765,14 +775,14 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             alignment: center; spacing: (3px * S.k);
                             count := Text { text: root.count-label; font-size: (18px * root.library-type-scale); color: Theme.text2; horizontal-alignment: right; }
-                            snapshot := Text { text: root.peer-snapshot-label; font-size: (14px * root.library-type-scale); color: Theme.text3; horizontal-alignment: right; }
+                            snapshot := Text { text: root.peer-snapshot-label; font-size: (16px * root.library-type-scale); color: Theme.text3; horizontal-alignment: right; }
                         }
                     }
                 }
                 Rectangle {
                     x: (96px * S.k); y: (254px * S.k); width: root.width - (192px * S.k);
                     height: (52px * S.k);
-                    Text { x: 0; y: 0; height: parent.height; text: "GENRE"; font-size: (14px * root.library-type-scale); font-weight: 600; color: Theme.text3; width: (76px * S.k); horizontal-alignment: left; vertical-alignment: center; }
+                    Text { x: 0; y: 0; height: parent.height; text: "GENRE"; font-size: (15px * root.library-type-scale); font-weight: 600; color: Theme.text3; width: (76px * S.k); horizontal-alignment: left; vertical-alignment: center; }
                     Rectangle {
                         x: (80px * S.k); y: (6px * S.k); width: (36px * S.k); height: (36px * S.k);
                         border-radius: (18px * S.k); background: root.genres-x < 0 ? #ffffff14 : transparent;

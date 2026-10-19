@@ -102,7 +102,7 @@ pub const GENRES: [(&str, &str); 16] = [
 ];
 
 
-pub const SORTS: [&str; 7] = ["Newest topics", "Name (A–Z)", "Release date", "Top rated", "Size (largest)", "Size (smallest)", "Compatibility"];
+pub const SORTS: [&str; 7] = ["Newest uploads", "Name (A–Z)", "Release date", "Top rated", "Size (largest)", "Size (smallest)", "Compatibility"];
 
 /// A catalog game plus derived data.
 pub struct GameV {
@@ -286,7 +286,7 @@ pub struct App {
     /// The platforms the catalog has, when there are several: each gets a "… games only" chip,
     /// the last status chips, in this order.
     pub consoles: Vec<crate::platform::Platform>,
-    /// The status filters lead `genre_list`: All, Installed, In-game (on Linux) and, with
+    /// The status filters lead `genre_list`: All, Installed, Playable (on Linux) and, with
     /// more than one console, "PS5 games only" and "PS4 games only". Genres follow.
     pub status_count: usize,
 }
@@ -730,7 +730,7 @@ impl App {
         let count = |f: &dyn Fn(&crate::compat::Entry) -> bool| self.groups.members.iter()
             .filter(|members| members.iter().any(|i| self.game_compat(&self.games[*i]).is_some_and(f))).count();
         // Linux results only: the launcher runs on Linux.
-        list.push(("In-game".into(), count(&|e| e.in_game())));
+        list.push(("Playable".into(), count(&|e| e.in_game())));
         use crate::platform::Platform;
         self.consoles = [Platform::Ps5, Platform::Ps4, Platform::Pc].into_iter()
             .filter(|p| self.games.iter().any(|g| g.g.platform == *p)).collect();
@@ -1875,10 +1875,10 @@ impl App {
         self.platform_ok(game) && self.status_filter_ok(game)
     }
 
-    /// The status filter alone (Installed, In-game, …), whatever the console.
+    /// The status filter alone (Installed, Playable, …), whatever the console.
     pub fn status_filter_ok(&self, game: &GameV) -> bool {
         self.status_filter == "All" || (self.status_filter == "Installed" && game.local.is_some())
-            || (self.status_filter == "In-game" && self.game_compat(game).is_some_and(|entry| entry.in_game()))
+            || (self.status_filter == "Playable" && self.game_compat(game).is_some_and(|entry| entry.in_game()))
     }
 
     pub fn open_sort_picker(&mut self) {

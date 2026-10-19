@@ -137,9 +137,10 @@ export struct CardData {
     index: int,
     title: string,
     meta: string,
-    seeders: string,
-    leechers: string,
-    peer-snapshot: string,
+    // How easy it is to download ("Good", "Low", "None", "Unknown"), from the catalog's seeder
+    // count; kind: 1 good, 2 low, 4 none or unknown (the Fact colours).
+    availability: string,
+    availability-kind: int,
     releases: string,
     rating: string,
     badge: string,

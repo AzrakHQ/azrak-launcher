@@ -605,10 +605,12 @@ impl App {
         ui.set_sort_label(SORTS[self.sort].into());
         ui.set_sort_options(model(SORTS.iter().map(|label| SharedString::from(*label)).collect()));
         ui.set_sort_selected(self.sort as i32);
-        let observed: HashSet<_> = self.games.iter().map(|game| game.g.peers_observed.as_str()).filter(|value| !value.is_empty()).collect();
-        let snapshot = if observed.len() > 1 { "Dates in Game Hub".to_string() }
-            else { observed.iter().next().map(|value| util::fmt_date(util::parse_iso_date(value))).filter(|value| !value.is_empty()).unwrap_or_else(|| "date unknown".into()) };
-        ui.set_peer_snapshot_label(format!("Peer snapshot · {snapshot} · not live").into());
+        // When the list (and its availability) was last counted: the newest count, else when the
+        // launcher last loaded it. Each game's own date is in its Game Hub's technical details.
+        let counted = self.games.iter().map(|game| game.g.peers_observed.as_str()).filter_map(util::parse_iso_date).max()
+            .or_else(|| (self.catalog_updated > 0.0).then(|| util::civil_from_days((self.catalog_updated / 86400.0) as i64)));
+        let updated = util::fmt_date(counted);
+        ui.set_peer_snapshot_label(if updated.is_empty() { SharedString::default() } else { format!("List updated {updated}").into() });
         self.push_genres();
         self.push_grid();
     }
@@ -656,7 +658,7 @@ impl App {
             if i == n { status_end = x; x = 0.0; }
             let count = if i < n { status_counts[i] } else if i == n { genre_total } else { *genre_counts.get(label.as_str()).unwrap_or(&0) };
             let c = count.to_string();
-            let w = 32.0 * self.scale + (label.chars().count() as f32 * 9.5 + 6.0 + c.len() as f32 * 8.0) * typography;
+            let w = 32.0 * self.scale + (label.chars().count() as f32 * 9.5 + 6.0 + c.len() as f32 * 8.6) * typography;
             if i >= n && ((self.zone == Z_CHIPS && i as i32 == self.idx) || ((self.zone != Z_CHIPS || self.idx < n as i32) && *label == self.genre)) {
                 focus_x = x;
             }
@@ -813,15 +815,14 @@ impl App {
             let (compat, compat_level) = ce.and_then(|e| Some((e.tag()?, e.status.level()))).unwrap_or_default();
             // Size is always visible. Version/region details belong to the selected Hub release.
             let releases = self.groups.releases(gi).len();
-            let meta = g.g.size_gb.map(|size| if size >= 1.0 { format!("{size:.1} GB") } else { format!("{:.1} MB", size * 1024.0) }).unwrap_or_else(|| "Size unknown".into());
+            let meta = size_label(&g.g).unwrap_or_else(|| "Size unknown".into());
             cards.push(CardData {
                 index: k as i32,
                 title: g.name.clone().into(),
                 meta: meta.into(),
                 releases: if releases > 1 { format!("{releases} releases") } else { String::new() }.into(),
-                seeders: g.g.seeders.map(|count| count.to_string()).unwrap_or_else(|| "—".into()).into(),
-                leechers: g.g.leechers.map(|count| count.to_string()).unwrap_or_else(|| "—".into()).into(),
-                peer_snapshot: "".into(),
+                availability: crate::words::Availability::of(g.g.seeders).label().into(),
+                availability_kind: crate::words::Availability::of(g.g.seeders).kind(),
                 rating: g.info.as_ref().and_then(|i| i.rating.as_ref()).map(|r| format!("{:.1}", r.score)).unwrap_or_default().into(),
                 badge: if g.local.is_some() { "Installed".into() } else if g.is_new { "New".into() } else { "".into() },
                 console: if self.mixed_consoles { g.g.platform.label().into() } else { "".into() },
@@ -1235,6 +1236,12 @@ impl App {
 
 fn audio_move() {
     crate::audio::play(crate::audio::Sound::Move);
+}
+
+/// A release's download size, the same everywhere it's shown ("183.4 GB", "766.9 MB").
+pub fn size_label(g: &crate::catalog::Game) -> Option<String> {
+    g.size_gb.map(|gb| if gb >= 1.0 { format!("{gb:.1} GB") } else { format!("{:.1} MB", gb * 1024.0) })
+        .or_else(|| (!g.size.is_empty()).then(|| g.size.clone()))
 }
 
 pub fn thousands(n: i64) -> String {

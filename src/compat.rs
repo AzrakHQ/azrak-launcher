@@ -64,13 +64,13 @@ impl Status {
         }
     }
 
-    /// Short label for badges and chips.
+    /// Short label for badges and chips, in players' words ("Boots" means little to them).
     pub fn label(self) -> &'static str {
         match self {
-            Status::InGame => "In-game",
-            Status::MainMenu => "Menus",
-            Status::Logo => "Boots",
-            Status::DoesntBoot => "Doesn't boot",
+            Status::InGame => "Playable",
+            Status::MainMenu => "Menus only",
+            Status::Logo => "Logos only",
+            Status::DoesntBoot => "Doesn't start",
         }
     }
 
@@ -135,12 +135,12 @@ impl Entry {
         self.on_linux && self.status == Status::InGame
     }
 
-    /// Short tag for Library covers ("In-game"): Linux results only.
+    /// Short tag for Library covers ("Playable"): Linux results only.
     pub fn tag(&self) -> Option<String> {
         self.on_linux.then(|| self.status.label().to_string())
     }
 
-    /// Chip text: "In-game on Linux", or "In-game on Windows · untested on Linux".
+    /// Chip text: "Playable on Linux", or "Playable on Windows · untested on Linux".
     pub fn chip_text(&self) -> String {
         if self.mine {
             format!("{} on Linux · your result", self.status.label())
@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(e.status, Status::MainMenu);
         assert!(e.on_linux);
         assert_eq!(e.windows, Some(Status::InGame));
-        assert_eq!(e.tag().as_deref(), Some("Menus"));
+        assert_eq!(e.tag().as_deref(), Some("Menus only"));
         assert_eq!(e.platforms, vec!["Linux", "Windows"]);
         assert_eq!(e.tested_date(), "2026-08-18");
         assert!(Status::InGame < Status::DoesntBoot);
@@ -457,7 +457,7 @@ mod tests {
         assert!(!w.on_linux);
         assert_eq!(w.tag(), None, "covers show Linux results only");
         assert!(!w.in_game());
-        assert_eq!(w.chip_text(), "In-game on Windows · untested on Linux");
+        assert_eq!(w.chip_text(), "Playable on Windows · untested on Linux");
         assert_eq!(db["PPSA2"].tag(), None);
     }
 
@@ -489,8 +489,8 @@ mod tests {
         assert!(e.mine && e.on_linux);
         assert_eq!(e.status, Status::Logo);
         assert_eq!(e.windows, Some(Status::InGame), "the community's results stay visible");
-        assert_eq!(e.chip_text(), "Boots on Linux · your result");
-        assert_eq!(db["PPSA9"].tag().as_deref(), Some("In-game"));
+        assert_eq!(e.chip_text(), "Logos only on Linux · your result");
+        assert_eq!(db["PPSA9"].tag().as_deref(), Some("Playable"));
         assert!(db["PPSA9"].in_game());
         assert!(!e.in_game(), "your Boots on this PC counts, not Windows' In-game");
     }

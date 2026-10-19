@@ -2,6 +2,49 @@
 //! player ("Getting PS4 support · 9%"), and the numbers and names behind it stay in Settings and
 //! the Game Hub's technical details.
 
+/// How easy a game is to download, from how many people were sharing it (seeders) when the
+/// catalog counted them. The counts aren't live, so this is a hint, not a promise.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Availability {
+    /// Several people share it: it should download steadily.
+    Good,
+    /// One or two: it may download slowly, or stall when they're away.
+    Low,
+    /// Nobody was sharing it.
+    None,
+    /// The catalog has no count for it.
+    Unknown,
+}
+
+impl Availability {
+    pub fn of(seeders: Option<u64>) -> Availability {
+        match seeders {
+            None => Availability::Unknown,
+            Some(0) => Availability::None,
+            Some(1..=2) => Availability::Low,
+            Some(_) => Availability::Good,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Availability::Good => "Good",
+            Availability::Low => "Low",
+            Availability::None => "None",
+            Availability::Unknown => "Unknown",
+        }
+    }
+
+    /// 1 good (green), 2 low (amber), 4 none or unknown (grey): the Fact colours.
+    pub fn kind(self) -> i32 {
+        match self {
+            Availability::Good => 1,
+            Availability::Low => 2,
+            Availability::None | Availability::Unknown => 4,
+        }
+    }
+}
+
 /// The status line under the Home screen, in players' words. Progress messages name emulators
 /// and versions ("Downloading shadPS4 0.20.0 · 9%"), which Settings → Updates still shows; on
 /// the Home screen it's what they're for that matters.
@@ -43,6 +86,17 @@ pub fn status(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn availability_from_seeders() {
+        assert_eq!(Availability::of(Some(46)), Availability::Good);
+        assert_eq!(Availability::of(Some(3)), Availability::Good);
+        assert_eq!(Availability::of(Some(2)), Availability::Low);
+        assert_eq!(Availability::of(Some(1)), Availability::Low);
+        assert_eq!(Availability::of(Some(0)), Availability::None);
+        assert_eq!(Availability::of(None), Availability::Unknown, "a missing count is unknown, not zero");
+        assert_eq!((Availability::Good.kind(), Availability::Low.kind(), Availability::None.kind()), (1, 2, 4));
+    }
 
     #[test]
     fn status_line_in_players_words() {
