@@ -556,7 +556,7 @@ impl App {
                 self.refresh_settings();
             }
             SId::Quit => {
-                let _ = slint::quit_event_loop();
+                crate::app::quit("Settings → Quit Azrak Launcher");
             }
             SId::Advanced => {
                 audio::play(Sound::Select);

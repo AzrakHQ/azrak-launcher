@@ -100,6 +100,8 @@ fn main() {
             }
         }
     }
+    // First, before any thread starts: a signal that ends the launcher is logged (see app.rs).
+    app::watch_exit_signals();
     // An install from before the rename (PS5 Launcher) moves over first.
     rename::migrate();
     if force_sync {

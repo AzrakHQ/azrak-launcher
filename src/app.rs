@@ -326,6 +326,77 @@ fn post(f: impl FnOnce(&mut App) + Send + 'static) {
     let _ = slint::invoke_from_event_loop(move || with_app(f));
 }
 
+// ====================================================================== quitting
+
+/// Ctrl+Q or Ctrl+W: the usual desktop keys to close a window.
+fn is_quit_key(text: &str, ctrl: bool) -> bool {
+    ctrl && matches!(text, "q" | "Q" | "w" | "W")
+}
+
+/// Whether a key or button may close the launcher. On AzrakOS the launcher is the whole screen:
+/// closing it leaves a black TV with no way back, so nothing in it may (Settings has Restart and
+/// Shut down instead). A signal from the system still ends it (see `watch_exit_signals`).
+fn may_quit(on_os: bool) -> bool {
+    !on_os
+}
+
+/// Close the launcher, saying `why` in the log so a closed launcher is never a mystery.
+/// Returns false (and logs that) on AzrakOS, where it stays open.
+pub fn quit(why: &str) -> bool {
+    if !may_quit(crate::os::system::on_os()) {
+        crate::log!("not quitting ({why}): on AzrakOS the launcher is the whole screen");
+        return false;
+    }
+    crate::log!("quitting: {why}");
+    slint::quit_event_loop().ok();
+    true
+}
+
+/// A launcher ended by a signal (`pkill`, the session ending) used to vanish without a word in
+/// the log. SIGTERM, SIGINT and SIGHUP now wait on a thread of their own, which logs the signal
+/// and who sent it, then closes the launcher the usual way (downloads and installs stop
+/// cleanly). A second signal, or a launcher that hasn't closed 5 s later, ends it at once.
+/// Call before any thread starts: threads inherit the blocked signals, so only this one gets them.
+pub fn watch_exit_signals() {
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        for sig in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+            libc::sigaddset(&mut set, sig);
+        }
+        // Games and tools started with std::process get a clean signal mask, so they still stop.
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        std::thread::spawn(move || {
+            let mut asked = false;
+            loop {
+                let mut info: libc::siginfo_t = std::mem::zeroed();
+                let sig = libc::sigwaitinfo(&set, &mut info);
+                if sig < 0 {
+                    continue;
+                }
+                let pid = info.si_pid();
+                // Its command line, on one log line (`bash -c` scripts span several).
+                let sender: String = std::fs::read(format!("/proc/{pid}/cmdline"))
+                    .map(|c| String::from_utf8_lossy(&c).chars().map(|c| if c.is_control() { ' ' } else { c }).take(200).collect())
+                    .unwrap_or_default();
+                let sender = sender.trim();
+                let name = match sig { libc::SIGTERM => "SIGTERM", libc::SIGINT => "SIGINT", _ => "SIGHUP" };
+                crate::log!("quitting: {name} from process {pid} ({sender})");
+                if asked {
+                    std::process::exit(128 + sig);
+                }
+                asked = true;
+                let _ = slint::invoke_from_event_loop(|| { slint::quit_event_loop().ok(); });
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_secs(5));
+                    crate::log!("the launcher didn't close in 5 s after {name}: ending it now");
+                    std::process::exit(128 + sig);
+                });
+            }
+        });
+    }
+}
+
 // ====================================================================== startup
 
 pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor>, windowed: bool) {
@@ -484,6 +555,10 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         slint::Timer::single_shot(Duration::from_millis(ms), || { std::thread::spawn(crate::sessions::claim_screen); });
     }
 
+    // The window's close button (or Alt+F4) quits like Ctrl+Q, so never on AzrakOS.
+    ui.window().on_close_requested(|| {
+        if quit("window closed") { slint::CloseRequestResponse::HideWindow } else { slint::CloseRequestResponse::KeepWindowShown }
+    });
     ui.show().expect("could not open window");
     crate::display::place_window(&ui, target_monitor.as_ref(), windowed);
     slint::run_event_loop().expect("event loop failed");
@@ -1506,8 +1581,10 @@ impl App {
             }
             return false;
         }
-        if ctrl && (text == "q" || text == "w") {
-            slint::quit_event_loop().ok();
+        if is_quit_key(text, ctrl) {
+            // Not on AzrakOS (see `quit`): there a Ctrl held a moment too long while typing
+            // "w" would leave a black TV.
+            quit(&format!("Ctrl+{} pressed", text.to_uppercase()));
             return true;
         }
         if ctrl && text == "d" && !self.boot.active {
@@ -2908,6 +2985,25 @@ impl CatalogIndex {
         topic.and_then(|t| self.by_topic.get(&t).copied())
             .or_else(|| (!l.title_id.is_empty()).then(|| self.by_tid.get(&l.title_id).copied()).flatten())
             .or_else(|| self.by_name.get(&(l.platform, norm(&l.name))).copied())
+    }
+}
+
+#[cfg(test)]
+mod quit_tests {
+    use super::*;
+
+    #[test]
+    fn only_ctrl_q_and_ctrl_w_are_quit_keys() {
+        assert!(is_quit_key("q", true) && is_quit_key("w", true) && is_quit_key("Q", true));
+        // Typing "wolverine" in the search box, or Ctrl+A to select it, is not quitting.
+        assert!(!is_quit_key("w", false) && !is_quit_key("q", false));
+        assert!(!is_quit_key("a", true) && !is_quit_key("\u{11}", true));
+    }
+
+    #[test]
+    fn nothing_quits_on_azrakos() {
+        assert!(!may_quit(true));
+        assert!(may_quit(false));
     }
 }
 
