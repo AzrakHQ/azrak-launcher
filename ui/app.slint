@@ -254,7 +254,10 @@ export component AppWindow inherits Window {
     // 3 installing, 4 done, 5 failed. Buttons are numbered from osi-button-base (after the disks).
     in property <int> osi-phase;
     in property <string> osi-title;
+    // The disk's name and size under the title (last check); osi-text-warn: Windows is on it.
+    in property <string> osi-sub;
     in property <string> osi-text;
+    in property <bool> osi-text-warn;
     in property <string> osi-note;
     in property <int> osi-sel;
     in property <float> osi-progress;
@@ -1802,6 +1805,19 @@ export component AppWindow inherits Window {
                 Text { text: "AZRAKOS"; font-size: (18px * S.k); font-weight: 600; letter-spacing: (4px * S.k); color: Theme.text2; horizontal-alignment: center; }
                 Rectangle { height: (14px * S.k); }
                 Text { text: root.osi-title; font-size: (52px * S.k); font-weight: 700; color: Theme.text; horizontal-alignment: center; }
+                if root.osi-sub != "": Rectangle { height: (8px * S.k); }
+                if root.osi-sub != "": HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.osi-sub;
+                        max-width: (900px * S.k);
+                        font-size: (26px * S.k);
+                        font-weight: 600;
+                        color: Theme.text;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                    }
+                }
                 Rectangle { height: (14px * S.k); }
                 HorizontalLayout {
                     alignment: center;
@@ -1809,7 +1825,8 @@ export component AppWindow inherits Window {
                         text: root.osi-text;
                         width: (780px * S.k);
                         font-size: (22px * S.k);
-                        color: Theme.text2;
+                        font-weight: root.osi-text-warn ? 700 : 400;
+                        color: root.osi-text-warn ? Theme.warn : Theme.text2;
                         horizontal-alignment: center;
                         wrap: word-wrap;
                     }
@@ -1906,9 +1923,10 @@ export component AppWindow inherits Window {
                         height: (62px * S.k);
                         width: bl.preferred-width + (56px * S.k);
                         border-radius: (31px * S.k);
-                        background: f ? (danger ? Theme.danger : #ffffff) : #ffffff14;
-                        border-width: 1px;
-                        border-color: #ffffff2e;
+                        // Erasing stays red even unfocused, so it never passes for a harmless button.
+                        background: f ? (danger ? Theme.danger : #ffffff) : (danger ? #ff5a6a26 : #ffffff14);
+                        border-width: danger ? (2px * S.k) : 1px;
+                        border-color: danger ? Theme.danger : #ffffff2e;
                         drop-shadow-blur: f ? (26px * S.k) + (6px * S.k) * sin(osi.t * 150deg) : 0;
                         drop-shadow-color: danger ? #ff5a6a88 : #8cb9ffaa;
                         transform-scale: f ? 1.0 : 0.97;
@@ -1918,7 +1936,7 @@ export component AppWindow inherits Window {
                             alignment: center;
                             spacing: (12px * S.k);
                             if f: KeyCap { text: root.pad-hints ? "✕" : "Enter"; round: root.pad-hints; fg: #ffffff; bg: #0a0d18; y: (16px * S.k); }
-                            Text { text: b; font-size: (20px * S.k); font-weight: 600; color: f ? (danger ? #ffffff : #0a0d18) : Theme.text; vertical-alignment: center; }
+                            Text { text: b; font-size: (20px * S.k); font-weight: 600; color: f ? (danger ? #ffffff : #0a0d18) : (danger ? #ff8f9c : Theme.text); vertical-alignment: center; }
                         }
                         TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.os-install, parent.i); } }
                     }

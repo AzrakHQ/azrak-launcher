@@ -64,19 +64,34 @@ impl App {
                         app.toast("Couldn't list the disks", &e, 2);
                     }
                 }
+                app.osi.sel = first_choice(&app.osi.disks);
                 app.osi_push();
             }));
         });
     }
 
-    /// Buttons per phase (Pick: one per disk, then Back).
-    fn osi_count(&self) -> usize {
+    /// The buttons under each phase (Pick: after the disks).
+    fn osi_buttons(&self) -> &'static [&'static str] {
         match self.osi.phase {
-            Phase::Intro | Phase::Confirm | Phase::Failed => 2,
-            Phase::Pick => self.osi.disks.len() + 1,
-            Phase::Installing => 0,
-            Phase::Done => 2,
+            Phase::Intro => &["Install on this PC", "Try AzrakOS"],
+            Phase::Pick if self.osi_no_disk() => &["Try again", "Back"],
+            Phase::Pick => &["Back"],
+            Phase::Confirm => &["Erase and install", "Back"],
+            Phase::Installing => &[],
+            Phase::Done => &["Restart", "Later"],
+            Phase::Failed => &["Try again", "Back"],
         }
+    }
+
+    /// Looked, and there's no disk to install on (the stick itself is never offered).
+    fn osi_no_disk(&self) -> bool {
+        self.osi.phase == Phase::Pick && !self.osi.loading && self.osi.disks.is_empty()
+    }
+
+    /// What can be focused: the disks (Pick), then the buttons.
+    fn osi_count(&self) -> usize {
+        let disks = if self.osi.phase == Phase::Pick { self.osi.disks.len() } else { 0 };
+        disks + self.osi_buttons().len()
     }
 
     pub fn act_os_install(&mut self, a: Act) {
@@ -157,6 +172,11 @@ impl App {
                     self.osi.sel = 1;
                     self.osi_push();
                 }
+                // No disk: look again (after connecting one).
+                None if self.osi_no_disk() && i == 0 => {
+                    audio::play(Sound::Select);
+                    self.osi_pick();
+                }
                 None => self.osi_back(),
             },
             Phase::Confirm => {
@@ -226,20 +246,27 @@ impl App {
         let ui = self.ui();
         let s = &self.osi;
         let disk = s.disk.as_ref();
+        // Under the title: the disk's name on the last check (a long model name made the title
+        // fill the screen). The text turns bold and amber when Windows is about to go.
+        let mut sub = String::new();
+        let mut text_warn = false;
         let (title, text, note): (String, String, String) = match s.phase {
             Phase::Intro => ("Welcome to AzrakOS".into(),
                 "You're running it from the USB stick, and nothing on this PC has changed. Try it as long as you like, or install it so the PC starts straight into it.".into(),
                 String::new()),
+            Phase::Pick if self.osi_no_disk() => ("No disk to install on".into(),
+                "AzrakOS needs a disk of 40 GB or more (not the USB stick). Connect one, then try again.".into(),
+                String::new()),
             Phase::Pick => ("Where should AzrakOS go?".into(),
-                if s.loading { "Looking at this PC's disks…".into() }
-                else if s.disks.is_empty() { "There's no disk to install on: AzrakOS needs one of 40 GB or more, other than the USB stick.".into() }
-                else { "Everything on the disk you choose is erased.".into() },
+                if s.loading { "Looking at this PC's disks…".into() } else { "Everything on the disk you choose is erased.".into() },
                 String::new()),
             Phase::Confirm => {
-                let d = disk.cloned().unwrap_or_else(|| Disk { path: String::new(), bytes: 0, model: "this disk".into(), windows: false, usb: false });
-                (format!("Erase {}?", d.model),
-                 if d.windows { format!("AzrakOS replaces everything on this {} disk, including Windows and all its files.", d.size()) }
-                 else { format!("AzrakOS replaces everything on this {} disk.", d.size()) },
+                let d = disk.cloned().unwrap_or_else(|| Disk { path: String::new(), bytes: 0, model: "Disk".into(), windows: false, usb: false });
+                sub = format!("{} · {}", d.model, d.size());
+                text_warn = d.windows;
+                ("Erase this disk?".into(),
+                 if d.windows { "Windows and everything on this disk will be deleted.".into() }
+                 else { "AzrakOS replaces everything on this disk.".into() },
                  "This can't be undone.".into())
             }
             Phase::Installing => ("Installing AzrakOS".into(), s.step.clone(), "This takes a few minutes. Keep the PC on.".into()),
@@ -260,28 +287,52 @@ impl App {
         };
         ui.set_osi_phase(s.phase as i32);
         ui.set_osi_title(title.into());
+        ui.set_osi_sub(sub.into());
         ui.set_osi_text(text.into());
+        ui.set_osi_text_warn(text_warn);
         ui.set_osi_note(note.into());
         ui.set_osi_sel(s.sel as i32);
         ui.set_osi_progress(s.progress);
         ui.set_osi_busy(s.loading);
         let rows: Vec<crate::OsiDisk> = s.disks.iter().map(|d| crate::OsiDisk {
             label: d.model.clone().into(),
-            detail: [Some(d.size()), d.usb.then(|| "USB".to_string()), d.windows.then(|| "Windows is on it".to_string())]
+            // A USB disk here is never the stick itself (the installer leaves it out).
+            detail: [Some(d.size()), d.usb.then(|| "External drive · USB".to_string()), d.windows.then(|| "Windows is on it".to_string())]
                 .into_iter().flatten().collect::<Vec<_>>().join(" · ").into(),
             warn: d.windows,
         }).collect();
         ui.set_osi_disks(std::rc::Rc::new(slint::VecModel::from(rows)).into());
-        let buttons: &[&str] = match s.phase {
-            Phase::Intro => &["Install on this PC", "Try AzrakOS"],
-            Phase::Pick => &["Back"],
-            Phase::Confirm => &["Erase and install", "Back"],
-            Phase::Installing => &[],
-            Phase::Done => &["Restart", "Later"],
-            Phase::Failed => &["Try again", "Back"],
-        };
-        let buttons: Vec<slint::SharedString> = buttons.iter().map(|b| (*b).into()).collect();
+        let buttons: Vec<slint::SharedString> = self.osi_buttons().iter().map(|b| (*b).into()).collect();
         ui.set_osi_buttons(std::rc::Rc::new(slint::VecModel::from(buttons)).into());
         ui.set_osi_button_base(if s.phase == Phase::Pick { s.disks.len() as i32 } else { 0 });
+    }
+}
+
+/// The disk focused first. Never one with Windows on it, so a quick ✕ doesn't head for it; an
+/// internal disk before a USB one (more likely someone's backup drive). With Windows on every
+/// disk, Back.
+fn first_choice(disks: &[Disk]) -> usize {
+    disks.iter().position(|d| !d.windows && !d.usb)
+        .or_else(|| disks.iter().position(|d| !d.windows))
+        .unwrap_or(disks.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn disk(windows: bool, usb: bool) -> Disk {
+        Disk { path: "/dev/sda".into(), bytes: 500_000_000_000, model: "Disk".into(), windows, usb }
+    }
+
+    #[test]
+    fn never_focuses_windows_first() {
+        assert_eq!(first_choice(&[disk(true, false), disk(false, false), disk(false, true)]), 1);
+        assert_eq!(first_choice(&[disk(false, true), disk(true, false), disk(false, false)]), 2);
+        assert_eq!(first_choice(&[disk(true, false), disk(false, true)]), 1);
+        // Only Windows disks: Back (the button after them).
+        assert_eq!(first_choice(&[disk(true, false), disk(true, true)]), 2);
+        // None at all: the first button (Try again).
+        assert_eq!(first_choice(&[]), 0);
     }
 }
