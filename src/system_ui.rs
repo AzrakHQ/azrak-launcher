@@ -175,9 +175,10 @@ impl App {
                 }
                 // Saved networks and open ones connect straight away; others ask for the password.
                 if w.secured && !saved_wifi(&w.ssid) {
+                    // Editing first: the row is rebuilt as the password field only while it's edited.
                     self.sys.password_for = Some(i as usize);
-                    self.refresh_settings();
                     self.edit_index = index as i32;
+                    self.refresh_settings();
                     let ui = self.ui();
                     ui.set_edit_text("".into());
                     ui.set_edit_index(index as i32);
