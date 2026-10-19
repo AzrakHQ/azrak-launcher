@@ -333,6 +333,10 @@ impl App {
             return true;
         }
         self.sys.output = Some(next);
+        // Say where it went (a TV's speakers and a headset can both be silent for other
+        // reasons); stepping through several outputs leaves one notification, the latest.
+        self.toasts.retain(|t| !t.text.starts_with(SOUND_NOW));
+        self.toast(&format!("{SOUND_NOW} {}", self.sys.outputs[next].label), "", 1);
         crate::audio::play(crate::audio::Sound::Move);
         self.refresh_settings();
         true
@@ -409,6 +413,8 @@ fn saved_wifi(ssid: &str) -> bool {
     std::process::Command::new("nmcli").args(["-t", "-f", "NAME,TYPE", "connection", "show"]).output()
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.replace("\\:", ":").strip_suffix(":802-11-wireless") == Some(ssid)))
 }
+
+const SOUND_NOW: &str = "Sound now plays through";
 
 /// Networks listed before "More networks…".
 const WIFI_SHOWN: usize = 6;
