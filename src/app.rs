@@ -221,6 +221,9 @@ pub struct App {
     pub catalog_updated: f64,
     pub syncing: bool,
     pub enriching: bool,
+    /// New artwork and names arrived while the Library was on screen: applied once it isn't, as
+    /// they regroup releases and the cards and count would jump under the player.
+    pub art_pending: bool,
     pub pad_hints: bool,
     pub clock: String,
     /// Updates the trailer player's progress and controls while it is open.
@@ -400,6 +403,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         catalog_updated: catalog.updated,
         syncing: false,
         enriching: false,
+        art_pending: false,
         pad_hints: false,
         clock: String::new(),
         trailer_timer: None,
@@ -609,6 +613,8 @@ impl App {
     }
 
     pub fn set_catalog(&mut self, games: Vec<Game>) {
+        // Reads the artwork as it is now: nothing left waiting.
+        self.art_pending = false;
         let downloaded: HashSet<i64> = self.downloads.snapshot().iter().map(|job| job.topic).collect();
         let games: Vec<Game> = games.into_iter().filter(|g| listed(g, &downloaded)).collect();
         let today = (util::now_secs() / 86400.0) as i64;
@@ -990,16 +996,29 @@ impl App {
                 app.enriching = false;
                 app.set_status("", false);
                 if changed {
-                    let games: Vec<Game> = app.games.iter().map(|g| g.g.clone()).collect();
-                    app.set_catalog(games);
                     app.images.clear_failures();
-                    if !app.boot.active {
-                        app.push_all();
+                    if app.view == 1 && !app.boot.active {
+                        app.art_pending = true;
+                    } else {
+                        app.apply_art();
                     }
                 }
                 app.boot_art_done();
             });
         });
+    }
+
+    /// Take in the artwork and names that arrived: they can regroup releases into fewer cards, so
+    /// whatever is open or focused is found again by topic ID.
+    pub fn apply_art(&mut self) {
+        let anchor = self.catalog_anchor();
+        let games: Vec<Game> = self.games.iter().map(|g| g.g.clone()).collect();
+        self.set_catalog(games);
+        self.restore_targets(&anchor);
+        if !self.boot.active {
+            self.push_all();
+            self.restore_grid_focus(&anchor);
+        }
     }
 
     /// Download every Library cover into the disk cache (skips cached ones instantly).
@@ -2185,6 +2204,9 @@ impl App {
                 }
             }
         } else {
+            if self.art_pending {
+                self.apply_art();
+            }
             self.show_row_background(self.sel, true);
             if focus {
                 self.set_focus(self.home_zone(), 0);

@@ -100,10 +100,12 @@ Missing counts are unknown, not zero. These are **not live tracker/client counts
 ### Library layout and controls
 
 The **Home / Library** navigation keeps installed games separate from the catalog.
-Library cards reserve two title lines, show download size and a subtle grouped-release
-count, and use compact **↑ seeders / ↓ leechers** captions (green/red; unknown counts
-remain muted). Version/region details stay in the Game Hub. A single dated peer-snapshot
-caption applies to the catalog; differing observation dates are shown in each Game Hub.
+Library cards reserve two title lines, show download size, a subtle grouped-release
+count and the availability caption, and a large console badge (PS5 / PS4 / PC, each in
+its own colour) so a game's versions for different consoles tell apart at a glance.
+Version/region details stay in the Game Hub. New artwork that arrives while the Library is
+on screen (it can regroup releases into fewer cards) waits until you leave it, so the cards
+and the result count don't jump under you.
 
 Use **Comfortable / Compact** to choose grid density. The choice is saved immediately;
 smaller windows reduce the column count and maintain readable caption text. Density
