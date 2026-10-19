@@ -26,6 +26,9 @@ pub struct SysUi {
     pub busy: Option<(SId, String)>,
     /// A paired device pressed once: pressing it again within a few seconds forgets it.
     pub forget: Option<(usize, f64)>,
+    /// While searching for devices: when the search ends, and a timer counting down to it.
+    scan_until: f64,
+    scan_tick: slint::Timer,
     polling: bool,
     pub polled: f64,
     /// Bumped when the launcher itself changes the system (joins a network, pairs): a reading
@@ -127,7 +130,8 @@ impl App {
         }
         let mut r = row(4, "Pair a controller or headset");
         (r.value, r.value_kind) = match busy(SId::BtPair) {
-            Some(text) => (text.into(), 0),
+            // Counting down, so a long search never looks stuck.
+            Some(_) => (format!("Searching · {} s", (s.scan_until - crate::util::now_secs()).ceil().max(1.0)).into(), 0),
             None => ("Search".into(), 3),
         };
         r.hint = "DualSense: hold PS and Create until the light flashes · Xbox: hold the pair button".into();
@@ -147,6 +151,7 @@ impl App {
                 None if *on => ("Connected".into(), 1),
                 None => ("Not connected".into(), 0),
             };
+            r.hint = if *on { "Press twice to forget it" } else { "Press to connect · press again to forget" }.into();
             rows.push((SId::BtDevice(i as u16), r));
         }
 
@@ -155,6 +160,12 @@ impl App {
 
     /// Sound output and system updates.
     fn system_rows_rest(&self, mut rows: Vec<(SId, SettingData)>) -> Vec<(SId, SettingData)> {
+        // Whatever is in progress turns a spinner on its row.
+        if let Some((id, _)) = &self.sys.busy {
+            for (_, r) in rows.iter_mut().filter(|(row_id, _)| row_id == id) {
+                r.busy = true;
+            }
+        }
         let s = &self.sys;
         if !s.outputs.is_empty() {
             let mut r = row(3, "Sound output");
@@ -210,7 +221,14 @@ impl App {
                 if self.sys.busy.is_some() || !system::bt_available() {
                     return true;
                 }
-                self.sys_task(SId::BtPair, "Searching for 15 seconds…", |app, found: Vec<Device>| {
+                self.sys.scan_until = crate::util::now_secs() + 15.0;
+                self.sys.scan_tick.start(slint::TimerMode::Repeated, std::time::Duration::from_secs(1), || with_app(|app| {
+                    if app.overlay == Overlay::Settings {
+                        app.refresh_settings();
+                    }
+                }));
+                self.sys_task(SId::BtPair, "Searching…", |app, found: Vec<Device>| {
+                    app.sys.scan_tick.stop();
                     if found.is_empty() {
                         app.toast("Nothing found", "Put the controller in pairing mode, then search again.", 0);
                     }
@@ -246,7 +264,10 @@ impl App {
             }
             SId::BtDevice(i) => {
                 let i = i as usize;
-                let Some((d, _)) = self.sys.paired.get(i).cloned() else { return true };
+                let Some((d, on)) = self.sys.paired.get(i).cloned() else { return true };
+                if self.sys.busy.is_some() {
+                    return true;
+                }
                 let now = crate::util::now_secs();
                 if self.sys.forget.is_some_and(|(j, at)| j == i && now - at < 5.0) {
                     self.sys.forget = None;
@@ -255,13 +276,25 @@ impl App {
                         if let Err(e) = r { app.toast("Couldn't forget it", &e, 2) } else { app.toast("Forgotten", &d.name, 1) }
                         app.sys_changed();
                     }, move || system::bt_remove(&address));
+                } else if !on {
+                    // Not connected: connect it. If that fails (it's off, or gone for good), a
+                    // second press forgets it, as the hint says.
+                    let address = d.address.clone();
+                    self.sys_task(SId::BtDevice(i as u16), "Connecting…", move |app, r: Result<(), String>| {
+                        match r {
+                            Ok(()) => app.toast("Connected", &d.name, 1),
+                            Err(_) => {
+                                app.toast("Couldn't connect", &format!("Turn {} on and press it again, or press again now to forget it.", d.name), 2);
+                                app.sys_forget_soon(i);
+                            }
+                        }
+                        app.sys_changed();
+                    }, move || system::bt_connect(&address));
                 } else {
-                    self.sys.forget = Some((i, now));
-                    slint::Timer::single_shot(std::time::Duration::from_secs(5), || with_app(|app| {
-                        if app.overlay == Overlay::Settings { app.refresh_settings(); }
-                    }));
+                    self.sys_forget_soon(i);
                 }
             }
+
             SId::SoundOutput => {
                 self.system_change(id, 1);
                 return true;
@@ -303,6 +336,14 @@ impl App {
         crate::audio::play(crate::audio::Sound::Move);
         self.refresh_settings();
         true
+    }
+
+    /// Arm forgetting paired device `i`: a press within 5 s forgets it.
+    fn sys_forget_soon(&mut self, i: usize) {
+        self.sys.forget = Some((i, crate::util::now_secs()));
+        slint::Timer::single_shot(std::time::Duration::from_secs(5), || with_app(|app| {
+            if app.overlay == Overlay::Settings { app.refresh_settings(); }
+        }));
     }
 
     /// A saved or open network: it connects without a password.

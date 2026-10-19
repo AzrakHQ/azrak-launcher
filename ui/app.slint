@@ -1268,6 +1268,13 @@ export component AppWindow inherits Window {
                                         }
                                         if s.kind == 4 && (s.value != "" || s.icon != "" || s.signal > 0): HorizontalLayout {
                                             spacing: (8px * S.k);
+                                            if s.busy: Image {
+                                                source: Icons.spinner;
+                                                width: (20px * S.k);
+                                                height: self.width;
+                                                y: (8px * S.k);
+                                                transform-rotation: animation-tick() / 1ms * 0.4deg;
+                                            }
                                             if s.icon != "": Image {
                                                 source: Icons.get(s.icon);
                                                 colorize: s.value-kind == 1 ? Theme.ok : s.value-kind == 2 ? Theme.danger : Theme.text2;

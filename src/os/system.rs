@@ -172,6 +172,12 @@ pub fn bt_pair(address: &str) -> Result<(), String> {
     run_for(20, "bluetoothctl", &["--timeout", "15", "connect", address]).map(|_| ())
 }
 
+/// Connect a paired device that's on (a controller turned on reconnects by itself; this is for
+/// one that didn't, e.g. a headset).
+pub fn bt_connect(address: &str) -> Result<(), String> {
+    run_for(20, "bluetoothctl", &["--timeout", "15", "connect", address]).map(|_| ())
+}
+
 pub fn bt_remove(address: &str) -> Result<(), String> {
     run("bluetoothctl", &["remove", address]).map(|_| ())
 }

@@ -211,6 +211,7 @@ export struct SettingData {
     icon: string,     // before the value (Icons.get), e.g. "check" for Connected
     signal: int,      // a Wi-Fi network's bars, 1–4, after the value (0: none)
     lock: bool,       // a Wi-Fi network that needs a password
+    busy: bool,       // in progress (connecting, searching): a spinner before the value
 }
 
 // kind 0 info, 1 ok, 2 error. image: a picture for the icon tile (app or game icon), if any.
