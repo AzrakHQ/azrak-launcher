@@ -204,6 +204,130 @@ pub fn set_output(name: &str) -> Result<(), String> {
     run("pactl", &["set-default-sink", name]).map(|_| ())
 }
 
+// ------------------------------------------------------------------ installing from the USB stick
+
+/// The AzrakOS USB stick's installer (github.com/AzrakHQ/azrak-os, live/), or a stand-in for
+/// screenshots and tests (`AZRAK_INSTALLER`, run as the user instead of through pkexec).
+fn installer() -> (String, bool) {
+    match std::env::var("AZRAK_INSTALLER") {
+        Ok(p) if !p.is_empty() => (p, true),
+        _ => ("/usr/libexec/azrak-os/install".into(), false),
+    }
+}
+
+/// Running from the AzrakOS USB stick, so "Install AzrakOS on this PC" is offered (or pretending
+/// to, for screenshots: `AZRAK_USB=1`).
+pub fn on_usb() -> bool {
+    if std::env::var_os("AZRAK_USB").is_some_and(|v| v == "1") {
+        return true;
+    }
+    on_os() && Path::new(&installer().0).exists()
+        && std::fs::read_to_string("/proc/cmdline").is_ok_and(|c| c.split_whitespace().any(|a| a == "rd.live.image"))
+}
+
+/// An NVIDIA graphics card is in the PC (its driver comes separately; see the installer).
+pub fn has_nvidia() -> bool {
+    std::fs::read_dir("/sys/bus/pci/devices").is_ok_and(|d| d.flatten().any(|e| {
+        let read = |f: &str| std::fs::read_to_string(e.path().join(f)).unwrap_or_default();
+        read("vendor").trim() == "0x10de" && read("class").starts_with("0x03")
+    }))
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Disk {
+    pub path: String,
+    pub bytes: u64,
+    pub model: String,
+    /// Windows (an NTFS or BitLocker partition) is on it.
+    pub windows: bool,
+    pub usb: bool,
+}
+
+impl Disk {
+    /// "512 GB": disks are sold in decimal gigabytes, so that's the number on the box.
+    pub fn size(&self) -> String {
+        let gb = self.bytes as f64 / 1e9;
+        if gb >= 1000.0 { format!("{:.1} TB", gb / 1000.0).replace(".0 TB", " TB") } else { format!("{gb:.0} GB") }
+    }
+}
+
+/// The disks AzrakOS can be installed on (not the USB stick it runs from, nothing under 40 GB).
+pub fn install_disks() -> Result<Vec<Disk>, String> {
+    run(&installer().0, &["--disks"]).map(|t| parse_disks(&t))
+}
+
+fn parse_disks(text: &str) -> Vec<Disk> {
+    text.lines().filter_map(|l| {
+        let mut f = l.splitn(6, ' ');
+        if f.next()? != "disk" {
+            return None;
+        }
+        let path = f.next()?.to_string();
+        let bytes = f.next()?.parse().ok()?;
+        let windows = f.next()? == "1";
+        let usb = f.next()? == "1";
+        let model = f.next().unwrap_or("Disk").replace('_', " ").trim().to_string();
+        Some(Disk { path, bytes, model, windows, usb })
+    }).collect()
+}
+
+/// One line the installer printed.
+#[derive(Clone, Debug, PartialEq)]
+pub enum InstallEvent {
+    Progress(f32, String),
+    /// Installed; the edition (`minimal` or `minimal-nvidia`) and whether Secure Boot's key
+    /// screen comes at the restart.
+    Done { tag: String, mok: bool },
+    Failed(String),
+}
+
+pub fn parse_install_line(line: &str) -> Option<InstallEvent> {
+    let (word, rest) = line.trim().split_once(' ').unwrap_or((line.trim(), ""));
+    match word {
+        "progress" => {
+            let (pct, text) = rest.split_once(' ').unwrap_or((rest, ""));
+            Some(InstallEvent::Progress(pct.parse::<f32>().ok()? / 100.0, text.to_string()))
+        }
+        "done" => {
+            let mut f = rest.split_whitespace();
+            let tag = f.next().unwrap_or("minimal").to_string();
+            Some(InstallEvent::Done { tag, mok: f.any(|w| w == "mok") })
+        }
+        "error" => Some(InstallEvent::Failed(rest.to_string())),
+        _ => None,
+    }
+}
+
+/// Erase `disk` and install AzrakOS on it, as root through pkexec (the stick allows it for the
+/// console's user without a password). `each` gets every line the installer prints; the result
+/// is how it ended.
+pub fn install(disk: &str, mut each: impl FnMut(InstallEvent)) -> InstallEvent {
+    use std::io::BufRead;
+    use std::process::Stdio;
+    let (program, stand_in) = installer();
+    let mut command = if stand_in { Command::new(&program) } else { Command::new("pkexec") };
+    if !stand_in {
+        command.arg(&program);
+    }
+    let child = command.arg(disk).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => return InstallEvent::Failed(format!("The installer didn't start: {e}")),
+    };
+    let mut end = None;
+    if let Some(out) = child.stdout.take() {
+        for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+            match parse_install_line(&line) {
+                Some(e @ InstallEvent::Progress(..)) => each(e),
+                Some(e) => end = Some(e),
+                None => {}
+            }
+        }
+    }
+    let ok = child.wait().is_ok_and(|s| s.success());
+    end.unwrap_or_else(|| InstallEvent::Failed(if ok { "The installer stopped without finishing.".into() } else { "The installer stopped.".into() }))
+}
+
 // ------------------------------------------------------------------ power and updates
 
 pub fn restart() -> Result<(), String> {
@@ -265,6 +389,19 @@ mod tests {
             {"name":"bluez_output.70_5A_6F_6D_EF_70.1","description":"EarFun Wave Pro","active_port":"headset-output"}]"#;
         let labels: Vec<_> = parse_outputs(json).into_iter().map(|o| o.label).collect();
         assert_eq!(labels, vec!["Shure MV7", "TV or monitor (HDMI)", "EarFun Wave Pro"]);
+    }
+
+    #[test]
+    fn reads_the_installer() {
+        let disks = parse_disks("disk /dev/nvme0n1 512110190592 1 0 Samsung_SSD 970 EVO\ndisk /dev/sdb 2000398934016 0 1 CT2000BX500SSD1\nnoise\n");
+        assert_eq!(disks.len(), 2);
+        assert_eq!((disks[0].model.as_str(), disks[0].size(), disks[0].windows, disks[0].usb), ("Samsung SSD 970 EVO", "512 GB".to_string(), true, false));
+        assert_eq!((disks[1].size(), disks[1].usb), ("2 TB".to_string(), true));
+        assert_eq!(parse_install_line("progress 35 Copying AzrakOS"), Some(InstallEvent::Progress(0.35, "Copying AzrakOS".into())));
+        assert_eq!(parse_install_line("done minimal-nvidia mok"), Some(InstallEvent::Done { tag: "minimal-nvidia".into(), mok: true }));
+        assert_eq!(parse_install_line("done minimal"), Some(InstallEvent::Done { tag: "minimal".into(), mok: false }));
+        assert_eq!(parse_install_line("error Installing on /dev/sda failed."), Some(InstallEvent::Failed("Installing on /dev/sda failed.".into())));
+        assert_eq!(parse_install_line("Deploying container image"), None);
     }
 
     #[test]

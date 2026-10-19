@@ -17,6 +17,7 @@ mod pc_ui;
 mod pcgame;
 mod system;
 mod system_ui;
+mod os_install;
 mod exfat;
 mod results;
 mod trailer;

@@ -17,6 +17,7 @@ pub enum SId {
     BtDevice(u16),
     SoundOutput,
     SystemUpdate,
+    InstallOs,
     Restart,
     ShutDown,
     // Games

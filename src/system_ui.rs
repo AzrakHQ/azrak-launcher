@@ -64,6 +64,12 @@ impl App {
         let s = &self.sys;
         let busy = |id: SId| s.busy.as_ref().filter(|(b, _)| *b == id).map(|(_, t)| t.clone());
         let mut rows = vec![(SId::Header, row(0, "SYSTEM"))];
+        if system::on_usb() {
+            let mut r = row(4, "Install AzrakOS on this PC");
+            (r.value, r.value_kind) = ("Start".into(), 3);
+            r.hint = "You're running AzrakOS from the USB stick · installing erases the disk you choose".into();
+            rows.push((SId::InstallOs, r));
+        }
 
         let mut r = row(4, "Internet");
         (r.value, r.value_kind) = match (busy(SId::Internet), s.network.kind) {
@@ -233,6 +239,7 @@ impl App {
                     self.power(true);
                 }
             }
+            SId::InstallOs => self.os_install_open(),
             SId::Restart => self.power(true),
             SId::ShutDown => self.power(false),
             _ => return false,

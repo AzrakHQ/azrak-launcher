@@ -1,4 +1,4 @@
-import { S, Theme, Icons, Zone, DownloadData, BootStep, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, ToastData, MenuItem, RunningData } from "theme.slint";
+import { S, Theme, Icons, Zone, DownloadData, BootStep, OsiDisk, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, ToastData, MenuItem, RunningData } from "theme.slint";
 import { FocusRing, Chip, Btn, Kicker, Badge, Switch, KeyCap, BackButton, Shimmer, Cover } from "widgets.slint";
 import { DownloadsSheet, DownloadConsent } from "downloads.slint";
 import { LibraryFilter, LibrarySortPicker } from "library.slint";
@@ -250,6 +250,18 @@ export component AppWindow inherits Window {
     // PS4 games run on shadPS4, whose keyboard layout differs from KytyPS5's.
     in property <bool> launch-ps4;
     in property <bool> controls-ps4;
+    // Install AzrakOS from the USB stick (os_install.rs). Phase: 0 welcome, 1 disk, 2 last check,
+    // 3 installing, 4 done, 5 failed. Buttons are numbered from osi-button-base (after the disks).
+    in property <int> osi-phase;
+    in property <string> osi-title;
+    in property <string> osi-text;
+    in property <string> osi-note;
+    in property <int> osi-sel;
+    in property <float> osi-progress;
+    in property <bool> osi-busy;
+    in property <[OsiDisk]> osi-disks;
+    in property <[string]> osi-buttons;
+    in property <int> osi-button-base;
 
     in property <string> menu-title;
     in property <[MenuItem]> menu-items;
@@ -1723,6 +1735,180 @@ export component AppWindow inherits Window {
                                 vertical-alignment: center;
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------ INSTALL AZRAKOS (USB stick)
+        if root.overlay == 11: osi := Rectangle {
+            property <float> t: animation-tick() / 1ms / 1000;
+            background: #05070f;
+            TouchArea {}
+            // The library's covers drifting behind, as on the start screen.
+            property <length> cw: (190px * S.k);
+            property <length> ch: (285px * S.k);
+            property <length> cg: (22px * S.k);
+            property <int> cols: ceil(root.width / (cw + cg)) + 1;
+            property <int> rows: ceil(root.height / (ch + cg)) + 2;
+            Rectangle {
+                opacity: root.boot-covers.length > 0 ? 0.22 : 0;
+                for c in osi.cols: Rectangle {
+                    property <float> speed: 10 + mod(c * 7, 9);
+                    property <length> shift: (osi.t * speed * 1px * S.k) + c * (97px * S.k);
+                    property <length> loop-h: osi.rows * (osi.ch + osi.cg);
+                    x: c * (osi.cw + osi.cg) - (40px * S.k);
+                    width: osi.cw;
+                    for r in osi.rows: Rectangle {
+                        property <int> k: mod(c * 7 + r * 11, max(1, root.boot-covers.length));
+                        y: mod(r * (osi.ch + osi.cg) / 1px - shift / 1px, loop-h / 1px) * 1px - osi.ch;
+                        height: osi.ch;
+                        border-radius: (14px * S.k);
+                        clip: true;
+                        background: #121a31;
+                        if root.boot-covers.length > 0: Image { source: root.boot-covers[k]; width: parent.width; height: parent.height; image-fit: cover; }
+                    }
+                }
+            }
+            Rectangle { background: @radial-gradient(circle, #05070fe6 0%, #05070fb8 50%, #05070f66 100%); }
+            Rectangle {
+                x: root.width * (0.5 + 0.08 * sin(osi.t * 8deg)) - self.width / 2;
+                y: root.height * (0.42 + 0.05 * cos(osi.t * 6deg)) - self.height / 2;
+                width: (1200px * S.k);
+                height: self.width;
+                background: @radial-gradient(circle, #1f4fd133 0%, #1f4fd100 65%);
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 0;
+                HorizontalLayout {
+                    alignment: center;
+                    Image { source: Icons.app; width: (104px * S.k); height: self.width; image-fit: contain; }
+                }
+                Rectangle { height: (20px * S.k); }
+                Text { text: "AZRAKOS"; font-size: (18px * S.k); font-weight: 600; letter-spacing: (4px * S.k); color: Theme.text2; horizontal-alignment: center; }
+                Rectangle { height: (14px * S.k); }
+                Text { text: root.osi-title; font-size: (52px * S.k); font-weight: 700; color: Theme.text; horizontal-alignment: center; }
+                Rectangle { height: (14px * S.k); }
+                HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.osi-text;
+                        width: (780px * S.k);
+                        font-size: (22px * S.k);
+                        color: Theme.text2;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+                Rectangle { height: (34px * S.k); }
+
+                // The disks to choose from.
+                if root.osi-phase == 1 && root.osi-disks.length > 0: HorizontalLayout {
+                    alignment: center;
+                    VerticalLayout {
+                        width: (660px * S.k);
+                        spacing: (12px * S.k);
+                        for d[i] in root.osi-disks: Rectangle {
+                            property <bool> f: i == root.osi-sel;
+                            height: (84px * S.k);
+                            border-radius: (18px * S.k);
+                            background: f ? #16234acc : #0b1122cc;
+                            border-width: f ? (2px * S.k) : 1px;
+                            border-color: f ? Theme.ring : #ffffff17;
+                            drop-shadow-blur: f ? (24px * S.k) : 0;
+                            drop-shadow-color: Theme.glow;
+                            animate background, border-color { duration: Theme.fast; }
+                            HorizontalLayout {
+                                padding-left: (24px * S.k);
+                                padding-right: (24px * S.k);
+                                spacing: (18px * S.k);
+                                Image { source: Icons.disk; colorize: f ? Theme.text : Theme.text2; width: (30px * S.k); height: self.width; y: (27px * S.k); }
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: (4px * S.k);
+                                    Text { text: d.label; font-size: (21px * S.k); font-weight: 600; color: Theme.text; overflow: elide; }
+                                    Text { text: d.detail; font-size: (17px * S.k); color: d.warn ? Theme.warn : Theme.text2; }
+                                }
+                            }
+                            TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.os-install, i); } }
+                        }
+                    }
+                }
+                if root.osi-phase == 1 && root.osi-busy: HorizontalLayout {
+                    alignment: center;
+                    Image { source: Icons.spinner; width: (28px * S.k); height: self.width; transform-rotation: osi.t * 400deg; }
+                }
+
+                // Installing: the progress.
+                if root.osi-phase == 3: HorizontalLayout {
+                    alignment: center;
+                    spacing: (16px * S.k);
+                    Rectangle {
+                        width: (560px * S.k);
+                        height: (8px * S.k);
+                        y: (9px * S.k);
+                        border-radius: (4px * S.k);
+                        background: #ffffff1a;
+                        clip: true;
+                        Rectangle {
+                            x: 0;
+                            width: parent.width * max(0.02, root.osi-progress);
+                            border-radius: (4px * S.k);
+                            background: @linear-gradient(90deg, #2f6dff 0%, #6ea8ff 60%, #b4d0ff 100%);
+                            animate width { duration: 600ms; easing: ease-out-quart; }
+                            drop-shadow-blur: (12px * S.k);
+                            drop-shadow-color: #3d8bff99;
+                        }
+                        Rectangle {
+                            x: mod(osi.t * 0.6, 1.4) * parent.width - self.width;
+                            width: (120px * S.k);
+                            background: @linear-gradient(90deg, #ffffff00 0%, #ffffff55 50%, #ffffff00 100%);
+                        }
+                    }
+                    Text { text: round(root.osi-progress * 100) + "%"; font-size: (18px * S.k); font-weight: 600; color: Theme.text2; min-width: (48px * S.k); }
+                }
+
+                if root.osi-note != "": Rectangle { height: (22px * S.k); }
+                if root.osi-note != "": HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.osi-note;
+                        width: (720px * S.k);
+                        font-size: (18px * S.k);
+                        color: root.osi-phase == 2 ? Theme.warn : Theme.text3;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+                Rectangle { height: (40px * S.k); }
+
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: (16px * S.k);
+                    for b[j] in root.osi-buttons: Rectangle {
+                        property <int> i: root.osi-button-base + j;
+                        property <bool> f: i == root.osi-sel;
+                        property <bool> danger: root.osi-phase == 2 && j == 0;
+                        height: (62px * S.k);
+                        width: bl.preferred-width + (56px * S.k);
+                        border-radius: (31px * S.k);
+                        background: f ? (danger ? Theme.danger : #ffffff) : #ffffff14;
+                        border-width: 1px;
+                        border-color: #ffffff2e;
+                        drop-shadow-blur: f ? (26px * S.k) + (6px * S.k) * sin(osi.t * 150deg) : 0;
+                        drop-shadow-color: danger ? #ff5a6a88 : #8cb9ffaa;
+                        transform-scale: f ? 1.0 : 0.97;
+                        animate background { duration: 200ms; }
+                        animate transform-scale { duration: 300ms; easing: ease-out-back; }
+                        bl := HorizontalLayout {
+                            alignment: center;
+                            spacing: (12px * S.k);
+                            if f: KeyCap { text: root.pad-hints ? "✕" : "Enter"; round: root.pad-hints; fg: #ffffff; bg: #0a0d18; y: (16px * S.k); }
+                            Text { text: b; font-size: (20px * S.k); font-weight: 600; color: f ? (danger ? #ffffff : #0a0d18) : Theme.text; vertical-alignment: center; }
+                        }
+                        TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.os-install, parent.i); } }
                     }
                 }
             }

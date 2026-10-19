@@ -41,6 +41,7 @@ pub const Z_SORT_PICKER: i32 = 16;
 pub const Z_DENSITY: i32 = 17;
 pub const Z_TRAILER: i32 = 18;
 pub const Z_CONTROLS: i32 = 19;
+pub const Z_OS_INSTALL: i32 = 20;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Overlay {
@@ -54,6 +55,8 @@ pub enum Overlay {
     Sort = 8,
     Trailer = 9,
     Controls = 10,
+    /// Install AzrakOS from the USB stick (os_install.rs).
+    OsInstall = 11,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -254,6 +257,7 @@ pub struct App {
     net_retry: NetRetry,
     /// Settings → SYSTEM on AzrakOS.
     pub sys: crate::system_ui::SysUi,
+    pub osi: crate::os_install::OsInstall,
     /// This PC's processor, memory and graphics (read in the background at start).
     pub pc: Option<crate::pc::Specs>,
     pub pc_checking: bool,
@@ -419,6 +423,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         net_watch: slint::Timer::default(),
         net_retry: NetRetry::default(),
         sys: Default::default(),
+        osi: Default::default(),
         pc: None,
         pc_checking: false,
         boot: Default::default(),
@@ -1542,6 +1547,14 @@ impl App {
             let cur = self.ui().get_edit_text().to_string();
             self.finish_edit(Some(cur));
         }
+        if zone == Z_OS_INSTALL && self.overlay == Overlay::OsInstall {
+            if idx < 0 {
+                self.act_os_install(Act::Back);
+            } else {
+                self.click_os_install(idx);
+            }
+            return;
+        }
         // Clicks on an overlay backdrop close it.
         if idx < 0 {
             self.back();
@@ -1646,6 +1659,7 @@ impl App {
                 _ => {}
             },
             Overlay::Menu => self.act_menu(a),
+            Overlay::OsInstall => self.act_os_install(a),
             Overlay::Settings => self.act_settings(a),
             Overlay::Hub => self.act_hub(a),
             Overlay::Downloads => self.act_downloads(a),

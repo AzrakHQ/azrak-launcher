@@ -1,0 +1,274 @@
+//! "Install AzrakOS on this PC", on the AzrakOS USB stick only: a welcome that offers to try or
+//! install, the disk to install on, a last check before it's erased, the progress, and the end.
+//! The work is the stick's installer (system::install); this is its screen, in the launcher's
+//! own design and driven by the controller like everything else.
+
+use crate::app::*;
+use crate::audio::{self, Sound};
+use crate::system::{self, Disk, InstallEvent};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Phase {
+    /// "Welcome to AzrakOS": try it, or install it.
+    #[default]
+    Intro = 0,
+    Pick = 1,
+    Confirm = 2,
+    Installing = 3,
+    Done = 4,
+    Failed = 5,
+}
+
+#[derive(Default)]
+pub struct OsInstall {
+    pub phase: Phase,
+    pub disks: Vec<Disk>,
+    pub loading: bool,
+    /// The focused disk (Pick) or button (the other phases).
+    pub sel: usize,
+    pub disk: Option<Disk>,
+    pub progress: f32,
+    pub step: String,
+    pub end: Option<InstallEvent>,
+    /// The welcome was shown this session (it opens by itself once).
+    pub welcomed: bool,
+}
+
+impl App {
+    /// After the start screen on the USB stick: the welcome, once.
+    pub fn os_install_welcome(&mut self) {
+        if !system::on_usb() || self.osi.welcomed {
+            return;
+        }
+        self.osi.welcomed = true;
+        self.osi.phase = Phase::Intro;
+        self.osi.sel = 0;
+        self.push_overlay(Overlay::OsInstall, Z_OS_INSTALL, 0);
+        self.osi_push();
+    }
+
+    /// Settings → Install AzrakOS on this PC: straight to choosing the disk.
+    pub fn os_install_open(&mut self) {
+        audio::play(Sound::Select);
+        self.push_overlay(Overlay::OsInstall, Z_OS_INSTALL, 0);
+        self.osi_pick();
+    }
+
+    fn osi_pick(&mut self) {
+        self.osi.phase = Phase::Pick;
+        self.osi.sel = 0;
+        self.osi.loading = true;
+        self.osi_push();
+        std::thread::spawn(|| {
+            let disks = system::install_disks();
+            let _ = slint::invoke_from_event_loop(move || with_app(move |app| {
+                app.osi.loading = false;
+                match disks {
+                    Ok(d) => app.osi.disks = d,
+                    Err(e) => {
+                        app.osi.disks.clear();
+                        app.toast("Couldn't list the disks", &e, 2);
+                    }
+                }
+                app.osi_push();
+            }));
+        });
+    }
+
+    /// Buttons per phase (Pick: one per disk, then Back).
+    fn osi_count(&self) -> usize {
+        match self.osi.phase {
+            Phase::Intro | Phase::Confirm | Phase::Failed => 2,
+            Phase::Pick => self.osi.disks.len() + 1,
+            Phase::Installing => 0,
+            Phase::Done => 2,
+        }
+    }
+
+    pub fn act_os_install(&mut self, a: Act) {
+        let n = self.osi_count();
+        match a {
+            Act::Up | Act::Left if self.osi.sel > 0 => {
+                self.osi.sel -= 1;
+                audio::play(Sound::Move);
+                self.osi_push();
+            }
+            Act::Down | Act::Right if self.osi.sel + 1 < n => {
+                self.osi.sel += 1;
+                audio::play(Sound::Move);
+                self.osi_push();
+            }
+            Act::Confirm => self.osi_choose(self.osi.sel),
+            Act::Back => self.osi_back(),
+            _ => {}
+        }
+    }
+
+    pub fn click_os_install(&mut self, idx: i32) {
+        if idx >= 0 && (idx as usize) < self.osi_count() {
+            self.osi.sel = idx as usize;
+            self.osi_choose(idx as usize);
+        }
+    }
+
+    fn osi_back(&mut self) {
+        match self.osi.phase {
+            Phase::Installing => {}
+            Phase::Confirm => {
+                audio::play(Sound::Back);
+                let i = self.osi.disk.as_ref().and_then(|d| self.osi.disks.iter().position(|x| x == d)).unwrap_or(0);
+                self.osi.phase = Phase::Pick;
+                self.osi.sel = i;
+                self.osi_push();
+            }
+            _ => self.back(),
+        }
+    }
+
+    fn osi_choose(&mut self, i: usize) {
+        match self.osi.phase {
+            Phase::Intro => {
+                if i == 0 {
+                    audio::play(Sound::Select);
+                    self.osi_pick();
+                } else {
+                    self.back();
+                }
+            }
+            Phase::Pick => match self.osi.disks.get(i).cloned() {
+                Some(d) => {
+                    audio::play(Sound::Select);
+                    self.osi.disk = Some(d);
+                    self.osi.phase = Phase::Confirm;
+                    // Back is the safe default: erasing takes a deliberate move.
+                    self.osi.sel = 1;
+                    self.osi_push();
+                }
+                None => self.back(),
+            },
+            Phase::Confirm => {
+                if i == 0 {
+                    self.osi_start();
+                } else {
+                    self.osi_back();
+                }
+            }
+            Phase::Installing => {}
+            Phase::Done => {
+                if i == 0 {
+                    if let Err(e) = system::restart() {
+                        self.toast("Couldn't restart", &e, 2);
+                    }
+                } else {
+                    self.back();
+                }
+            }
+            Phase::Failed => {
+                if i == 0 {
+                    self.osi_pick();
+                } else {
+                    self.back();
+                }
+            }
+        }
+    }
+
+    fn osi_start(&mut self) {
+        let Some(disk) = self.osi.disk.clone() else { return };
+        if !self.live.is_empty() {
+            self.toast("A game is running", "Close it first, then install.", 2);
+            return;
+        }
+        audio::play(Sound::Start);
+        crate::log!("installing AzrakOS on {}", disk.path);
+        self.osi.phase = Phase::Installing;
+        self.osi.progress = 0.0;
+        self.osi.step = "Getting ready".into();
+        self.osi.end = None;
+        self.osi_push();
+        std::thread::spawn(move || {
+            let end = system::install(&disk.path, |e| {
+                let _ = slint::invoke_from_event_loop(move || with_app(move |app| {
+                    if let InstallEvent::Progress(p, text) = e {
+                        app.osi.progress = app.osi.progress.max(p);
+                        app.osi.step = text;
+                        app.osi_push();
+                    }
+                }));
+            });
+            let _ = slint::invoke_from_event_loop(move || with_app(move |app| {
+                crate::log!("installing AzrakOS: {end:?}");
+                app.osi.phase = if matches!(end, InstallEvent::Done { .. }) { Phase::Done } else { Phase::Failed };
+                app.osi.progress = 1.0;
+                app.osi.sel = 0;
+                app.osi.end = Some(end);
+                audio::play(if app.osi.phase == Phase::Done { Sound::Start } else { Sound::Error });
+                app.osi_push();
+            }));
+        });
+    }
+
+    /// Show the current phase.
+    pub fn osi_push(&self) {
+        let ui = self.ui();
+        let s = &self.osi;
+        let disk = s.disk.as_ref();
+        let (title, text, note): (String, String, String) = match s.phase {
+            Phase::Intro => ("Welcome to AzrakOS".into(),
+                "You're running it from the USB stick, and nothing on this PC has changed. Try it as long as you like, or install it so the PC starts straight into it.".into(),
+                String::new()),
+            Phase::Pick => ("Where should AzrakOS go?".into(),
+                if s.loading { "Looking at this PC's disks…".into() }
+                else if s.disks.is_empty() { "There's no disk to install on: AzrakOS needs one of 40 GB or more, other than the USB stick.".into() }
+                else { "Everything on the disk you choose is erased.".into() },
+                String::new()),
+            Phase::Confirm => {
+                let d = disk.cloned().unwrap_or_else(|| Disk { path: String::new(), bytes: 0, model: "this disk".into(), windows: false, usb: false });
+                (format!("Erase {}?", d.model),
+                 if d.windows { format!("AzrakOS replaces everything on this {} disk, including Windows and all its files.", d.size()) }
+                 else { format!("AzrakOS replaces everything on this {} disk.", d.size()) },
+                 "This can't be undone.".into())
+            }
+            Phase::Installing => ("Installing AzrakOS".into(), s.step.clone(), "This takes a few minutes. Keep the PC on.".into()),
+            Phase::Done => {
+                let (mok, nvidia_later) = match &s.end {
+                    Some(InstallEvent::Done { tag, mok }) => (*mok, tag == "minimal" && system::has_nvidia()),
+                    _ => (false, false),
+                };
+                ("AzrakOS is installed".into(),
+                 "Remove the USB stick, then restart: the PC starts straight into AzrakOS.".into(),
+                 if mok { "After the restart a blue screen asks to enroll a key for NVIDIA's driver: choose Enroll MOK, Continue, Yes, type universalblue, then Reboot.".into() }
+                 else if nvidia_later { "NVIDIA's driver downloads by itself the first time the PC is online, then asks for a restart.".into() }
+                 else { String::new() })
+            }
+            Phase::Failed => ("Installation didn't finish".into(),
+                match &s.end { Some(InstallEvent::Failed(e)) => e.clone(), _ => "Something went wrong.".into() },
+                "Try again, or keep using AzrakOS from the USB stick.".into()),
+        };
+        ui.set_osi_phase(s.phase as i32);
+        ui.set_osi_title(title.into());
+        ui.set_osi_text(text.into());
+        ui.set_osi_note(note.into());
+        ui.set_osi_sel(s.sel as i32);
+        ui.set_osi_progress(s.progress);
+        ui.set_osi_busy(s.loading);
+        let rows: Vec<crate::OsiDisk> = s.disks.iter().map(|d| crate::OsiDisk {
+            label: d.model.clone().into(),
+            detail: [Some(d.size()), d.usb.then(|| "USB".to_string()), d.windows.then(|| "Windows is on it".to_string())]
+                .into_iter().flatten().collect::<Vec<_>>().join(" · ").into(),
+            warn: d.windows,
+        }).collect();
+        ui.set_osi_disks(std::rc::Rc::new(slint::VecModel::from(rows)).into());
+        let buttons: &[&str] = match s.phase {
+            Phase::Intro => &["Install on this PC", "Try AzrakOS"],
+            Phase::Pick => &["Back"],
+            Phase::Confirm => &["Erase and install", "Back"],
+            Phase::Installing => &[],
+            Phase::Done => &["Restart", "Later"],
+            Phase::Failed => &["Try again", "Back"],
+        };
+        let buttons: Vec<slint::SharedString> = buttons.iter().map(|b| (*b).into()).collect();
+        ui.set_osi_buttons(std::rc::Rc::new(slint::VecModel::from(buttons)).into());
+        ui.set_osi_button_base(if s.phase == Phase::Pick { s.disks.len() as i32 } else { 0 });
+    }
+}
