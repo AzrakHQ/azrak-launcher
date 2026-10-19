@@ -134,6 +134,10 @@ int ftruncate(int fd, off_t length) {
     return r;
 }
 
+// glibc declares fclose's FILE as never NULL, and newer GCCs then reject the check below; but this
+// stands in for fclose in other programs, which can pass NULL, so the check stays.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wnonnull-compare"
 int fclose(FILE *f) {
     static int (*next)(FILE *);
     if (!next) next = real("fclose");
@@ -151,3 +155,4 @@ int fclose(FILE *f) {
     if (r != 0 && end >= 0) fail("close", errno);
     return r;
 }
+#pragma GCC diagnostic pop
