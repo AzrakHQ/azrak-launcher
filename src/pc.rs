@@ -65,6 +65,8 @@ impl Verdict {
         }
     }
 
+    /// The reason in a few words; the launcher explains it in sentences (pc_ui::explain).
+    #[cfg(test)]
     pub fn why(&self) -> Option<&str> {
         match self {
             Verdict::Good => None,
@@ -78,15 +80,6 @@ impl Verdict {
         match self.why() {
             Some(why) => format!("{} · {why}", self.headline()),
             None => self.headline().into(),
-        }
-    }
-
-    /// 1 good, 2 warning, 3 bad (the Fact and Settings colors).
-    pub fn kind(&self) -> i32 {
-        match self {
-            Verdict::Good => 1,
-            Verdict::Slow(_) => 2,
-            Verdict::No(_) => 3,
         }
     }
 }

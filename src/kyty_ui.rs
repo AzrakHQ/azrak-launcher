@@ -206,12 +206,13 @@ impl App {
                             c.emulator = kyty::managed_emulator().to_string_lossy().into_owned();
                             c.save();
                         }
-                        let sub = if imported > 0 { "Your saves and shader caches were copied over.".to_string() } else { String::new() };
-                        let title = if was_managed { "KytyPS5 updated" } else { "KytyPS5 installed" };
+                        // What it means for the player; the build is in Settings → Updates.
+                        let sub = if imported > 0 { "Your saves were copied over." } else if was_managed { "Version details are in Settings → Updates." } else { "" };
+                        let title = if was_managed { "PS5 support updated" } else { "PS5 games are ready to play" };
                         if app.boot.active {
                             app.boot_kyty_done(&format!("KytyPS5 {} ready", kyty::pretty(&rel.tag)));
                         } else {
-                            app.toast(title, &format!("Now on build {}.{}", kyty::pretty(&rel.tag), if sub.is_empty() { String::new() } else { format!(" {sub}") }), 1);
+                            app.toast(title, sub, 1);
                         }
                     }
                     Err(e) => {

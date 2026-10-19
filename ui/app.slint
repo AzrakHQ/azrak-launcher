@@ -13,7 +13,7 @@ component Toast inherits Rectangle {
     property <bool> shown: false;
     property <color> tint: data.kind == 1 ? Theme.ok : data.kind == 2 ? Theme.danger : #3d8bff;
     init => { shown = true; }
-    width: (440px * S.k);
+    width: (480px * S.k);
     height: max((84px * S.k), body.preferred-height + (36px * S.k));
     border-radius: (18px * S.k);
     background: #141c33fa;
@@ -55,10 +55,10 @@ component Toast inherits Rectangle {
         height: parent.height - (36px * S.k);
         alignment: center;
         spacing: (3px * S.k);
-        Text { text: data.text; font-size: (18px * S.k); font-weight: 600; color: Theme.text; wrap: word-wrap; }
+        Text { text: data.text; font-size: (20px * S.k); font-weight: 600; color: Theme.text; wrap: word-wrap; }
         if data.sub != "": Text {
             text: data.sub;
-            font-size: (15px * S.k);
+            font-size: (17px * S.k);
             color: Theme.text2;
             wrap: word-wrap;
             max-height: (120px * S.k);
@@ -326,6 +326,9 @@ export component AppWindow inherits Window {
 
     public function focus-root() { scope.focus(); }
     public function focus-search() { search-input.focus(); search-input.select-all(); }
+    // After type-to-search put the first letter in: keep typing after it, not over it. Offsets
+    // are UTF-8 bytes (4 per character at most) and clamped to the end of the text.
+    public function search-cursor-to-end() { search-input.set-selection-offsets(root.query.character-count * 4, root.query.character-count * 4); }
 
     changed width => { root.resized(); }
     changed height => { root.resized(); }
@@ -464,8 +467,55 @@ export component AppWindow inherits Window {
                 }
             }
 
+            // No games yet: the welcome screen's calm backdrop (no game's art, which would read as
+            // an ad or as a game you own) and the way to a first game.
+            if !root.home-has-game: Rectangle {
+                property <HeroData> h: root.hero-front-b ? root.hero-b : root.hero;
+                background: #05070f;
+                Rectangle {
+                    x: root.width * 0.30 - self.width / 2;
+                    y: root.height * 0.38 - self.height / 2;
+                    width: (1100px * S.k);
+                    height: self.width;
+                    background: @radial-gradient(circle, #1f4fd13d 0%, #1f4fd100 65%);
+                }
+                Rectangle {
+                    x: root.width * 0.72 - self.width / 2;
+                    y: root.height * 0.62 - self.height / 2;
+                    width: (1000px * S.k);
+                    height: self.width;
+                    background: @radial-gradient(circle, #8b5cf62e 0%, #8b5cf600 65%);
+                }
+                VerticalLayout {
+                    x: (96px * S.k);
+                    y: (300px * S.k);
+                    width: root.width - (192px * S.k);
+                    height: self.preferred-height;
+                    spacing: 0;
+                    Image { source: Icons.app; width: (88px * S.k); height: (88px * S.k); image-fit: contain; }
+                    Rectangle { height: (36px * S.k); }
+                    Text { text: h.title; font-size: (72px * S.k); font-weight: 700; color: Theme.text; }
+                    Rectangle { height: (18px * S.k); }
+                    Text { text: h.desc; font-size: (30px * S.k); color: Theme.text2; wrap: word-wrap; }
+                    Rectangle { height: (10px * S.k); }
+                    Text { text: "Already have games on this PC? Add the folder they're in."; font-size: (21px * S.k); color: Theme.text3; wrap: word-wrap; }
+                    Rectangle { height: (40px * S.k); }
+                    HorizontalLayout {
+                        spacing: (16px * S.k);
+                        alignment: start;
+                        for a[i] in h.actions: Btn {
+                            data: a;
+                            focused: root.zone == Zone.actions && root.overlay == 0 && root.idx == i;
+                            dim: root.zone == Zone.actions && root.overlay == 0 && root.idx != i;
+                            clicked => { root.click(Zone.actions, i); }
+                        }
+                    }
+                }
+            }
+
             // Hero: two layers crossfade when the selection changes (the new game's details
             // rise in while the old ones fade), like the PS5 home screen.
+            if root.home-has-game: Rectangle {
             for slot in [0, 1]: HeroView {
                 x: (96px * S.k);
                 width: (900px * S.k);
@@ -475,6 +525,7 @@ export component AppWindow inherits Window {
                 front: (slot == 1) == root.hero-front-b;
                 focus-idx: root.zone == Zone.actions && root.overlay == 0 ? root.idx : -1;
                 action(i) => { root.click(Zone.actions, i); }
+            }
             }
         }
 
@@ -541,21 +592,25 @@ export component AppWindow inherits Window {
                                         vertical-alignment: center;
                                     }
                                 }
-                                Badge { x: (10px * S.k); y: (10px * S.k); text: c.badge; size: (12px * S.k); }
+                                Badge { x: (10px * S.k); y: (10px * S.k); text: c.badge; size: (14px * S.k); }
+                                // The console, big enough to tell Hades on PS5, PS4 and PC apart at a
+                                // glance: each has its own colour.
                                 if c.console != "": Rectangle {
-                                    x: parent.width - self.width - (10px * S.k);
-                                    y: (10px * S.k);
-                                    width: cl.preferred-width + (14px * S.k);
-                                    height: (22px * S.k);
-                                    border-radius: (6px * S.k);
-                                    background: #000000c4;
-                                    cl := Text { text: c.console; font-size: (12px * S.k); font-weight: 700; color: c.console == "PS4" ? #8fc2ff : #ffffff; }
+                                    x: parent.width - self.width - (8px * S.k);
+                                    y: (8px * S.k);
+                                    width: cl.preferred-width + (18px * S.k);
+                                    height: (30px * S.k);
+                                    border-radius: (8px * S.k);
+                                    background: c.console == "PS4" ? #12306be8 : c.console == "PC" ? #12452fe8 : #000000d9;
+                                    border-width: 1px;
+                                    border-color: c.console == "PS4" ? #8fc2ff80 : c.console == "PC" ? #7ee2b080 : #ffffff59;
+                                    cl := Text { text: c.console; font-size: (17px * root.library-type-scale); font-weight: 800; letter-spacing: (0.5px * S.k); color: c.console == "PS4" ? #b8d8ff : c.console == "PC" ? #a8f0cc : #ffffff; }
                                 }
                                 if c.compat != "": Rectangle {
                                     x: (10px * S.k);
                                     y: parent.height - self.height - (10px * S.k);
                                     width: cp.preferred-width + (30px * S.k);
-                                    height: (26px * S.k);
+                                    height: (28px * S.k);
                                     border-radius: (6px * S.k);
                                     background: #000000c4;
                                     Rectangle {
@@ -568,7 +623,7 @@ export component AppWindow inherits Window {
                                     cp := Text {
                                         x: (23px * S.k);
                                         text: c.compat;
-                                        font-size: (13px * S.k);
+                                        font-size: (15px * root.library-type-scale);
                                         font-weight: 700;
                                         color: #ffffff;
                                     }
@@ -612,14 +667,20 @@ export component AppWindow inherits Window {
                                 spacing: (6px * S.k);
                                 Text { text: c.meta; font-size: (18px * root.library-type-scale); font-weight: 500; color: Theme.text2; overflow: elide; }
                                 Rectangle { horizontal-stretch: 1; }
-                                if c.releases != "": Text { text: c.releases; font-size: (14px * root.library-type-scale); color: Theme.text3; overflow: elide; }
+                                if c.releases != "": Text { text: c.releases; font-size: (15px * root.library-type-scale); color: Theme.text3; overflow: elide; }
                             }
+                            // How easy it is to download; the seeder counts are in the Game Hub's details.
                             HorizontalLayout {
                                 height: (24px * root.library-type-scale);
-                                spacing: (8px * S.k);
+                                spacing: (6px * S.k);
                                 alignment: start;
-                                Text { text: "↑ " + c.seeders; font-size: (16px * root.library-type-scale); font-weight: 500; color: c.seeders == "—" ? Theme.text3 : Theme.ok; }
-                                Text { text: "↓ " + c.leechers; font-size: (16px * root.library-type-scale); font-weight: 500; color: c.leechers == "—" ? Theme.text3 : Theme.danger; }
+                                Text { text: "Availability:"; font-size: (16px * root.library-type-scale); color: Theme.text3; overflow: elide; }
+                                Text {
+                                    text: c.availability;
+                                    font-size: (16px * root.library-type-scale);
+                                    font-weight: 600;
+                                    color: c.availability-kind == 1 ? Theme.ok : c.availability-kind == 2 ? Theme.warn : Theme.text3;
+                                }
                             }
                         }
                         TouchArea {
@@ -733,14 +794,14 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             alignment: center; spacing: (3px * S.k);
                             count := Text { text: root.count-label; font-size: (18px * root.library-type-scale); color: Theme.text2; horizontal-alignment: right; }
-                            snapshot := Text { text: root.peer-snapshot-label; font-size: (14px * root.library-type-scale); color: Theme.text3; horizontal-alignment: right; }
+                            snapshot := Text { text: root.peer-snapshot-label; font-size: (16px * root.library-type-scale); color: Theme.text3; horizontal-alignment: right; }
                         }
                     }
                 }
                 Rectangle {
                     x: (96px * S.k); y: (254px * S.k); width: root.width - (192px * S.k);
                     height: (52px * S.k);
-                    Text { x: 0; y: 0; height: parent.height; text: "GENRE"; font-size: (14px * root.library-type-scale); font-weight: 600; color: Theme.text3; width: (76px * S.k); horizontal-alignment: left; vertical-alignment: center; }
+                    Text { x: 0; y: 0; height: parent.height; text: "GENRE"; font-size: (15px * root.library-type-scale); font-weight: 600; color: Theme.text3; width: (76px * S.k); horizontal-alignment: left; vertical-alignment: center; }
                     Rectangle {
                         x: (80px * S.k); y: (6px * S.k); width: (36px * S.k); height: (36px * S.k);
                         border-radius: (18px * S.k); background: root.genres-x < 0 ? #ffffff14 : transparent;
@@ -853,26 +914,27 @@ export component AppWindow inherits Window {
                 if root.download-active || root.install-active: Rectangle {
                     width: (230px * S.k); height: (52px * S.k); y: (26px * S.k);
                     border-radius: (12px * S.k); background: #0a6cff26;
-                    Text { text: root.install-active ? root.install-badge : root.download-badge; font-size: (17px * S.k); color: #a7caff; y: (8px * S.k); height: (24px * S.k); }
+                    Text { text: root.install-active ? root.install-badge : root.download-badge; font-size: (18px * S.k); color: #a7caff; y: (8px * S.k); height: (24px * S.k); }
                     Rectangle {
                         x: (14px * S.k); y: (39px * S.k); width: parent.width - (28px * S.k); height: (4px * S.k); background: #ffffff14;
                         Rectangle { x: 0; y: 0; width: parent.width * (root.install-active ? root.install-progress : root.download-progress); background: Theme.accent; animate width { duration: 300ms; } }
                     }
                     TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, 4); } }
                 }
+                // A quarter bigger than a desktop app's: read from the sofa.
                 for ic[i] in [Icons.search, Icons.gear, Icons.disk]: Rectangle {
-                    width: (52px * S.k);
-                    height: (52px * S.k);
-                    y: (26px * S.k);
-                    border-radius: (26px * S.k);
+                    width: (64px * S.k);
+                    height: (64px * S.k);
+                    y: (20px * S.k);
+                    border-radius: (32px * S.k);
                     property <bool> f: root.zone == Zone.top && root.idx == i + 2 && root.overlay == 0;
                     background: f ? #ffffff : ta.has-hover ? #ffffff14 : transparent;
-                    Image { source: ic; colorize: f ? #0a0d18 : Theme.text2; width: (26px * S.k); height: (26px * S.k); }
+                    Image { source: ic; colorize: f ? #0a0d18 : Theme.text2; width: (32px * S.k); height: (32px * S.k); }
                     ta := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, i + 2); } }
                 }
                 Text {
                     text: root.clock;
-                    font-size: (26px * S.k);
+                    font-size: (32px * S.k);
                     color: Theme.text;
                     vertical-alignment: center;
                     min-width: (80px * S.k);
@@ -904,7 +966,7 @@ export component AppWindow inherits Window {
                     y: (16px * S.k);
                     transform-rotation: animation-tick() / 1ms * 0.4deg;
                 }
-                Text { text: root.status; font-size: (16px * S.k); color: Theme.text2; vertical-alignment: center; }
+                Text { text: root.status; font-size: (18px * S.k); color: Theme.text2; vertical-alignment: center; }
             }
         }
         Rectangle {
@@ -1031,7 +1093,33 @@ export component AppWindow inherits Window {
                         alignment: start;
                         for c in root.hub.chips: Chip { data: c; }
                     }
-                    Rectangle { height: (30px * S.k); }
+                    Rectangle { height: (26px * S.k); }
+                    // Will it play here? One headline in the player's words, coloured honestly,
+                    // with the results behind it in smaller text.
+                    if root.hub.verdict != "": HorizontalLayout {
+                        spacing: (14px * S.k);
+                        alignment: start;
+                        VerticalLayout {
+                            alignment: start;
+                            padding-top: (11px * S.k);
+                            Rectangle {
+                                width: (14px * S.k); height: (14px * S.k); border-radius: (7px * S.k);
+                                background: root.hub.verdict-kind == 1 ? Theme.ok : root.hub.verdict-kind == 2 ? Theme.warn : root.hub.verdict-kind == 3 ? Theme.danger : Theme.text3;
+                            }
+                        }
+                        VerticalLayout {
+                            spacing: (4px * S.k);
+                            Text {
+                                text: root.hub.verdict; font-size: (28px * S.k); font-weight: 600;
+                                color: root.hub.verdict-kind == 1 ? Theme.ok : root.hub.verdict-kind == 2 ? Theme.warn : root.hub.verdict-kind == 3 ? Theme.danger : Theme.text;
+                            }
+                            if root.hub.verdict-detail != "": Text {
+                                width: root.hub-text-w - (28px * S.k);
+                                text: root.hub.verdict-detail; font-size: (17px * S.k); color: Theme.text3; wrap: word-wrap;
+                            }
+                        }
+                    }
+                    if root.hub.verdict != "": Rectangle { height: (24px * S.k); }
                     HorizontalLayout {
                         spacing: (16px * S.k);
                         alignment: start;
@@ -1042,33 +1130,50 @@ export component AppWindow inherits Window {
                             clicked => { root.click(Zone.hub, i); }
                         }
                     }
+                    // What Download means: its size, where it goes and the next step.
+                    if root.hub.download-note != "": HorizontalLayout {
+                        padding-top: (14px * S.k);
+                        padding-left: (8px * S.k);
+                        spacing: (10px * S.k);
+                        alignment: start;
+                        if root.hub.download-note-warn: Image { source: Icons.alert; colorize: Theme.warn; width: (20px * S.k); height: (20px * S.k); y: (2px * S.k); }
+                        Text { text: root.hub.download-note; font-size: (19px * S.k); color: root.hub.download-note-warn ? Theme.warn : Theme.text2; overflow: elide; }
+                    }
                     Rectangle { height: (22px * S.k); }
+                    // Other versions of this game (editions, regions, updates): big arrows, plain words.
                     if root.hub.release-count > 1: Rectangle {
-                        height: (54px * S.k); border-radius: (12px * S.k); background: #ffffff0d;
-                        border-width: root.zone == Zone.releases ? (2px * S.k) : 1px;
+                        height: (72px * S.k); border-radius: (14px * S.k); background: #ffffff0d;
+                        border-width: root.zone == Zone.releases ? (3px * S.k) : 1px;
                         border-color: root.zone == Zone.releases ? Theme.text : Theme.line;
                         HorizontalLayout {
-                            spacing: (12px * S.k); padding-left: (14px * S.k); padding-right: (14px * S.k);
+                            spacing: (16px * S.k); padding-left: (10px * S.k); padding-right: (10px * S.k);
                             Rectangle {
-                                width: (44px * S.k);
-                                Text { text: "‹"; font-size: (30px * S.k); color: Theme.text; }
+                                width: (52px * S.k);
+                                Rectangle {
+                                    width: (52px * S.k); height: (52px * S.k); border-radius: (26px * S.k);
+                                    background: root.zone == Zone.releases ? #ffffff2e : #ffffff14;
+                                    Image { source: Icons.chevl; colorize: Theme.text; width: (30px * S.k); height: (30px * S.k); }
+                                }
                                 TouchArea { mouse-cursor: pointer; clicked => { root.hub-release(-1); } }
                             }
-                            Text { text: root.hub.release-label; font-size: (18px * S.k); color: Theme.text2; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                            VerticalLayout {
+                                alignment: center; spacing: (2px * S.k); horizontal-stretch: 1;
+                                Text { text: root.hub.release-label; font-size: (20px * S.k); font-weight: 600; color: Theme.text; overflow: elide; }
+                                if root.hub.release-detail != "": Text { text: root.hub.release-detail; font-size: (16px * S.k); color: Theme.text3; overflow: elide; }
+                            }
+                            Text { text: "Choose another version"; font-size: (17px * S.k); color: root.zone == Zone.releases ? Theme.text : Theme.text2; vertical-alignment: center; }
                             Rectangle {
-                                width: (44px * S.k);
-                                Text { text: "›"; font-size: (30px * S.k); color: Theme.text; }
+                                width: (52px * S.k);
+                                Rectangle {
+                                    width: (52px * S.k); height: (52px * S.k); border-radius: (26px * S.k);
+                                    background: root.zone == Zone.releases ? #ffffff2e : #ffffff14;
+                                    Image { source: Icons.chevr; colorize: Theme.text; width: (30px * S.k); height: (30px * S.k); }
+                                }
                                 TouchArea { mouse-cursor: pointer; clicked => { root.hub-release(1); } }
                             }
                         }
                     }
-                    if root.hub.peer-status != "": HorizontalLayout {
-                        padding-top: (16px * S.k); padding-bottom: (22px * S.k); spacing: (10px * S.k); alignment: start;
-                        Image { source: Icons.user; colorize: Theme.text3; width: (18px * S.k); height: (18px * S.k); }
-                        Text { text: "↑ " + root.hub.seeders + " seeders"; font-size: (18px * S.k); font-weight: 600; color: root.hub.seeders == "—" ? Theme.text3 : Theme.ok; }
-                        Text { text: "↓ " + root.hub.leechers + " leechers"; font-size: (18px * S.k); font-weight: 600; color: root.hub.leechers == "—" ? Theme.text3 : Theme.danger; }
-                        Text { text: "·  " + root.hub.peer-snapshot; font-size: (17px * S.k); color: Theme.text3; wrap: word-wrap; }
-                    }
+                    if root.hub.release-count > 1: Rectangle { height: (18px * S.k); }
                     for fr in root.hub.facts: HorizontalLayout {
                         spacing: (14px * S.k);
                         padding-bottom: (14px * S.k);
@@ -1086,7 +1191,7 @@ export component AppWindow inherits Window {
                                 spacing: (6px * S.k);
                                 Text { text: f.key; font-size: (15px * S.k); font-weight: 600; letter-spacing: (1.5px * S.k); color: Theme.text3; }
                                 Text { text: f.value; font-size: (21px * S.k); font-weight: 500; overflow: elide;
-                                    color: f.kind == 1 ? Theme.ok : f.kind == 2 ? Theme.warn : f.kind == 3 ? Theme.danger : Theme.text; }
+                                    color: f.kind == 1 ? Theme.ok : f.kind == 2 ? Theme.warn : f.kind == 3 ? Theme.danger : f.kind == 4 ? Theme.text3 : Theme.text; }
                             }
                         }
                     }
@@ -1104,8 +1209,8 @@ export component AppWindow inherits Window {
                             spacing: (10px * S.k);
                             for f in fr.items: HorizontalLayout {
                                 spacing: (18px * S.k);
-                                Text { text: f.key; width: (260px * S.k); font-size: (16px * S.k); color: Theme.text3; }
-                                Text { text: f.value; font-size: (18px * S.k); color: Theme.text2; wrap: word-wrap; horizontal-stretch: 1; }
+                                Text { text: f.key; width: (280px * S.k); font-size: (17px * S.k); color: Theme.text3; }
+                                Text { text: f.value; font-size: (19px * S.k); color: Theme.text2; wrap: word-wrap; horizontal-stretch: 1; }
                             }
                         }
                     }
@@ -1390,7 +1495,7 @@ export component AppWindow inherits Window {
             close => { root.click(Zone.sort-picker, -1); }
         }
         if root.overlay == 7 && !root.download-consent: DownloadsSheet {
-            data: root.downloads; summary: root.download-summary; selected: root.idx;
+            data: root.downloads; summary: root.download-summary; selected: root.idx; pad: root.pad-hints;
             scroll-y <=> root.downloads-y;
             action(key, action) => { root.download-action(key, action); }
             close => { root.download-close(); }
@@ -2585,9 +2690,9 @@ export component AppWindow inherits Window {
 
         // ------------------------------------------------------------ TOASTS
         VerticalLayout {
-            x: root.width - (48px * S.k) - (440px * S.k);
+            x: root.width - (48px * S.k) - (480px * S.k);
             y: (104px * S.k);
-            width: (440px * S.k);
+            width: (480px * S.k);
             spacing: (12px * S.k);
             alignment: start;
             for t in root.toasts: Toast { data: t; clicked => { root.toast-clicked(t.id, t.action); } }

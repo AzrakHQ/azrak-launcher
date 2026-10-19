@@ -88,35 +88,42 @@ The English snapshot is embedded in the binary, so catalog browsing works offlin
 without Chrome or a source checkout. All release topics are retained, but the
 Library shows **one card per game**: matching title IDs, region aliases and normalized
 names group editions/versions together. Sequels and remasters with distinct identities
-remain separate. Use the **release selector in the Game Hub** to switch exact
-versions, regions, peer counts and download magnets. Search matches every release
-in a group without duplicating its card. Cards show download size, release count
-and **seeders/leechers from the snapshot**, with its date in the Library header.
-The Game Hub presents peers and snapshot date on one line, three key overview
-facts, and expandable **Technical details** for title ID, languages, firmware,
-release provenance and installation information.
-Missing counts are unknown, not zero. These are **not live tracker/client counts**.
+remain separate. Use the **version picker in the Game Hub** ("Version 3 of 3 (newest)",
+numbered oldest first; **Choose another version**) to switch exact versions, regions and
+download magnets. Search matches every release in a group without duplicating its card.
+Cards show download size, release count and **Availability: Good / Low / None** (green /
+amber / grey), derived from the snapshot's seeder count (3 or more is Good, 1–2 Low);
+the Library header says **List updated <date>**. The Game Hub leads with one verdict
+(see the README's "Will it run?"), says under **Download** what it means (size, the folder it
+goes to, then press Install; a warning when that disk lacks the space), shows three overview
+facts, and expandable **Technical details** for the seeder/leecher counts and when they were
+counted, title ID, languages, firmware, source and installation information. Topic numbers
+aren't shown. Missing counts are unknown, not zero. These are **not live tracker/client counts**.
 
 ### Library layout and controls
 
 The **Home / Library** navigation keeps installed games separate from the catalog.
-Library cards reserve two title lines, show download size and a subtle grouped-release
-count, and use compact **↑ seeders / ↓ leechers** captions (green/red; unknown counts
-remain muted). Version/region details stay in the Game Hub. A single dated peer-snapshot
-caption applies to the catalog; differing observation dates are shown in each Game Hub.
+Library cards reserve two title lines, show download size, a subtle grouped-release
+count and the availability caption, and a large console badge (PS5 / PS4 / PC, each in
+its own colour) so a game's versions for different consoles tell apart at a glance.
+Version/region details stay in the Game Hub. New artwork that arrives while the Library is
+on screen (it can regroup releases into fewer cards) waits until you leave it, so the cards
+and the result count don't jump under you.
 
 Use **Comfortable / Compact** to choose grid density. The choice is saved immediately;
 smaller windows reduce the column count and maintain readable caption text. Density
 changes retain the current scroll position's game rather than jumping back to the start.
 Artwork caching, visible-row virtualization and look-ahead prefetching are unchanged.
 
-**All / Installed / In-game** filters (In-game: Linux results only; covers likewise show only a
+**All / Installed / Playable** filters (Playable: Linux results only; covers likewise show only a
 Linux result, the Game Hub every OS's) are separate from the **GENRE** row,
 and can be combined with genres and search. Counts reflect those combinations without
 duplicating release variants. Genre-row arrows expose options beyond the viewport.
 Click the sort control or press Enter on it to open all seven sort choices; arrows select,
 Enter applies, and Escape cancels. Page Up/Down on the closed sort control cycles directly.
-Keyboard/controller navigation follows search/sort/density → status filters → genres → grid.
+Keyboard/controller navigation follows search/sort/density → status filters → genres → grid,
+and Up walks back the same way. Pressing a chosen filter again goes back to All; pressing the
+chosen **All** or **All genres** goes down to the games.
 
 The welcome screen and app assets use an original white/electric-blue **P5 chassis emblem**,
 not the former generic play-button icon. Source installation updates the matching desktop icon.
@@ -141,7 +148,7 @@ Source precedence is:
 
 The source-specific cache is independent of the old SuperPSX cache. Invalid,
 partial or untranslated imports do not overwrite a known-good catalog. Posting
-dates were not collected, so **Newest topics** sorts by topic ID; collection and
+dates were not collected, so **Newest uploads** sorts by topic ID; collection and
 game-release dates are not misrepresented as dates added to the site.
 
 To collect fresh metadata, use the separate [browser collector](../scripts/rutracker-list/README.md),
@@ -168,14 +175,14 @@ and keeps files. **Remove** clears inactive history and cached metadata, never
 the payload. **Open folder** opens the saved destination.
 
 **Completed downloads seed by default.** While the launcher remains open, their
-original files are shared with peers. Downloads shows **Complete · seeding**, upload
-speed and connected peers; **Install / Play** remains available. Use **Stop seeding**
+original files are shared with peers. Downloads shows **Complete · sharing**, upload
+speed and connected peers; **Install / Play** remains available. Use **Stop sharing**
 for one transfer until the next launch, or disable **Settings → Keep sharing
 finished downloads** to stop all seeds; only that saved setting turns seeding off for good.
 While it is on, completed downloads seed again whenever the launcher opens, and turning
 it back on seeds them all again. Each is first added **paused** so the engine checks its
 files against the torrent: it seeds only if every piece verifies (**Complete · checking
-files to seed** meanwhile). Missing, resized or changed files stop it with an error and
+files before sharing** meanwhile). Missing, resized or changed files stop it with an error and
 nothing is downloaded again; unfinished transfers are never started automatically.
 
 The default destination is `~/Downloads/PS5`, editable in Settings or the setup
@@ -465,8 +472,8 @@ A `Platform` (PS5 or PS4) travels with each installed game and catalog release
   category `gp`, same title ID; beside it or inside its folder) is placed beside the game as
   `<game>-patch`, the same as from a PKG. It is never listed as a game.
 - **Compatibility:** shadPS4's published `compatibility_data.json` (per-OS results) is merged
-  with KytyPS5's list (title IDs never collide: CUSA vs PPSA). playable/ingame → In-game,
-  menus → Menus, boots → Boots, nothing → Doesn't boot. PS4 ratings go to the
+  with KytyPS5's list (title IDs never collide: CUSA vs PPSA). playable/ingame → Playable,
+  menus → Menus only, boots → Logos only, nothing → Doesn't start. PS4 ratings go to the
   shadps4-game-compatibility issue form, whose checklist (own dump, unmodified, official release)
   the player must confirm themselves.
 - **Catalog:** each console's RuTracker snapshot has its own source, cache and bundled copy

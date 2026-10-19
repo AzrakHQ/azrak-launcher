@@ -119,13 +119,9 @@ impl App {
 
     /// Show row item `i`'s background, with its cover standing in until it has downloaded.
     pub fn show_row_background(&mut self, i: usize, force: bool) {
-        // No installed games: the newest catalog game's art.
-        let i_bg = if self.row.is_empty() { None } else { Some(i) };
-        let (bg, cover) = match i_bg {
-            Some(i) => (self.hero_bg_url(i), self.row_cover_req(i)),
-            None => (self.games.iter().find(|g| g.info.as_ref().is_some_and(|x| !x.hub.is_empty()))
-                .and_then(|g| req_url(&g.info.as_ref()?.hub, 1920, 0.0)), None),
-        };
+        // No installed games: the plain Azrak backdrop. One game's key art there reads as an ad,
+        // or as a game you already own.
+        let (bg, cover) = if self.row.is_empty() { (None, None) } else { (self.hero_bg_url(i), self.row_cover_req(i)) };
         self.want_background_or(bg, force, cover);
     }
 
@@ -252,7 +248,8 @@ impl App {
             let gv = &self.games[g];
             let added = util::fmt_date(util::parse_iso_date(&gv.g.date)).to_uppercase();
             if added.is_empty() {
-                return ("RUTRACKER RELEASE".into(), String::new(), false);
+                // Nothing to say: where it comes from is in the Game Hub's technical details.
+                return (String::new(), String::new(), false);
             }
             return (if gv.is_new { format!("NEW · ADDED {added}") } else { format!("ADDED {added}") }, String::new(), false);
         }
@@ -306,20 +303,21 @@ impl App {
         self.hero_logo_key.clear();
         match it {
             None => {
-                // No installed games: say how to add some, and offer the Library meanwhile.
+                // No installed games: getting one from the Library comes first; a folder of games
+                // already on this PC is the other way in.
                 let mk = |id, label: &str, icon, primary| ActionDef { id, label: label.into(), icon, primary, danger: false, round: false };
-                h.title = "No games installed yet".into();
-                h.desc = "Add the folder that holds your games and they'll appear here, ready to play.".into();
-                self.hero_actions = vec![mk("settings", "Add game folder", "folder", true)];
+                h.title = "No games yet".into();
+                h.desc = "Pick a game in the Library, then Download and Install.".into();
+                self.hero_actions = vec![mk("library", "Browse games", "grid", true), mk("add_folder", "Add game folder", "folder", false)];
             }
             Some(RowItem::All) => {
                 let mk = |id, label: &str, icon, primary| ActionDef { id, label: label.into(), icon, primary, danger: false, round: false };
                 if self.locals.is_empty() {
                     h.kicker = "GET STARTED".into();
-                    h.title = "No installed games yet".into();
+                    h.title = "No games yet".into();
                     h.chips = model(vec![chip("grid", format!("{} games in the Library", self.groups.members.len()), false)]);
-                    h.desc = "Point the launcher at the folder with your games in Settings, and they'll appear here ready to play. Meanwhile, browse the whole catalog in the Library.".into();
-                    self.hero_actions = vec![mk("settings", "Add game folder", "folder", true), mk("library", "Browse Library", "grid", false)];
+                    h.desc = "Pick a game in the Library, then Download and Install.".into();
+                    self.hero_actions = vec![mk("library", "Browse games", "grid", true), mk("add_folder", "Add game folder", "folder", false)];
                 } else {
                     h.kicker = "COLLECTION".into();
                     h.title = "Game Library".into();
@@ -608,10 +606,12 @@ impl App {
         ui.set_sort_label(SORTS[self.sort].into());
         ui.set_sort_options(model(SORTS.iter().map(|label| SharedString::from(*label)).collect()));
         ui.set_sort_selected(self.sort as i32);
-        let observed: HashSet<_> = self.games.iter().map(|game| game.g.peers_observed.as_str()).filter(|value| !value.is_empty()).collect();
-        let snapshot = if observed.len() > 1 { "Dates in Game Hub".to_string() }
-            else { observed.iter().next().map(|value| util::fmt_date(util::parse_iso_date(value))).filter(|value| !value.is_empty()).unwrap_or_else(|| "date unknown".into()) };
-        ui.set_peer_snapshot_label(format!("Peer snapshot · {snapshot} · not live").into());
+        // When the list (and its availability) was last counted: the newest count, else when the
+        // launcher last loaded it. Each game's own date is in its Game Hub's technical details.
+        let counted = self.games.iter().map(|game| game.g.peers_observed.as_str()).filter_map(util::parse_iso_date).max()
+            .or_else(|| (self.catalog_updated > 0.0).then(|| util::civil_from_days((self.catalog_updated / 86400.0) as i64)));
+        let updated = util::fmt_date(counted);
+        ui.set_peer_snapshot_label(if updated.is_empty() { SharedString::default() } else { format!("List updated {updated}").into() });
         self.push_genres();
         self.push_grid();
     }
@@ -659,7 +659,7 @@ impl App {
             if i == n { status_end = x; x = 0.0; }
             let count = if i < n { status_counts[i] } else if i == n { genre_total } else { *genre_counts.get(label.as_str()).unwrap_or(&0) };
             let c = count.to_string();
-            let w = 32.0 * self.scale + (label.chars().count() as f32 * 9.5 + 6.0 + c.len() as f32 * 8.0) * typography;
+            let w = 32.0 * self.scale + (label.chars().count() as f32 * 9.5 + 6.0 + c.len() as f32 * 8.6) * typography;
             if i >= n && ((self.zone == Z_CHIPS && i as i32 == self.idx) || ((self.zone != Z_CHIPS || self.idx < n as i32) && *label == self.genre)) {
                 focus_x = x;
             }
@@ -816,15 +816,14 @@ impl App {
             let (compat, compat_level) = ce.and_then(|e| Some((e.tag()?, e.status.level()))).unwrap_or_default();
             // Size is always visible. Version/region details belong to the selected Hub release.
             let releases = self.groups.releases(gi).len();
-            let meta = g.g.size_gb.map(|size| if size >= 1.0 { format!("{size:.1} GB") } else { format!("{:.1} MB", size * 1024.0) }).unwrap_or_else(|| "Size unknown".into());
+            let meta = size_label(&g.g).unwrap_or_else(|| "Size unknown".into());
             cards.push(CardData {
                 index: k as i32,
                 title: g.name.clone().into(),
                 meta: meta.into(),
                 releases: if releases > 1 { format!("{releases} releases") } else { String::new() }.into(),
-                seeders: g.g.seeders.map(|count| count.to_string()).unwrap_or_else(|| "—".into()).into(),
-                leechers: g.g.leechers.map(|count| count.to_string()).unwrap_or_else(|| "—".into()).into(),
-                peer_snapshot: "".into(),
+                availability: crate::words::Availability::of(g.g.seeders).label().into(),
+                availability_kind: crate::words::Availability::of(g.g.seeders).kind(),
                 rating: g.info.as_ref().and_then(|i| i.rating.as_ref()).map(|r| format!("{:.1}", r.score)).unwrap_or_default().into(),
                 badge: if g.local.is_some() { "Installed".into() } else if g.is_new { "New".into() } else { "".into() },
                 console: if self.mixed_consoles { g.g.platform.label().into() } else { "".into() },
@@ -1014,10 +1013,11 @@ impl App {
         ];
         if let Some(game) = g {
             let observed = util::fmt_date(util::parse_iso_date(&game.peers_observed));
-            facts.splice(0..0, [
-                ("SEEDERS · SNAPSHOT", game.seeders.map(|count| count.to_string()).unwrap_or_else(|| "Unknown".into())),
-                ("LEECHERS · SNAPSHOT", game.leechers.map(|count| count.to_string()).unwrap_or_else(|| "Unknown".into())),
-                ("OBSERVED · NOT LIVE", if observed.is_empty() { "Date unknown".into() } else { observed }),
+            facts.extend([
+                // Behind "Availability": the catalog's counts, not live ones.
+                ("SHARING IT (SEEDERS)", game.seeders.map(|count| count.to_string()).unwrap_or_else(|| "Unknown".into())),
+                ("GETTING IT (LEECHERS)", game.leechers.map(|count| count.to_string()).unwrap_or_else(|| "Unknown".into())),
+                ("COUNTED", if observed.is_empty() { "Date unknown".into() } else { format!("{observed} · not live") }),
             ]);
             facts.extend([
                 ("RELEASE VERSION", game.version.clone()),
@@ -1026,7 +1026,7 @@ impl App {
                 ("CONSOLE FIRMWARE NOTE", game.detail("minimum_firmware")),
                 ("INTERFACE LANGUAGES", game.detail("interface_languages")),
                 ("AUDIO LANGUAGES", game.detail("audio_languages")),
-                ("TOPIC", format!("RuTracker #{}", game.id)),
+                ("SOURCE", "RuTracker".to_string()),
             ]);
         }
         if let Some(l) = t.local {
@@ -1044,25 +1044,29 @@ impl App {
             info.as_ref().map(|i| i.publisher.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| g.map(|g| g.detail("publisher")).unwrap_or_default()),
             g.map(|g| g.release.clone()).unwrap_or_default(), g.map(|g| g.region.clone()).unwrap_or_default(),
         ].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ").into();
-        if let Some(game) = g {
-            let observed = util::fmt_date(util::parse_iso_date(&game.peers_observed));
-            h.peer_status = format!("↑ {} seeders   ↓ {} leechers   ·   Snapshot {} · not live",
-                game.seeders.map(|n| n.to_string()).unwrap_or_else(|| "—".into()),
-                game.leechers.map(|n| n.to_string()).unwrap_or_else(|| "—".into()),
-                if observed.is_empty() { "date unknown" } else { &observed }).into();
-            h.seeders = game.seeders.map(|n| n.to_string()).unwrap_or_else(|| "—".into()).into();
-            h.leechers = game.leechers.map(|n| n.to_string()).unwrap_or_else(|| "—".into()).into();
-            h.peer_snapshot = format!("Snapshot {} · not live", if observed.is_empty() { "date unknown" } else { &observed }).into();
-        }
         if let Some(index) = t.game {
-            let members = self.groups.releases(index);
+            // "Version 3 of 3 (newest)": releases numbered oldest first; no topic numbers.
+            let members = self.release_order(index);
             h.release_count = members.len() as i32;
             let position = members.iter().position(|i| *i == index).unwrap_or(0) + 1;
+            let newest = if position == members.len() { " (newest)" } else { "" };
+            h.release_label = format!("Version {position} of {}{newest}", members.len()).into();
             let game = &self.games[index].g;
-            h.release_label = format!("Release {position}/{} · {} · {} · {} · topic #{}", members.len(),
-                game.name, game.version, game.region, game.id).into();
+            h.release_detail = [game.version.clone(), game.region.clone(), size_label(game).unwrap_or_default(), game.name.clone()].into_iter()
+                .filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ").into();
         }
-        let pc = self.pc_fact(t);
+
+        // Will it play here? One headline, with the results behind it folded underneath.
+        if let Some(outlook) = self.outlook(t) {
+            h.verdict = outlook.headline().into();
+            h.verdict_kind = outlook.kind();
+            h.verdict_detail = self.verdict_detail(t).into();
+        }
+        if let Some((note, warn)) = self.download_note(t) {
+            h.download_note = note.into();
+            h.download_note_warn = warn;
+        }
+
         // PC games: how it runs on Linux, natively or through Wine (with ProtonDB's rating).
         let pc_game = self.target_platform(t) == crate::platform::Platform::Pc;
         let steam = g.and_then(|g| g.steam.clone());
@@ -1082,28 +1086,21 @@ impl App {
             },
             _ => ("ON LINUX", "Native game".to_string(), 1),
         });
-        let summary = [
-            match &ce {
-                _ if pc_game => ("", String::new()), // replaced by pc_runs below
-                Some(e) if e.mine => ("YOUR RESULT", e.status.meaning().to_string()),
-                Some(e) if e.on_linux => ("ON LINUX", e.status.meaning().to_string()),
-                Some(e) if e.windows.is_some() => ("ON WINDOWS · LINUX UNTESTED", e.status.meaning().to_string()),
-                Some(e) if ps4 => ("ON SHADPS4 · LINUX UNTESTED", e.status.meaning().to_string()),
-                Some(e) => ("ON KYTYPS5 · LINUX UNTESTED", e.status.meaning().to_string()),
-                None if ps4 => ("ON SHADPS4", "Not tested yet".to_string()),
-                None => ("ON KYTYPS5", "Not tested yet".to_string()),
-            },
-            ("DOWNLOAD SIZE", g.map(|g| g.size.clone()).filter(|size| !size.is_empty()).unwrap_or_else(|| "Unknown".into())),
-            if let Some(local) = t.local { ("INSTALLED VERSION", self.locals[local].l.version.clone()) }
-            else { ("RELEASE VERSION", g.map(|g| g.version.clone()).unwrap_or_default()) },
-        ].into_iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| Fact { key: k.into(), value: v.into(), kind: 0 })
-            .collect::<Vec<_>>().into_iter();
-        let summary: Vec<Fact> = pc_runs.map(|(k, v, kind)| Fact { key: k.into(), value: v.into(), kind }).into_iter().chain(summary)
-            // Will it run here? Second, next to whether it runs at all; three boxes fit a row.
-            .enumerate().flat_map(|(i, f)| {
-                let pc = (i == 0).then(|| pc.clone()).flatten().map(|(k, v, kind)| Fact { key: k.into(), value: v.into(), kind });
-                std::iter::once(f).chain(pc)
-            }).take(3).collect();
+        // Three overview boxes: how it runs (PC games), how easy it is to get, which version.
+        // The size is in the line under Download.
+        let availability = g.filter(|_| t.local.is_none()).map(|g| crate::words::Availability::of(g.seeders));
+        let mode = g.map(|g| g.mode.clone()).filter(|s| !s.is_empty())
+            .or_else(|| info.as_ref().and_then(|i| i.players.as_ref()).and_then(|p| p.as_i64()).map(|p| format!("{p} player{}", if p > 1 { "s" } else { "" })))
+            .unwrap_or_default();
+        let summary: Vec<Fact> = [
+            pc_runs.map(|(k, v, kind)| (k, v, kind)),
+            availability.map(|a| ("AVAILABILITY", a.label().to_string(), a.kind())),
+            Some(if let Some(local) = t.local { ("INSTALLED VERSION", self.locals[local].l.version.clone(), 0) }
+                else { ("VERSION", g.map(|g| g.version.clone()).unwrap_or_default(), 0) }),
+            Some(("PLAYERS", mode, 0)),
+            Some(("DOWNLOAD SIZE", g.and_then(size_label).unwrap_or_default(), 0)),
+        ].into_iter().flatten().filter(|(_, v, _)| !v.is_empty()).take(3)
+            .map(|(k, v, kind)| Fact { key: k.into(), value: v.into(), kind }).collect();
         h.facts = model(summary.chunks(3).map(|c| FactRow { items: model(c.to_vec()) }).collect());
         let mut facts = facts;
         if pc_game {
@@ -1119,7 +1116,7 @@ impl App {
             }
         }
         let details: Vec<Fact> = facts.into_iter().filter(|(k, v)| !v.is_empty()
-            && !matches!(*k, "SEEDERS · SNAPSHOT" | "LEECHERS · SNAPSHOT" | "OBSERVED · NOT LIVE" | "ON KYTYPS5" | "ON SHADPS4" | "SIZE" | "PUBLISHER" | "RELEASE" | "REGION"))
+            && !matches!(*k, "SIZE" | "PUBLISHER" | "RELEASE" | "REGION"))
             .map(|(k, v)| Fact { key: k.into(), value: v.into(), kind: 0 }).collect();
         h.details = model(vec![FactRow { items: model(details) }]);
 
@@ -1148,13 +1145,50 @@ impl App {
         self.ui().set_hub(h);
     }
 
+    /// The results behind the Hub's verdict, in smaller text under it: what was seen on Linux
+    /// and elsewhere, where that comes from, and this PC.
+    fn verdict_detail(&self, t: Target) -> String {
+        let platform = self.target_platform(t);
+        let low = |s: &str| -> String { let mut c = s.chars(); c.next().map(|f| f.to_lowercase().chain(c).collect()).unwrap_or_default() };
+        let mut lines = Vec::new();
+        match self.target_compat(t) {
+            Some(e) => {
+                let mut seen = Vec::new();
+                if e.mine {
+                    seen.push(format!("Your result on this PC: {}", low(e.status.meaning())));
+                }
+                match e.linux {
+                    Some(l) => seen.push(format!("{} Linux: {}", if e.mine { "Others on" } else { "On" }, low(l.meaning()))),
+                    None if !e.mine => seen.push("On Linux: not tested yet".into()),
+                    None => {}
+                }
+                if let Some(w) = e.windows {
+                    seen.push(format!("On Windows: {}", low(w.meaning())));
+                } else if !e.on_linux && !e.mine {
+                    seen.push(format!("On {}: {}", e.source(), low(e.status.meaning())));
+                }
+                lines.push(seen.join(" · "));
+                let date = util::fmt_date(util::parse_iso_date(&e.tested_date()));
+                let reports = match e.reports { 0 => String::new(), 1 => " (1 report)".into(), n => format!(" ({n} reports)") };
+                if e.reports > 0 || !date.is_empty() {
+                    lines.push(format!("From the {} community list{}{reports}", platform.emulator(),
+                        if date.is_empty() { String::new() } else { format!(", last tested {date}") }));
+                }
+            }
+            None => lines.push(format!("Nobody has reported how far it gets on {} yet", platform.emulator())),
+        }
+        lines.extend(self.pc_line(t));
+        lines.join("\n")
+    }
+
     pub fn scroll_hub(&mut self) {
         // Rough layout estimate (see app.slint hub column).
         let facts_rows = self.ui().get_hub().facts.row_count() as f32;
         let details = if self.ui().get_hub_details_open() {
             self.ui().get_hub().details.iter().map(|row| row.items.row_count()).sum::<usize>() as f32 * 38.0
         } else { 0.0 };
-        let shots_top = 130.0 + 30.0 + 16.0 + 210.0 + 22.0 + 40.0 + 30.0 + 68.0 + 160.0 + facts_rows * 106.0 + details;
+        // The verdict (~100) and the line under Download (~36) sit above the screenshots too.
+        let shots_top = 130.0 + 30.0 + 16.0 + 210.0 + 22.0 + 40.0 + 30.0 + 68.0 + 160.0 + 80.0 + facts_rows * 106.0 + details;
         let ui = self.ui();
         // Never scroll past the real end of the page (measured by the UI, not estimated).
         let max = ((ui.get_hub_content_h() - ui.get_hub_view_h()) / self.scale).max(0.0);
@@ -1238,6 +1272,12 @@ impl App {
 
 fn audio_move() {
     crate::audio::play(crate::audio::Sound::Move);
+}
+
+/// A release's download size, the same everywhere it's shown ("183.4 GB", "766.9 MB").
+pub fn size_label(g: &crate::catalog::Game) -> Option<String> {
+    g.size_gb.map(|gb| if gb >= 1.0 { format!("{gb:.1} GB") } else { format!("{:.1} MB", gb * 1024.0) })
+        .or_else(|| (!g.size.is_empty()).then(|| g.size.clone()))
 }
 
 pub fn thousands(n: i64) -> String {

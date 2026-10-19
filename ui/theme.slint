@@ -147,9 +147,10 @@ export struct CardData {
     index: int,
     title: string,
     meta: string,
-    seeders: string,
-    leechers: string,
-    peer-snapshot: string,
+    // How easy it is to download ("Good", "Low", "None", "Unknown"), from the catalog's seeder
+    // count; kind: 1 good, 2 low, 4 none or unknown (the Fact colours).
+    availability: string,
+    availability-kind: int,
     releases: string,
     rating: string,
     badge: string,
@@ -165,7 +166,7 @@ export struct CardData {
 
 export struct CardRow { index: int, cards: [CardData] }
 export struct GenreChip { index: int, label: string, count: string, on: bool, x: length, w: length }
-export struct Fact { key: string, value: string, /* 1 good, 2 warning, 3 bad */ kind: int }
+export struct Fact { key: string, value: string, /* 1 good, 2 warning, 3 bad, 4 none (grey) */ kind: int }
 export struct FactRow { items: [Fact] }
 export struct Shot { image: image, loaded: bool }
 
@@ -189,11 +190,16 @@ export struct HubData {
     facts: [FactRow],
     details: [FactRow],
     subtitle: string,
-    peer-status: string,
-    seeders: string,
-    leechers: string,
-    peer-snapshot: string,
+    // Will it play here? One headline (kind: the Fact colours, 0 grey) and the results behind it.
+    verdict: string,
+    verdict-kind: int,
+    verdict-detail: string,
+    // Under Download: its size, where it goes and what comes next; warn: not enough free space.
+    download-note: string,
+    download-note-warn: bool,
+    // The release picker: "Version 3 of 3 (newest)" and that release's version, region and size.
     release-label: string,
+    release-detail: string,
     release-count: int,
     shots: [Shot],
     about: [string],

@@ -1,4 +1,4 @@
-//! This PC in the launcher: the Game Hub's "ON THIS PC" fact, the Settings row, the download
+//! This PC in the launcher: the Game Hub's line about it, the Settings row, the download
 //! dialog's warning and a one-time notice when a console's games can't run here.
 
 use crate::app::*;
@@ -72,24 +72,32 @@ impl App {
         self.cfg.lock().unwrap().save();
     }
 
-    /// The Hub's "ON THIS PC" fact: (label, value, kind 1 good · 2 warning · 3 bad).
-    pub fn pc_fact(&self, t: Target) -> Option<(String, String, i32)> {
-        let verdict = self.pc_verdict(self.target_platform(t))?;
-        // Room for it, when it's still to be downloaded.
-        if !matches!(verdict, Verdict::No(_)) && t.local.is_none() && self.download_for_target(t).is_none() {
-            let need = t.game.and_then(|g| self.games[g].g.size_gb);
-            let dir = crate::util::expand_home(&self.cfg.lock().unwrap().download_dir);
-            if let (Some(need), Some(free)) = (need, crate::pc::free_gb(&dir)) {
-                if need > free {
-                    return Some((format!("ON THIS PC · {free:.0} GB FREE"), "Not enough space".into(), 3));
-                }
-            }
+    /// The Hub's line about this PC, under its verdict: "This PC: PS5 games should run well".
+    pub fn pc_line(&self, t: Target) -> Option<String> {
+        let platform = self.target_platform(t);
+        self.pc_verdict(platform).map(|v| format!("This PC: {}", explain(&v, platform)))
+    }
+
+    /// Under the Hub's Download button: what pressing it means. The download's size, the folder
+    /// it goes to and the next step, or a warning when that folder's disk is short of space.
+    /// `None` once it's downloading or installed (the button says so itself).
+    pub fn download_note(&self, t: Target) -> Option<(String, bool)> {
+        let g = &self.games[t.game?];
+        if t.local.is_some() || g.g.magnet.is_empty() || g.g.is_pkg() || self.download_for_target(t).is_some() {
+            return None;
         }
-        let key = match verdict.why() {
-            Some(why) => format!("ON THIS PC · {}", why.to_uppercase()),
-            None => "ON THIS PC".into(),
-        };
-        Some((key, verdict.headline().into(), verdict.kind()))
+        let dir = self.cfg.lock().unwrap().download_dir.clone();
+        let shown = crate::util::display_path(&dir);
+        let size = crate::present::size_label(&g.g);
+        let free = crate::pc::free_gb(&crate::util::expand_home(&dir));
+        let short = matches!((g.g.size_gb, free), (Some(need), Some(free)) if need > free);
+        let mut parts: Vec<String> = size.into_iter().collect();
+        parts.push(format!("goes to {shown}"));
+        parts.push(match free {
+            Some(free) if short => format!("only {free:.0} GB free there"),
+            _ => "then press Install".into(),
+        });
+        Some((parts.join(" · "), short))
     }
 
     /// For the download dialog: a warning when this game won't start or may be slow here.

@@ -122,17 +122,21 @@ controls in games** for every key.
 
 Each game shows a tag from its emulator's community list ([KytyPS5](https://kytyps5.github.io/) for
 PS5, [shadPS4](https://github.com/shadps4-compatibility/shadps4-game-compatibility) for PS4):
-🟢 **In-game**, 🟡 **Menus**, 🟠 **Boots** (intro logos only), 🔴 **Doesn't boot**, or ⚪ **Untested**.
+🟢 **Playable**, 🟡 **Menus only**, 🟠 **Logos only** (intro logos, then it stops), 🔴 **Doesn't start**,
+or ⚪ **Untested**.
 
-Only Linux results count, since the launcher runs on Linux: covers and the Library's **In-game**
-filter show what's been confirmed there. A game tested only on Windows shows that result in its
-Game Hub, marked as untested on Linux, because games can behave differently there.
+Only Linux results count, since the launcher runs on Linux: covers and the Library's **Playable**
+filter show what's been confirmed there. A game tested only on Windows counts as untested here,
+because games can behave differently on Linux.
 
-**Will it run on my PC?** Each Game Hub also says **On this PC: Should run well**, **May run
-slowly** (with the reason, e.g. integrated graphics) or **Won't start** (e.g. a graphics card
-without Vulkan 1.3), and whether there's room for the download. The launcher checks your
-processor, memory and graphics card when it starts; see them in **Settings → This PC**. PS4 games
-need a processor from 2013 or later (with AVX2).
+**Will it run on my PC?** Each Game Hub sums it up in one line: **Plays on this PC**, **Starts,
+but may stop early**, **Doesn't start yet** or **Not tested yet**, with the results behind it
+(Linux, Windows, this PC) in smaller text underneath. It also says when your PC can't run the
+emulator (**Doesn't start on this PC**, e.g. a graphics card without Vulkan 1.3) or may run it
+slowly (e.g. integrated graphics). Under **Download** you see the size, the folder it goes to,
+and a warning when there isn't room. The launcher checks your processor, memory and graphics
+card when it starts; see them in **Settings → This PC**. PS4 games need a processor from 2013 or
+later (with AVX2).
 
 **Help others:** when you close a game, the launcher asks how far it got, and your answer
 becomes its tag on your PC. Every so often, choose **Settings → Share your game ratings** to send

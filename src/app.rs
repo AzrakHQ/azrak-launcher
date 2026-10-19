@@ -105,7 +105,7 @@ pub const GENRES: [(&str, &str); 16] = [
 ];
 
 
-pub const SORTS: [&str; 7] = ["Newest topics", "Name (A–Z)", "Release date", "Top rated", "Size (largest)", "Size (smallest)", "Compatibility"];
+pub const SORTS: [&str; 7] = ["Newest uploads", "Name (A–Z)", "Release date", "Top rated", "Size (largest)", "Size (smallest)", "Compatibility"];
 
 /// A catalog game plus derived data.
 pub struct GameV {
@@ -224,6 +224,9 @@ pub struct App {
     pub catalog_updated: f64,
     pub syncing: bool,
     pub enriching: bool,
+    /// New artwork and names arrived while the Library was on screen: applied once it isn't, as
+    /// they regroup releases and the cards and count would jump under the player.
+    pub art_pending: bool,
     pub pad_hints: bool,
     pub clock: String,
     /// Updates the trailer player's progress and controls while it is open.
@@ -293,7 +296,7 @@ pub struct App {
     /// The platforms the catalog has, when there are several: each gets a "… games only" chip,
     /// the last status chips, in this order.
     pub consoles: Vec<crate::platform::Platform>,
-    /// The status filters lead `genre_list`: All, Installed, In-game (on Linux) and, with
+    /// The status filters lead `genre_list`: All, Installed, Playable (on Linux) and, with
     /// more than one console, "PS5 games only" and "PS4 games only". Genres follow.
     pub status_count: usize,
 }
@@ -478,6 +481,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         catalog_updated: catalog.updated,
         syncing: false,
         enriching: false,
+        art_pending: false,
         pad_hints: false,
         clock: String::new(),
         trailer_timer: None,
@@ -694,6 +698,8 @@ impl App {
     }
 
     pub fn set_catalog(&mut self, games: Vec<Game>) {
+        // Reads the artwork as it is now: nothing left waiting.
+        self.art_pending = false;
         let downloaded: HashSet<i64> = self.downloads.snapshot().iter().map(|job| job.topic).collect();
         let games: Vec<Game> = games.into_iter().filter(|g| listed(g, &downloaded)).collect();
         let today = (util::now_secs() / 86400.0) as i64;
@@ -815,7 +821,7 @@ impl App {
         let count = |f: &dyn Fn(&crate::compat::Entry) -> bool| self.groups.members.iter()
             .filter(|members| members.iter().any(|i| self.game_compat(&self.games[*i]).is_some_and(f))).count();
         // Linux results only: the launcher runs on Linux.
-        list.push(("In-game".into(), count(&|e| e.in_game())));
+        list.push(("Playable".into(), count(&|e| e.in_game())));
         use crate::platform::Platform;
         self.consoles = [Platform::Ps5, Platform::Ps4, Platform::Pc].into_iter()
             .filter(|p| self.games.iter().any(|g| g.g.platform == *p)).collect();
@@ -1075,16 +1081,29 @@ impl App {
                 app.enriching = false;
                 app.set_status("", false);
                 if changed {
-                    let games: Vec<Game> = app.games.iter().map(|g| g.g.clone()).collect();
-                    app.set_catalog(games);
                     app.images.clear_failures();
-                    if !app.boot.active {
-                        app.push_all();
+                    if app.view == 1 && !app.boot.active {
+                        app.art_pending = true;
+                    } else {
+                        app.apply_art();
                     }
                 }
                 app.boot_art_done();
             });
         });
+    }
+
+    /// Take in the artwork and names that arrived: they can regroup releases into fewer cards, so
+    /// whatever is open or focused is found again by topic ID.
+    pub fn apply_art(&mut self) {
+        let anchor = self.catalog_anchor();
+        let games: Vec<Game> = self.games.iter().map(|g| g.g.clone()).collect();
+        self.set_catalog(games);
+        self.restore_targets(&anchor);
+        if !self.boot.active {
+            self.push_all();
+            self.restore_grid_focus(&anchor);
+        }
     }
 
     /// Download every Library cover into the disk cache (skips cached ones instantly).
@@ -1190,6 +1209,21 @@ impl App {
         let tid = t.local.map(|l| self.locals[l].l.title_id.clone()).filter(|s| !s.is_empty())
             .or_else(|| t.game.map(|g| self.games[g].g.title_id.clone()))?;
         self.compat.get(&tid.to_uppercase())
+    }
+
+    /// Will it play here, from the emulator's results and this PC's verdict. `None` for PC
+    /// games, which have no emulator list (their Hub shows ProtonDB or "Native game").
+    pub fn outlook(&self, t: Target) -> Option<crate::compat::Outlook> {
+        let platform = self.target_platform(t);
+        (platform != crate::platform::Platform::Pc)
+            .then(|| crate::compat::Outlook::of(self.target_compat(t), self.pc_verdict(platform).as_ref()))
+    }
+
+    /// A game's releases, oldest version first, so "Version 3 of 3" is the newest one.
+    pub fn release_order(&self, index: usize) -> Vec<usize> {
+        let mut members = self.groups.releases(index).to_vec();
+        members.sort_by_key(|i| (crate::game_groups::version_key(&self.games[*i].g.version), self.games[*i].g.id));
+        members
     }
 
     /// Refresh the community list in the background (at start and every 6 hours).
@@ -1497,6 +1531,8 @@ impl App {
         if !self.pad_hints {
             self.pad_hints = true;
             self.ui().set_pad_hints(true);
+            // Settings names keyboard shortcuts only to keyboard players.
+            if self.overlay == Overlay::Settings { self.refresh_settings(); }
         }
         let act = match p {
             Pad::Up => Act::Up,
@@ -1536,6 +1572,7 @@ impl App {
         if self.pad_hints {
             self.pad_hints = false;
             self.ui().set_pad_hints(false);
+            if self.overlay == Overlay::Settings { self.refresh_settings(); }
         }
         let k = |key: Key| SharedString::from(key) == text;
         let dir = if k(Key::UpArrow) {
@@ -1634,11 +1671,14 @@ impl App {
         } else if k(Key::Tab) {
             Act::TabNext
         } else if self.overlay == Overlay::None && self.view == 1 && text.chars().count() == 1 && text.chars().all(|c| c.is_alphanumeric()) {
-            // Type-to-search in the library.
-            self.start_search_edit();
+            // Type-to-search in the library. The letter goes after what's there, and typing carries
+            // on after it: focusing the field selects everything, so the cursor moves to the end
+            // (otherwise "wolverine" came out as "olverinew").
             let q = format!("{}{}", self.query, text);
             self.ui().set_query(q.clone().into());
             self.on_search(q);
+            self.start_search_edit();
+            self.ui().invoke_search_cursor_to_end();
             return true;
         } else if (text == "f" || text == "s") && self.overlay == Overlay::None {
             Act::Search
@@ -1916,6 +1956,21 @@ impl App {
                 }
                 Act::Confirm => {
                     if let Some((g, _)) = self.genre_list.get(self.idx as usize).cloned() {
+                        let i = self.idx as usize;
+                        let chosen = if i == 0 { self.status_filter == "All" && self.platform_filter.is_none() }
+                            else if i < n as usize { self.console_chip(i).is_none() && self.status_filter == g }
+                            else { self.genre == g || (i == n as usize && self.genre == "All") };
+                        // The chip that's already chosen: "All" (or "All genres") takes you to the
+                        // games; any other one goes back to All, like pressing a toggle again.
+                        if chosen && (i == 0 || i == n as usize) {
+                            if !self.filtered.is_empty() {
+                                let first = self.first_visible_card();
+                                self.move_focus(Z_GRID, first as i32);
+                                self.focus_card_changed();
+                            }
+                            return;
+                        }
+                        let g = if chosen { if i < n as usize { "All".to_string() } else { "All genres".to_string() } } else { g };
                         if let Some(p) = self.console_chip(self.idx as usize) {
                             // A console chip toggles: press it again to see every console.
                             self.platform_filter = if self.platform_filter == Some(p) { None } else { Some(p) };
@@ -1970,10 +2025,10 @@ impl App {
         self.platform_ok(game) && self.status_filter_ok(game)
     }
 
-    /// The status filter alone (Installed, In-game, …), whatever the console.
+    /// The status filter alone (Installed, Playable, …), whatever the console.
     pub fn status_filter_ok(&self, game: &GameV) -> bool {
         self.status_filter == "All" || (self.status_filter == "Installed" && game.local.is_some())
-            || (self.status_filter == "In-game" && self.game_compat(game).is_some_and(|entry| entry.in_game()))
+            || (self.status_filter == "Playable" && self.game_compat(game).is_some_and(|entry| entry.in_game()))
     }
 
     pub fn open_sort_picker(&mut self) {
@@ -2266,6 +2321,9 @@ impl App {
                 }
             }
         } else {
+            if self.art_pending {
+                self.apply_art();
+            }
             self.show_row_background(self.sel, true);
             if focus {
                 self.set_focus(self.home_zone(), 0);
@@ -2368,14 +2426,21 @@ impl App {
         } else if t.local.is_none() && t.game.is_some_and(|g| !self.games[g].g.magnet.is_empty()) {
             let job = self.download_for_target(t);
             let installing = job.as_ref().is_some_and(|job| self.installer.snapshot().iter().any(|record| record.key == job.key && record.state.active()));
+            // A game that doesn't start (or can't on this PC) can still be downloaded, but it
+            // isn't offered as the obvious next step.
+            let discouraged = job.is_none() && self.outlook(t).is_some_and(|o| o.discourages_download());
             let (id, label) = if installing { ("download", "Installing…") }
                 else if job.as_ref().is_some_and(|job| job.state == crate::downloads::State::Complete) { ("install", "Install") }
                 else if job.is_some() { ("download", "View download") }
+                else if discouraged { ("download", "Download anyway") }
                 else { ("download", "Download") };
-            a.push(mk(id, label, "disk", a.is_empty()));
+            a.push(mk(id, label, "disk", a.is_empty() && !discouraged));
         }
+        let discouraged = a.iter().any(|x| x.label == "Download anyway");
         if crate::trailer::available() && info.as_ref().is_some_and(|i| !i.video.is_empty()) {
-            a.push(mk("trailer", "Trailer", "film", false));
+            // Ahead of "Download anyway", so the Hub doesn't open with the download selected.
+            let at = if discouraged { a.iter().position(|x| x.id == "download").unwrap_or(a.len()) } else { a.len() };
+            a.insert(at, mk("trailer", "Trailer", "film", false));
         }
         if t.game.is_some() {
             a.push(ActionDef { round: true, ..mk("web", "Open web page", "web", false) });
@@ -2384,7 +2449,7 @@ impl App {
             let label = if self.target_platform(t) == crate::platform::Platform::Pc { "Steam page" } else { "PlayStation Store" };
             a.push(ActionDef { round: true, ..mk("store", label, "bag", false) });
         }
-        if !a.iter().any(|x| x.primary) {
+        if !a.iter().any(|x| x.primary) && !discouraged {
             if let Some(f) = a.first_mut() {
                 f.primary = true;
             }
@@ -2453,6 +2518,8 @@ impl App {
                 }
             }
             "settings" => self.open_settings(),
+            // Straight to the row that adds it, not the top of Settings.
+            "add_folder" => self.open_setting(crate::settings::SId::Dirs),
             "library" => self.switch_view(1, true),
             "rate" => {
                 if let Some(l) = t.local {
@@ -2680,7 +2747,7 @@ impl App {
         if self.overlay != Overlay::Hub { return; }
         let Some(t) = self.hub else { return; };
         let Some(current) = t.game else { return; };
-        let members = self.groups.releases(current);
+        let members = self.release_order(current);
         if members.len() < 2 { return; }
         let position = members.iter().position(|i| *i == current).unwrap_or(0) as i32;
         let next = members[(position + delta).rem_euclid(members.len() as i32) as usize];
@@ -2958,7 +3025,8 @@ impl App {
             self.status = text.to_string();
             self.status_busy = busy;
             let ui = self.ui();
-            ui.set_status(text.into());
+            // The welcome screen reads the raw progress; the Home screen's line says what it's for.
+            ui.set_status(crate::words::status(text).into());
             ui.set_status_busy(busy);
         }
     }

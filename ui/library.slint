@@ -15,7 +15,7 @@ export component LibraryFilter inherits Rectangle {
     HorizontalLayout {
         alignment: center; spacing: (6px * S.k);
         Text { text: root.data.label; font-size: (18px * root.type-scale); font-weight: root.data.on ? 600 : 400; color: root.data.on ? #0a0d18 : Theme.text2; vertical-alignment: center; }
-        Text { text: root.data.count; font-size: (15px * root.type-scale); color: root.data.on ? #56607a : Theme.text3; vertical-alignment: center; }
+        Text { text: root.data.count; font-size: (16px * root.type-scale); color: root.data.on ? #56607a : Theme.text3; vertical-alignment: center; }
     }
     ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
@@ -41,7 +41,7 @@ export component LibrarySortPicker inherits Rectangle {
         TouchArea { }
         body := VerticalLayout {
             padding: (12px * S.k); spacing: (4px * S.k);
-            Text { text: "SORT BY"; font-size: (13px * root.type-scale); font-weight: 600; color: Theme.text3; height: (30px * S.k); }
+            Text { text: "SORT BY"; font-size: (15px * root.type-scale); font-weight: 600; color: Theme.text3; height: (30px * S.k); }
             for label[i] in root.options: Rectangle {
                 height: max((50px * S.k), (34px * root.type-scale));
                 border-radius: (10px * S.k);
