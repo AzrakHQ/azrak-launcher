@@ -1441,7 +1441,7 @@ export component AppWindow inherits Window {
             close => { root.click(Zone.sort-picker, -1); }
         }
         if root.overlay == 7 && !root.download-consent: DownloadsSheet {
-            data: root.downloads; summary: root.download-summary; selected: root.idx;
+            data: root.downloads; summary: root.download-summary; selected: root.idx; pad: root.pad-hints;
             scroll-y <=> root.downloads-y;
             action(key, action) => { root.download-action(key, action); }
             close => { root.download-close(); }

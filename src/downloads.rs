@@ -1,6 +1,6 @@
 //! Opt-in native torrent transfers. Downloads only start from an explicit action. Completed
 //! downloads seed while "Keep sharing finished downloads" is on, including after a restart; only that
-//! setting turns seeding off for good (Stop seeding on one transfer lasts until the next launch).
+//! setting turns seeding off for good (Stop sharing on one transfer lasts until the next launch).
 //! Magnet lookup can use DHT/trackers before metadata (including its private flag) is known.
 //! A dedicated Tokio worker owns the engine; the UI reads bounded snapshots once per second.
 //! Our manifest restores unfinished transfers paused, not via rqbit's session persistence.
@@ -29,7 +29,7 @@ impl State {
     pub fn active(self) -> bool { matches!(self, Self::Resolving | Self::Checking | Self::Downloading) }
     pub fn label(self) -> &'static str {
         match self {
-            Self::Resolving => "Resolving magnet metadata", Self::Ready => "Ready · review files before downloading",
+            Self::Resolving => "Getting the file list", Self::Ready => "Ready · check the files, then Start download",
             Self::Checking => "Checking existing pieces", Self::Downloading => "Downloading", Self::Paused => "Paused",
             Self::Complete => "Complete · stopped", Self::Failed => "Failed", Self::Cancelled => "Cancelled · partial files kept",
         }
@@ -63,8 +63,9 @@ pub struct Job {
 
 impl Job {
     pub fn label(&self) -> &'static str {
-        if self.state == State::Complete && self.seeding { "Complete · seeding" }
-        else if self.state == State::Complete && self.verifying { "Complete · checking files to seed" }
+        // "Sharing", not "seeding": the word players know (Settings → Keep sharing finished downloads).
+        if self.state == State::Complete && self.seeding { "Complete · sharing" }
+        else if self.state == State::Complete && self.verifying { "Complete · checking files before sharing" }
         else if self.waiting_vpn && !self.state.active() && self.state != State::Complete { "Paused · waiting for your VPN" }
         else { self.state.label() }
     }
@@ -1027,7 +1028,7 @@ mod tests {
             assert!(Policy::default().seed_after_download, "production seeding defaults on");
             let job = worker.job(&key).unwrap();
             assert!(job.seeding);
-            assert_eq!(job.label(), "Complete · seeding");
+            assert_eq!(job.label(), "Complete · sharing");
             assert_eq!(job.progress(), 1.0);
             assert!(!job.state.active(), "completion remains installable, not a download");
             assert_eq!(job.speed, 0.0);
@@ -1083,7 +1084,7 @@ mod tests {
             let manager = Manager::new(worker.store.clone(), worker.policy.clone());
             let resumed = wait_job(&manager, &key, |job| job.seeding).await;
             assert_eq!(resumed.state, State::Complete);
-            assert_eq!(resumed.label(), "Complete · seeding");
+            assert_eq!(resumed.label(), "Complete · sharing");
             assert!(resumed.error.is_empty());
             // Only the Settings switch stops it.
             manager.set_seed_after_download(false).unwrap();

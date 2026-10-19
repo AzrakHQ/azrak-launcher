@@ -1,4 +1,4 @@
-import { S, Theme, DownloadData } from "theme.slint";
+import { S, Theme, Icons, DownloadData } from "theme.slint";
 import { ScrollView } from "std-widgets.slint";
 import { BackButton } from "widgets.slint";
 
@@ -22,10 +22,12 @@ export component DownloadsSheet inherits Rectangle {
     in property <[DownloadData]> data;
     in property <string> summary;
     in property <int> selected;
+    in property <bool> pad;
     in-out property <length> scroll-y;
     callback action(string, string);
     callback close();
-    background: #050914f7;
+    // Opaque: the screen underneath showing through made the sheet look broken.
+    background: Theme.bg;
     TouchArea { }
     VerticalLayout {
         x: (120px * S.k);
@@ -36,23 +38,37 @@ export component DownloadsSheet inherits Rectangle {
         HorizontalLayout {
             alignment: space-between;
             Text { text: "Downloads"; font-size: (44px * S.k); font-weight: 600; color: Theme.text; }
-            BackButton { clicked => { root.close(); } }
+            BackButton { pad: root.pad; clicked => { root.close(); } }
         }
-        Text { text: summary; font-size: (18px * S.k); color: Theme.text2; }
+        Text { text: summary; font-size: (19px * S.k); color: Theme.text2; }
         Text {
-            text: "Runs while the launcher is open, including when minimized. Completed downloads seed by default; disable in Settings or choose Stop seeding. Exit stops all traffic; restart never resumes automatically.";
+            text: "Downloads keep going while the launcher is open, even minimized, and stop when you close it. Finished downloads keep sharing with other players until you choose Stop sharing, or turn off Settings → Keep sharing finished downloads.";
             font-size: (17px * S.k); color: Theme.text3; wrap: word-wrap;
         }
         Rectangle { height: (8px * S.k); }
-        if data.length == 0: Rectangle {
-            background: #10203c;
-            border-radius: (20px * S.k);
-            VerticalLayout {
-                padding: (52px * S.k); spacing: (18px * S.k); alignment: center;
-                Text { text: "Nothing downloading yet"; font-size: (32px * S.k); font-weight: 600; color: Theme.text; }
-                Text { text: "Open a release’s Game Hub and choose Download. Review metadata before starting any game files."; font-size: (21px * S.k); color: Theme.text2; wrap: word-wrap; }
+        // Nothing yet: one compact card, then the empty space below it.
+        if data.length == 0: HorizontalLayout {
+            alignment: start;
+            Rectangle {
+                background: #10203c;
+                border-radius: (20px * S.k);
+                border-width: 1px;
+                border-color: Theme.line;
+                HorizontalLayout {
+                    padding: (30px * S.k); spacing: (22px * S.k);
+                    Rectangle {
+                        width: (56px * S.k); height: (56px * S.k); border-radius: (16px * S.k); background: #0a6cff2e;
+                        Image { source: Icons.disk; colorize: #a7caff; width: (28px * S.k); height: (28px * S.k); }
+                    }
+                    VerticalLayout {
+                        alignment: center; spacing: (6px * S.k);
+                        Text { text: "Nothing downloading"; font-size: (28px * S.k); font-weight: 600; color: Theme.text; }
+                        Text { text: "Pick a game in the Library and press Download."; font-size: (21px * S.k); color: Theme.text2; }
+                    }
+                }
             }
         }
+        if data.length == 0: Rectangle { vertical-stretch: 1; }
                 if data.length > 0: Rectangle {
                     clip: true;
                     Flickable {
@@ -108,7 +124,11 @@ export component DownloadsSheet inherits Rectangle {
             }
                     }
         }
-        Text { text: "↑ ↓ select transfer · ← → select action · Enter confirm · Esc back · Cancel/Remove never delete payload files"; font-size: (16px * S.k); color: Theme.text3; wrap: word-wrap; }
+        Text {
+            text: (data.length == 0 ? "" : root.pad ? "↑ ↓ choose a download · ← → choose a button · ✕ press it · " : "↑ ↓ choose a download · ← → choose a button · Enter to press it · ")
+                + "Your downloaded files are never deleted by Cancel or Remove";
+            font-size: (17px * S.k); color: Theme.text3; wrap: word-wrap;
+        }
     }
 }
 

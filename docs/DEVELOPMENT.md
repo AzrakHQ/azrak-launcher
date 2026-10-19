@@ -175,14 +175,14 @@ and keeps files. **Remove** clears inactive history and cached metadata, never
 the payload. **Open folder** opens the saved destination.
 
 **Completed downloads seed by default.** While the launcher remains open, their
-original files are shared with peers. Downloads shows **Complete · seeding**, upload
-speed and connected peers; **Install / Play** remains available. Use **Stop seeding**
+original files are shared with peers. Downloads shows **Complete · sharing**, upload
+speed and connected peers; **Install / Play** remains available. Use **Stop sharing**
 for one transfer until the next launch, or disable **Settings → Keep sharing
 finished downloads** to stop all seeds; only that saved setting turns seeding off for good.
 While it is on, completed downloads seed again whenever the launcher opens, and turning
 it back on seeds them all again. Each is first added **paused** so the engine checks its
 files against the torrent: it seeds only if every piece verifies (**Complete · checking
-files to seed** meanwhile). Missing, resized or changed files stop it with an error and
+files before sharing** meanwhile). Missing, resized or changed files stop it with an error and
 nothing is downloaded again; unfinished transfers are never started automatically.
 
 The default destination is `~/Downloads/PS5`, editable in Settings or the setup

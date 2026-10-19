@@ -118,8 +118,8 @@ impl App {
         let ui = self.ui();
         ui.set_download_active(!active.is_empty() || seeding > 0);
         ui.set_download_progress(progress);
-        ui.set_download_badge(if active.is_empty() { format!("{seeding} seeding") }
-            else if total == 0 { "Resolving metadata".to_string() } else { format!("{} active · {:.0}%", active.len(), progress * 100.0) }.into());
+        ui.set_download_badge(if active.is_empty() { format!("{seeding} sharing") }
+            else if total == 0 { "Getting file list".to_string() } else { format!("{} active · {:.0}%", active.len(), progress * 100.0) }.into());
         let vpn = {
             let cfg = self.cfg.lock().unwrap();
             match cfg.download_vpn().map(|preferred| crate::vpn::active(&preferred)) {
@@ -128,7 +128,9 @@ impl App {
                 None => String::new(),
             }
         };
-        ui.set_download_summary(format!("{vpn}{} transfers · {} downloading · {seeding} seeding · original files are kept", jobs.len(), active.len()).into());
+        // Nothing yet: the card below says so; only the VPN's state is worth a line.
+        ui.set_download_summary(if jobs.is_empty() { vpn.trim_end_matches(" · ").to_string() }
+            else { format!("{vpn}{} downloading · {seeding} sharing · {} in all", active.len(), jobs.len()) }.into());
         if self.overlay != Overlay::Downloads { return; }
         let rows: Vec<_> = jobs.iter().map(|job| {
             let install = installs.iter().find(|record| record.key == job.key);
@@ -139,7 +141,7 @@ impl App {
             } else if job.seeding {
                 format!("{} complete · ↑ {:.2} MiB/s upload · {} connected peers · 128 KiB/s limit",
                     bytes_label(job.total), job.upload_speed, job.peers)
-            } else if job.total == 0 { "Waiting for torrent metadata; no game files downloaded".to_string() }
+            } else if job.total == 0 { "Getting the file list; no game files downloaded yet".to_string() }
                 else { format!("{} / {} · {:.1}% · {:.2} MiB/s · {} connected peers{}",
                     bytes_label(job.done), bytes_label(job.total), job.progress() * 100.0, job.speed, job.peers,
                     if job.eta.is_empty() { String::new() } else { format!(" · ETA {}", job.eta) }) };
@@ -154,7 +156,7 @@ impl App {
                 complete: job.state == State::Complete && !installing,
                 primary: if installing { "Installing…" } else if installed { "Play" } else if job.state == State::Complete { if install.is_some() { "Retry install" } else { "Install" } } else { job.primary() }.into(),
                 primary_action: if installing { "" } else if installed { "play_install" } else if job.state == State::Complete { "install" } else { job.action_id() }.into(),
-                secondary: if installing { "Cancel install" } else if job.seeding || job.verifying { "Stop seeding" } else if job.state.active() || review { "Cancel" } else { "Remove" }.into(),
+                secondary: if installing { "Cancel install" } else if job.seeding || job.verifying { "Stop sharing" } else if job.state.active() || review { "Cancel" } else { "Remove" }.into(),
                 secondary_action: if installing { "cancel_install" } else if job.seeding || job.verifying { "stop_seed" } else if job.state.active() || review { "cancel" } else { "remove" }.into(),
                 review, files: job.files.join("\n").into(),
                 file_summary: format!("{} files · download all {}{}", job.file_count, bytes_label(job.total),
