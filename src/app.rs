@@ -2357,6 +2357,8 @@ impl App {
                 }
             }
             "settings" => self.open_settings(),
+            // Straight to the row that adds it, not the top of Settings.
+            "add_folder" => self.open_setting(crate::settings::SId::Dirs),
             "library" => self.switch_view(1, true),
             "rate" => {
                 if let Some(l) = t.local {

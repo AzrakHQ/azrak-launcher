@@ -119,13 +119,9 @@ impl App {
 
     /// Show row item `i`'s background, with its cover standing in until it has downloaded.
     pub fn show_row_background(&mut self, i: usize, force: bool) {
-        // No installed games: the newest catalog game's art.
-        let i_bg = if self.row.is_empty() { None } else { Some(i) };
-        let (bg, cover) = match i_bg {
-            Some(i) => (self.hero_bg_url(i), self.row_cover_req(i)),
-            None => (self.games.iter().find(|g| g.info.as_ref().is_some_and(|x| !x.hub.is_empty()))
-                .and_then(|g| req_url(&g.info.as_ref()?.hub, 1920, 0.0)), None),
-        };
+        // No installed games: the plain Azrak backdrop. One game's key art there reads as an ad,
+        // or as a game you already own.
+        let (bg, cover) = if self.row.is_empty() { (None, None) } else { (self.hero_bg_url(i), self.row_cover_req(i)) };
         self.want_background_or(bg, force, cover);
     }
 
@@ -306,20 +302,21 @@ impl App {
         self.hero_logo_key.clear();
         match it {
             None => {
-                // No installed games: say how to add some, and offer the Library meanwhile.
+                // No installed games: getting one from the Library comes first; a folder of games
+                // already on this PC is the other way in.
                 let mk = |id, label: &str, icon, primary| ActionDef { id, label: label.into(), icon, primary, danger: false, round: false };
-                h.title = "No games installed yet".into();
-                h.desc = "Add the folder that holds your games and they'll appear here, ready to play.".into();
-                self.hero_actions = vec![mk("settings", "Add game folder", "folder", true)];
+                h.title = "No games yet".into();
+                h.desc = "Pick a game in the Library, then Download and Install.".into();
+                self.hero_actions = vec![mk("library", "Browse games", "grid", true), mk("add_folder", "Add game folder", "folder", false)];
             }
             Some(RowItem::All) => {
                 let mk = |id, label: &str, icon, primary| ActionDef { id, label: label.into(), icon, primary, danger: false, round: false };
                 if self.locals.is_empty() {
                     h.kicker = "GET STARTED".into();
-                    h.title = "No installed games yet".into();
+                    h.title = "No games yet".into();
                     h.chips = model(vec![chip("grid", format!("{} games in the Library", self.groups.members.len()), false)]);
-                    h.desc = "Point the launcher at the folder with your games in Settings, and they'll appear here ready to play. Meanwhile, browse the whole catalog in the Library.".into();
-                    self.hero_actions = vec![mk("settings", "Add game folder", "folder", true), mk("library", "Browse Library", "grid", false)];
+                    h.desc = "Pick a game in the Library, then Download and Install.".into();
+                    self.hero_actions = vec![mk("library", "Browse games", "grid", true), mk("add_folder", "Add game folder", "folder", false)];
                 } else {
                     h.kicker = "COLLECTION".into();
                     h.title = "Game Library".into();

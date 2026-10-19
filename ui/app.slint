@@ -448,8 +448,55 @@ export component AppWindow inherits Window {
                 }
             }
 
+            // No games yet: the welcome screen's calm backdrop (no game's art, which would read as
+            // an ad or as a game you own) and the way to a first game.
+            if !root.home-has-game: Rectangle {
+                property <HeroData> h: root.hero-front-b ? root.hero-b : root.hero;
+                background: #05070f;
+                Rectangle {
+                    x: root.width * 0.30 - self.width / 2;
+                    y: root.height * 0.38 - self.height / 2;
+                    width: (1100px * S.k);
+                    height: self.width;
+                    background: @radial-gradient(circle, #1f4fd13d 0%, #1f4fd100 65%);
+                }
+                Rectangle {
+                    x: root.width * 0.72 - self.width / 2;
+                    y: root.height * 0.62 - self.height / 2;
+                    width: (1000px * S.k);
+                    height: self.width;
+                    background: @radial-gradient(circle, #8b5cf62e 0%, #8b5cf600 65%);
+                }
+                VerticalLayout {
+                    x: (96px * S.k);
+                    y: (300px * S.k);
+                    width: root.width - (192px * S.k);
+                    height: self.preferred-height;
+                    spacing: 0;
+                    Image { source: Icons.app; width: (88px * S.k); height: (88px * S.k); image-fit: contain; }
+                    Rectangle { height: (36px * S.k); }
+                    Text { text: h.title; font-size: (72px * S.k); font-weight: 700; color: Theme.text; }
+                    Rectangle { height: (18px * S.k); }
+                    Text { text: h.desc; font-size: (30px * S.k); color: Theme.text2; wrap: word-wrap; }
+                    Rectangle { height: (10px * S.k); }
+                    Text { text: "Already have games on this PC? Add the folder they're in."; font-size: (21px * S.k); color: Theme.text3; wrap: word-wrap; }
+                    Rectangle { height: (40px * S.k); }
+                    HorizontalLayout {
+                        spacing: (16px * S.k);
+                        alignment: start;
+                        for a[i] in h.actions: Btn {
+                            data: a;
+                            focused: root.zone == Zone.actions && root.overlay == 0 && root.idx == i;
+                            dim: root.zone == Zone.actions && root.overlay == 0 && root.idx != i;
+                            clicked => { root.click(Zone.actions, i); }
+                        }
+                    }
+                }
+            }
+
             // Hero: two layers crossfade when the selection changes (the new game's details
             // rise in while the old ones fade), like the PS5 home screen.
+            if root.home-has-game: Rectangle {
             for slot in [0, 1]: HeroView {
                 x: (96px * S.k);
                 width: (900px * S.k);
@@ -459,6 +506,7 @@ export component AppWindow inherits Window {
                 front: (slot == 1) == root.hero-front-b;
                 focus-idx: root.zone == Zone.actions && root.overlay == 0 ? root.idx : -1;
                 action(i) => { root.click(Zone.actions, i); }
+            }
             }
         }
 
