@@ -202,6 +202,7 @@ export struct SettingData {
     value-kind: int,  // 0 dim, 1 good, 2 bad, 3 call to action
     group-first: bool, // rows of a section share one card
     group-last: bool,
+    icon: string,     // before the value (Icons.get), e.g. "check" for Connected
 }
 
 // kind 0 info, 1 ok, 2 error. image: a picture for the icon tile (app or game icon), if any.

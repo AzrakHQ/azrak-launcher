@@ -1264,12 +1264,22 @@ export component AppWindow inherits Window {
                                             Text { text: s.value; font-size: (19px * S.t); color: Theme.text; vertical-alignment: center; }
                                             Image { source: Icons.chevr; colorize: f ? Theme.text : Theme.text3; width: (22px * S.k); height: (22px * S.k); y: (7px * S.k); }
                                         }
-                                        if s.kind == 4 && s.value != "": Text {
-                                            text: s.value;
-                                            font-size: (17px * S.t);
-                                            font-weight: s.value-kind == 3 ? 600 : 400;
-                                            color: s.value-kind == 1 ? Theme.ok : s.value-kind == 2 ? Theme.danger : s.value-kind == 3 ? #7ab4ff : Theme.text3;
-                                            vertical-alignment: center;
+                                        if s.kind == 4 && (s.value != "" || s.icon != ""): HorizontalLayout {
+                                            spacing: (8px * S.k);
+                                            if s.icon != "": Image {
+                                                source: Icons.get(s.icon);
+                                                colorize: s.value-kind == 1 ? Theme.ok : s.value-kind == 2 ? Theme.danger : Theme.text2;
+                                                width: (20px * S.k);
+                                                height: self.width;
+                                                y: (8px * S.k);
+                                            }
+                                            if s.value != "": Text {
+                                                text: s.value;
+                                                font-size: (17px * S.t);
+                                                font-weight: s.value-kind == 3 ? 600 : 400;
+                                                color: s.value-kind == 1 ? Theme.ok : s.value-kind == 2 ? Theme.danger : s.value-kind == 3 ? #7ab4ff : Theme.text3;
+                                                vertical-alignment: center;
+                                            }
                                         }
                                     }
                                     if s.kind == 1 && root.edit-index == i: Rectangle {

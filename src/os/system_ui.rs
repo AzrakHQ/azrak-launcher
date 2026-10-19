@@ -26,6 +26,9 @@ pub struct SysUi {
     pub forget: Option<(usize, f64)>,
     polling: bool,
     pub polled: f64,
+    /// Bumped when the launcher itself changes the system (joins a network, pairs): a reading
+    /// started before that is out of date and is read again.
+    epoch: u32,
 }
 
 fn row(kind: i32, label: &str) -> SettingData {
@@ -40,9 +43,14 @@ impl App {
             return;
         }
         self.sys.polling = true;
-        std::thread::spawn(|| {
+        let epoch = self.sys.epoch;
+        std::thread::spawn(move || {
             let (network, paired, (outputs, output), update) = (system::network(), system::bt_paired(), system::outputs(), system::update_status());
             let _ = slint::invoke_from_event_loop(move || with_app(move |app| {
+                if app.sys.epoch != epoch {
+                    (app.sys.polling, app.sys.polled) = (false, 0.0);
+                    return app.sys_poll();
+                }
                 let changed = app.sys.network != network || app.sys.paired != paired || app.sys.outputs != outputs
                     || app.sys.output != output || app.sys.update != update;
                 (app.sys.network, app.sys.paired, app.sys.outputs, app.sys.output, app.sys.update) = (network, paired, outputs, output, update);
@@ -85,7 +93,7 @@ impl App {
                 if let Some(text) = busy(SId::WifiNet(i as u16)) {
                     r.value = text.into();
                 } else if w.in_use {
-                    (r.value, r.value_kind) = ("Connected".into(), 1);
+                    (r.value, r.value_kind, r.icon) = ("Connected".into(), 1, "check".into());
                 } else {
                     r.value = format!("{} · {}", if w.secured { "Secured" } else { "Open" }, strength(w.signal)).into();
                 }
@@ -191,11 +199,23 @@ impl App {
                 let address = d.address.clone();
                 self.sys_task(SId::BtFound(i), "Pairing…", move |app, r: Result<(), String>| {
                     match r {
-                        Ok(()) => { app.toast("Paired", &d.name, 1); app.sys.found.retain(|f| f != &d); }
+                        Ok(()) => {
+                            app.toast("Paired", &d.name, 1);
+                            app.sys.found.retain(|f| f != &d);
+                            // Listed (and selected) at once: its row in "Found" is gone.
+                            if !app.sys.paired.iter().any(|(p, _)| p.address == d.address) {
+                                app.sys.paired.push((d.clone(), true));
+                            }
+                            if app.overlay == Overlay::Settings {
+                                app.refresh_settings();
+                                if let Some(i) = app.sys.paired.iter().position(|(p, _)| p.address == d.address) {
+                                    app.select_setting(SId::BtDevice(i as u16));
+                                }
+                            }
+                        }
                         Err(e) => app.toast("Couldn't pair", &e, 2),
                     }
-                    app.sys.polled = 0.0;
-                    app.sys_poll();
+                    app.sys_changed();
                 }, move || system::bt_pair(&address));
             }
             SId::BtDevice(i) => {
@@ -207,8 +227,7 @@ impl App {
                     let address = d.address.clone();
                     self.sys_task(SId::BtDevice(i as u16), "Forgetting…", move |app, r: Result<(), String>| {
                         if let Err(e) = r { app.toast("Couldn't forget it", &e, 2) } else { app.toast("Forgotten", &d.name, 1) }
-                        app.sys.polled = 0.0;
-                        app.sys_poll();
+                        app.sys_changed();
                     }, move || system::bt_remove(&address));
                 } else {
                     self.sys.forget = Some((i, now));
@@ -266,16 +285,38 @@ impl App {
         let ssid = w.ssid.clone();
         self.sys_task(SId::WifiNet(i), "Connecting…", move |app, r: Result<(), String>| {
             match r {
-                Ok(()) => {
-                    app.toast("Connected", &w.ssid, 1);
-                    app.sys.wifi_open = false;
-                }
+                Ok(()) => app.wifi_joined(&w.ssid),
                 Err(e) => app.toast("Couldn't connect", &if e.contains("Secrets were required") || e.contains("password") {
                     "Check the password and try again.".to_string() } else { e }, 2),
             }
-            app.sys.polled = 0.0;
-            app.sys_poll();
+            app.sys_changed();
         }, move || system::wifi_connect(&ssid, None));
+    }
+
+    /// A network was joined (from the list or the Join card): show it at once, without waiting
+    /// for the next reading, and select the Internet row, which now names it. The list closes,
+    /// so the selection must not stay where the network was.
+    pub fn wifi_joined(&mut self, ssid: &str) {
+        self.toast("Connected", ssid, 1);
+        for w in &mut self.sys.wifi {
+            w.in_use = w.ssid == ssid;
+        }
+        if self.sys.network.kind != "Cable" {
+            self.sys.network = Network { kind: "Wi-Fi", name: ssid.into() };
+        }
+        self.sys.wifi_open = false;
+        self.sys_changed();
+        if self.overlay == Overlay::Settings {
+            self.refresh_settings();
+            self.select_setting(SId::Internet);
+        }
+    }
+
+    /// The launcher changed the system: read it again now.
+    pub fn sys_changed(&mut self) {
+        self.sys.epoch += 1;
+        self.sys.polled = 0.0;
+        self.sys_poll();
     }
 
     /// Run `job` off the UI thread with `text` on row `id`, then `done` with its result.

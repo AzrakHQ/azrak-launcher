@@ -204,8 +204,7 @@ impl App {
                         if app.overlay == Overlay::WifiJoin {
                             app.back();
                         }
-                        app.toast("Connected", &ssid, 1);
-                        app.sys.wifi_open = false;
+                        app.wifi_joined(&ssid);
                     }
                     Err(e) => {
                         audio::play(Sound::Error);
@@ -217,11 +216,7 @@ impl App {
                         app.wj_push();
                     }
                 }
-                app.sys.polled = 0.0;
-                app.sys_poll();
-                if app.overlay == Overlay::Settings {
-                    app.refresh_settings();
-                }
+                app.sys_changed();
             }));
         });
     }
