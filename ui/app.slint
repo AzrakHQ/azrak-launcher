@@ -261,6 +261,7 @@ export component AppWindow inherits Window {
     // Installed, and Secure Boot's blue key screen (MokManager) comes at the restart.
     in property <bool> osi-mok;
     in property <string> osi-note;
+    in property <string> osi-small;
     in property <int> osi-sel;
     in property <float> osi-progress;
     in property <bool> osi-busy;
@@ -1901,14 +1902,28 @@ export component AppWindow inherits Window {
                     Text { text: round(root.osi-progress * 100) + "%"; font-size: (18px * S.k); font-weight: 600; color: Theme.text2; min-width: (48px * S.k); }
                 }
 
-                if root.osi-note != "": Rectangle { height: (22px * S.k); }
+                if root.osi-note != "": Rectangle { height: root.osi-phase == 3 ? (30px * S.k) : (22px * S.k); }
                 if root.osi-note != "": HorizontalLayout {
                     alignment: center;
+                    // Installing: "Keep the PC on" is the one thing to know, so it's large.
                     Text {
                         text: root.osi-note;
                         width: (720px * S.k);
-                        font-size: (18px * S.k);
-                        color: root.osi-phase == 2 ? Theme.warn : Theme.text3;
+                        font-size: root.osi-phase == 3 ? (28px * S.k) : (18px * S.k);
+                        font-weight: root.osi-phase == 3 ? 700 : 400;
+                        color: root.osi-phase == 2 ? Theme.warn : root.osi-phase == 3 ? Theme.text : Theme.text3;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+                }
+                if root.osi-small != "": Rectangle { height: (8px * S.k); }
+                if root.osi-small != "": HorizontalLayout {
+                    alignment: center;
+                    Text {
+                        text: root.osi-small;
+                        width: (720px * S.k);
+                        font-size: (15px * S.k);
+                        color: Theme.text3;
                         horizontal-alignment: center;
                         wrap: word-wrap;
                     }

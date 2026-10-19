@@ -271,6 +271,8 @@ impl App {
         let mut text_warn = false;
         // Secure Boot's key screen comes at the restart: its steps get their own panel.
         let mut mok = false;
+        // A small line under the note: how long it takes, or the installer's own words.
+        let mut small = String::new();
         let (title, text, note): (String, String, String) = match s.phase {
             Phase::Intro => ("Welcome to AzrakOS".into(),
                 "You're running it from the USB stick, and nothing on this PC has changed. Try it as long as you like, or install it so the PC starts straight into it.".into(),
@@ -290,7 +292,10 @@ impl App {
                  else { "AzrakOS replaces everything on this disk.".into() },
                  "This can't be undone.".into())
             }
-            Phase::Installing => ("Installing AzrakOS".into(), s.step.clone(), "This takes a few minutes. Keep the PC on.".into()),
+            Phase::Installing => {
+                small = "This takes a few minutes.".into();
+                ("Installing AzrakOS".into(), s.step.clone(), "Keep the PC on".into())
+            }
             Phase::Done => {
                 let nvidia_later = match &s.end {
                     Some(InstallEvent::Done { mok: m, nvidia_later, .. }) => { mok = *m; *nvidia_later }
@@ -302,9 +307,16 @@ impl App {
                  if nvidia_later && !mok { "This PC has an NVIDIA graphics card: its driver downloads by itself the first time the PC is online, then asks for a restart.".into() }
                  else { String::new() })
             }
-            Phase::Failed => ("Installation didn't finish".into(),
-                match &s.end { Some(InstallEvent::Failed(e)) => e.clone(), _ => "Something went wrong.".into() },
-                "Try again, or keep using AzrakOS from the USB stick.".into()),
+            // Plain words first; the installer's message is for whoever helps. Nothing promises the
+            // disk is untouched: it may have been erased already.
+            Phase::Failed => {
+                if let Some(InstallEvent::Failed(e)) = &s.end {
+                    small = format!("Details: {e}");
+                }
+                ("Installation didn't finish".into(),
+                 "Something went wrong while copying AzrakOS to the disk.".into(),
+                 "Try again, or keep trying AzrakOS from the USB stick.".into())
+            }
         };
         ui.set_osi_phase(s.phase as i32);
         ui.set_osi_title(title.into());
@@ -313,6 +325,7 @@ impl App {
         ui.set_osi_text_warn(text_warn);
         ui.set_osi_mok(mok);
         ui.set_osi_note(note.into());
+        ui.set_osi_small(small.into());
         ui.set_osi_sel(s.sel as i32);
         ui.set_osi_progress(s.progress);
         ui.set_osi_busy(s.loading);
