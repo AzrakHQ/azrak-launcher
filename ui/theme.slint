@@ -65,6 +65,8 @@ export global Icons {
     out property <image> wifi: @image-url("../assets/icons/wifi.svg");
     out property <image> lock: @image-url("../assets/icons/lock.svg");
     out property <image> shift: @image-url("../assets/icons/shift.svg");
+    out property <[image]> signal: [@image-url("../assets/icons/signal-1.svg"), @image-url("../assets/icons/signal-2.svg"),
+        @image-url("../assets/icons/signal-3.svg"), @image-url("../assets/icons/signal-4.svg")];
     out property <image> eye: @image-url("../assets/icons/eye.svg");
     out property <image> eye-off: @image-url("../assets/icons/eye-off.svg");
     out property <image> none;
@@ -207,6 +209,8 @@ export struct SettingData {
     group-first: bool, // rows of a section share one card
     group-last: bool,
     icon: string,     // before the value (Icons.get), e.g. "check" for Connected
+    signal: int,      // a Wi-Fi network's bars, 1–4, after the value (0: none)
+    lock: bool,       // a Wi-Fi network that needs a password
 }
 
 // kind 0 info, 1 ok, 2 error. image: a picture for the icon tile (app or game icon), if any.

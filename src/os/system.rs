@@ -65,8 +65,10 @@ fn run(program: &str, args: &[&str]) -> Result<String, String> {
 pub struct Network {
     /// "Wi-Fi", "Cable" or empty for none.
     pub kind: &'static str,
-    /// The Wi-Fi network's name.
+    /// The Wi-Fi network's name (or the cable's connection).
     pub name: String,
+    /// The Wi-Fi network connected too, even when a cable is the one in use.
+    pub wifi: String,
 }
 
 pub fn network() -> Network {
@@ -76,10 +78,11 @@ pub fn network() -> Network {
 fn parse_network(text: &str) -> Network {
     let rows: Vec<Vec<String>> = text.lines().map(nm_fields).collect();
     let connected = |kind: &str| rows.iter().find(|f| f.len() >= 3 && f[0] == kind && f[1] == "connected");
+    let wifi = connected("wifi").map(|f| f[2].clone()).unwrap_or_default();
     if let Some(f) = connected("ethernet") {
-        return Network { kind: "Cable", name: f[2].clone() };
+        return Network { kind: "Cable", name: f[2].clone(), wifi };
     }
-    connected("wifi").map(|f| Network { kind: "Wi-Fi", name: f[2].clone() }).unwrap_or_default()
+    if wifi.is_empty() { Network::default() } else { Network { kind: "Wi-Fi", name: wifi.clone(), wifi } }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -364,8 +367,10 @@ mod tests {
     #[test]
     fn reads_networkmanager() {
         assert_eq!(parse_network("ethernet:unavailable:\nwifi:connected:Home\\: 5G\nloopback:connected (externally):lo\n"),
-            Network { kind: "Wi-Fi", name: "Home: 5G".into() });
-        assert_eq!(parse_network("ethernet:connected:Wired connection 1\nwifi:connected:Home\n").kind, "Cable");
+            Network { kind: "Wi-Fi", name: "Home: 5G".into(), wifi: "Home: 5G".into() });
+        // A cable is used before Wi-Fi; the Wi-Fi network stays connected as a backup.
+        assert_eq!(parse_network("ethernet:connected:Wired connection 1\nwifi:connected:Home\n"),
+            Network { kind: "Cable", name: "Wired connection 1".into(), wifi: "Home".into() });
         assert_eq!(parse_network("wifi:disconnected:\n"), Network::default());
         let list = parse_wifi(":Cafe:40:\n*:Home\\: 5G:78:WPA2\n:Neighbour:90:WPA1 WPA2\n:Neighbour:30:WPA2\n::70:WPA2\n:Old:20:WEP\n");
         let names: Vec<_> = list.iter().map(|w| (w.ssid.as_str(), w.signal, w.secured, w.in_use)).collect();

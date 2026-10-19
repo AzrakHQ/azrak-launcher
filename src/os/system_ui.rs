@@ -18,6 +18,8 @@ pub struct SysUi {
     /// The Wi-Fi list is open, and what it found.
     pub wifi_open: bool,
     pub wifi: Vec<Wifi>,
+    /// "More networks…" was pressed: the list shows them all, not only the strongest.
+    pub wifi_all: bool,
     /// Devices in pairing mode found by the last search.
     pub found: Vec<Device>,
     /// Something in progress, shown on its row: (row, text).
@@ -85,19 +87,34 @@ impl App {
             (None, "Cable") => ("Cable · Connected".into(), 1),
             (None, kind) => (format!("{kind} · {}", s.network.name).into(), 1),
         };
-        r.hint = if s.wifi_open { "Choose a network below" } else { "Press to see Wi-Fi networks" }.into();
+        let cable = s.network.kind == "Cable";
+        r.hint = match (s.wifi_open, cable) {
+            (true, true) => "Press a network to join · the cable is used while it's plugged in",
+            (true, false) => "Press a network to join",
+            (false, _) => "Press to see Wi-Fi networks",
+        }.into();
         rows.push((SId::Internet, r));
         if s.wifi_open {
-            for (i, w) in s.wifi.iter().enumerate() {
+            // The strongest few, so the rest of SYSTEM (pairing a controller) stays in sight.
+            let shown = if s.wifi_all { s.wifi.len() } else { s.wifi.len().min(WIFI_SHOWN) };
+            for (i, w) in s.wifi.iter().enumerate().take(shown) {
                 let mut r = row(4, &w.ssid);
+                (r.signal, r.lock) = (bars(w.signal), w.secured);
                 if let Some(text) = busy(SId::WifiNet(i as u16)) {
                     r.value = text.into();
                 } else if w.in_use {
-                    (r.value, r.value_kind, r.icon) = ("Connected".into(), 1, "check".into());
-                } else {
-                    r.value = format!("{} · {}", if w.secured { "Secured" } else { "Open" }, strength(w.signal)).into();
+                    // With a cable in, Wi-Fi stays connected but isn't the one used.
+                    let text = if cable { "Connected · backup" } else { "Connected" };
+                    (r.value, r.value_kind, r.icon) = (text.into(), 1, "check".into());
+                } else if !w.secured {
+                    r.value = "Open · no password".into();
                 }
                 rows.push((SId::WifiNet(i as u16), r));
+            }
+            if shown < s.wifi.len() {
+                let mut r = row(4, "More networks…");
+                (r.value, r.value_kind) = (format!("{} more", s.wifi.len() - shown).into(), 3);
+                rows.push((SId::WifiMore, r));
             }
         }
 
@@ -161,12 +178,21 @@ impl App {
         match id {
             SId::Internet => {
                 self.sys.wifi_open = !self.sys.wifi_open;
+                self.sys.wifi_all = false;
                 if self.sys.wifi_open {
                     self.sys_task(SId::Internet, "Looking for Wi-Fi…", |app, list: Result<Vec<Wifi>, String>| match list {
                         Ok(list) => app.sys.wifi = list,
                         Err(e) => app.toast("Wi-Fi isn't available", &e, 2),
                     }, system::wifi_list);
                 }
+            }
+            SId::WifiMore => {
+                self.sys.wifi_all = true;
+                crate::audio::play(crate::audio::Sound::Select);
+                self.refresh_settings();
+                // The first of the networks just shown, where "More networks…" was.
+                self.select_setting(SId::WifiNet(WIFI_SHOWN as u16));
+                return true;
             }
             SId::WifiNet(i) => {
                 let Some(w) = self.sys.wifi.get(i as usize).cloned() else { return true };
@@ -301,8 +327,9 @@ impl App {
         for w in &mut self.sys.wifi {
             w.in_use = w.ssid == ssid;
         }
+        self.sys.network.wifi = ssid.into();
         if self.sys.network.kind != "Cable" {
-            self.sys.network = Network { kind: "Wi-Fi", name: ssid.into() };
+            self.sys.network = Network { kind: "Wi-Fi", name: ssid.into(), wifi: ssid.into() };
         }
         self.sys.wifi_open = false;
         self.sys_changed();
@@ -340,6 +367,19 @@ impl App {
 fn saved_wifi(ssid: &str) -> bool {
     std::process::Command::new("nmcli").args(["-t", "-f", "NAME,TYPE", "connection", "show"]).output()
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.replace("\\:", ":").strip_suffix(":802-11-wireless") == Some(ssid)))
+}
+
+/// Networks listed before "More networks…".
+const WIFI_SHOWN: usize = 6;
+
+/// Signal bars (1–4) for a signal strength in percent.
+fn bars(signal: u8) -> i32 {
+    match signal {
+        75.. => 4,
+        50..=74 => 3,
+        30..=49 => 2,
+        _ => 1,
+    }
 }
 
 fn strength(signal: u8) -> &'static str {

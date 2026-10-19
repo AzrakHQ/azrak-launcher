@@ -12,6 +12,7 @@ pub enum SId {
     // System (AzrakOS only; see os/system_ui.rs)
     Internet,
     WifiNet(u16),
+    WifiMore,
     BtPair,
     BtFound(u16),
     BtDevice(u16),
