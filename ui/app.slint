@@ -1797,6 +1797,22 @@ export component AppWindow inherits Window {
                 height: self.width;
                 background: @radial-gradient(circle, #1f4fd133 0%, #1f4fd100 65%);
             }
+            // The start screen's two drifting lights, so the screen is alive even before (or
+            // without) covers to drift behind it.
+            Rectangle {
+                x: root.width * (0.30 + 0.06 * sin(osi.t * 9deg)) - self.width / 2;
+                y: root.height * (0.35 + 0.05 * cos(osi.t * 7deg)) - self.height / 2;
+                width: (1100px * S.k);
+                height: self.width;
+                background: @radial-gradient(circle, #1f4fd12e 0%, #1f4fd100 65%);
+            }
+            Rectangle {
+                x: root.width * (0.70 + 0.05 * cos(osi.t * 8deg)) - self.width / 2;
+                y: root.height * (0.62 + 0.06 * sin(osi.t * 6deg)) - self.height / 2;
+                width: (1000px * S.k);
+                height: self.width;
+                background: @radial-gradient(circle, #8b5cf62e 0%, #8b5cf600 65%);
+            }
 
             VerticalLayout {
                 alignment: center;
