@@ -149,6 +149,10 @@ export component AppWindow inherits Window {
     in property <int> zone;
     in property <int> idx;
     in property <string> clock;
+    // A laptop's battery (src/battery.rs): shown next to the clock when the PC has one.
+    in property <bool> battery-shown;
+    in property <int> battery-percent;
+    in property <bool> battery-plugged;
     in property <string> app-version;
     in property <RunningData> running;
     in property <[ToastData]> toasts;
@@ -931,6 +935,59 @@ export component AppWindow inherits Window {
                     background: f ? #ffffff : ta.has-hover ? #ffffff14 : transparent;
                     Image { source: ic; colorize: f ? #0a0d18 : Theme.text2; width: (32px * S.k); height: (32px * S.k); }
                     ta := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, i + 2); } }
+                }
+                // The battery: green, amber at 20% or less, red at 10% or less (unless charging).
+                if root.battery-shown: bat := HorizontalLayout {
+                    property <color> level: root.battery-plugged ? Theme.ok
+                        : root.battery-percent <= 10 ? Theme.danger : root.battery-percent <= 20 ? Theme.warn : Theme.text;
+                    y: (20px * S.k);
+                    height: (64px * S.k);
+                    spacing: (10px * S.k);
+                    alignment: center;
+                    Rectangle {
+                        width: (46px * S.k);
+                        height: (24px * S.k);
+                        y: (20px * S.k);
+                        // The body, filled as far as there's charge, and the cap on its right.
+                        Rectangle {
+                            x: 0;
+                            width: parent.width - (4px * S.k);
+                            border-radius: (6px * S.k);
+                            border-width: (2px * S.k);
+                            border-color: bat.level.with-alpha(0.85);
+                            Rectangle {
+                                x: (4px * S.k);
+                                y: (4px * S.k);
+                                height: parent.height - (8px * S.k);
+                                width: max(2px * S.k, (parent.width - (8px * S.k)) * root.battery-percent / 100);
+                                border-radius: (3px * S.k);
+                                background: bat.level;
+                                animate width { duration: 400ms; }
+                            }
+                        }
+                        Rectangle {
+                            x: parent.width - (4px * S.k);
+                            y: (8px * S.k);
+                            width: (4px * S.k);
+                            height: (8px * S.k);
+                            border-radius: (2px * S.k);
+                            background: bat.level.with-alpha(0.85);
+                        }
+                    }
+                    // Charging: a bolt beside the number (inside the icon it vanished when nearly empty).
+                    if root.battery-plugged: Image {
+                        source: Icons.bolt;
+                        colorize: bat.level;
+                        width: (20px * S.k);
+                        height: self.width;
+                        y: (22px * S.k);
+                    }
+                    Text {
+                        text: root.battery-percent + "%";
+                        font-size: (24px * S.k);
+                        color: bat.level == Theme.text ? Theme.text2 : bat.level;
+                        vertical-alignment: center;
+                    }
                 }
                 Text {
                     text: root.clock;

@@ -271,6 +271,10 @@ pub struct App {
     /// "Try AzrakOS" (os/install.rs).
     pub held_start: Option<(bool, bool)>,
     pub wj: crate::os::wifi_join::WifiJoin,
+    /// The laptop's battery as last read, and the lowest level already warned about.
+    pub battery: Option<crate::battery::Battery>,
+    pub battery_warned: u8,
+    battery_read: f64,
     pub power: crate::os::power::PowerAsk,
     /// Notifications that arrived while a card (Join Wi-Fi, Restart now?) was open: they wait
     /// for it to close instead of covering it.
@@ -539,6 +543,9 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         osi: Default::default(),
         held_start: None,
         wj: Default::default(),
+        battery: None,
+        battery_warned: 100,
+        battery_read: 0.0,
         power: Default::default(),
         held_toasts: Vec::new(),
         pc: None,
@@ -611,6 +618,28 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
 }
 
 impl App {
+    /// Every 10 s: the battery next to the clock, and a notice when it runs low.
+    fn battery_tick(&mut self) {
+        let now = util::now_secs();
+        if now - self.battery_read < 10.0 {
+            return;
+        }
+        self.battery_read = now;
+        let battery = crate::battery::read();
+        if battery != self.battery {
+            let ui = self.ui();
+            ui.set_battery_shown(battery.is_some());
+            if let Some(b) = battery {
+                ui.set_battery_percent(b.percent as i32);
+                ui.set_battery_plugged(b.plugged);
+            }
+            self.battery = battery;
+        }
+        if let Some((title, text)) = battery.and_then(|b| crate::battery::notice(b, &mut self.battery_warned)) {
+            self.toast(title, &text, 2);
+        }
+    }
+
     /// The launcher's own start: the start screen (with its first-run setup), the catalog, the
     /// emulators, its own update check.
     pub fn start_launcher(&mut self, first_run: bool, stale: bool) {
@@ -1533,6 +1562,7 @@ impl App {
             ui.set_clock(clock.clone().into());
             self.clock = clock;
         }
+        self.battery_tick();
         let running = match self.live.first() {
             Some(s) => crate::RunningData { active: true, name: s.name.clone().into(), time: util::fmt_clock(util::now_secs() - s.since).into() },
             None => crate::RunningData::default(),
