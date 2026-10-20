@@ -947,11 +947,11 @@ export component AppWindow inherits Window {
                     alignment: center;
                     // Upright, like a phone's: the cap on top, filled from the bottom.
                     Rectangle {
-                        width: (16px * S.k);
-                        height: (28px * S.k);
-                        y: (18px * S.k);
+                        width: (18px * S.k);
+                        height: (30px * S.k);
+                        y: (17px * S.k);
                         Rectangle {
-                            x: (5px * S.k);
+                            x: (6px * S.k);
                             y: 0;
                             width: (6px * S.k);
                             height: (3px * S.k);
@@ -973,15 +973,15 @@ export component AppWindow inherits Window {
                                 background: bat.level;
                                 animate height { duration: 400ms; }
                             }
+                            // Charging: a white bolt inside, which shows on the fill and on the
+                            // empty part alike (a dark one vanished when the battery was low).
+                            if root.battery-plugged: Image {
+                                source: Icons.bolt;
+                                colorize: #ffffff;
+                                width: (14px * S.k);
+                                height: self.width;
+                            }
                         }
-                    }
-                    // Charging: a bolt beside the number (inside the icon it vanished when nearly empty).
-                    if root.battery-plugged: Image {
-                        source: Icons.bolt;
-                        colorize: bat.level;
-                        width: (20px * S.k);
-                        height: self.width;
-                        y: (22px * S.k);
                     }
                     Text {
                         text: root.battery-percent + "%";
