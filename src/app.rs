@@ -626,6 +626,9 @@ impl App {
         }
         self.battery_read = now;
         let battery = crate::battery::read();
+        // Warn only when two readings in a row (10 s apart) say it's on battery: a charger can
+        // read as unplugged for a moment (seen on the test laptop), which isn't worth a notice.
+        let steady = battery.is_some_and(|b| b.plugged) || self.battery.is_some_and(|b| !b.plugged);
         if battery != self.battery {
             let ui = self.ui();
             ui.set_battery_shown(battery.is_some());
@@ -635,7 +638,7 @@ impl App {
             }
             self.battery = battery;
         }
-        if let Some((title, text)) = battery.and_then(|b| crate::battery::notice(b, &mut self.battery_warned)) {
+        if let Some((title, text)) = battery.filter(|_| steady).and_then(|b| crate::battery::notice(b, &mut self.battery_warned)) {
             self.toast(title, &text, 2);
         }
     }
@@ -1529,7 +1532,7 @@ impl App {
                 self.set_focus(self.zone, 0);
             }
             if self.zone == Z_TOP && self.live.is_empty() && self.idx < 2 {
-                self.set_focus(Z_TOP, 2);
+                self.set_focus(Z_TOP, 3);
             }
             self.build_row();
             self.push_row();
@@ -1853,8 +1856,10 @@ impl App {
         audio::play(Sound::Move);
     }
 
+    /// The top bar's buttons: 0–1 a running game's Resume and Stop, 3 Settings, 4 Downloads. (2 was
+    /// a search button, which only led to the Library's own search: △ or / still gets there.)
     fn top_items(&self) -> Vec<i32> {
-        if self.live.is_empty() { vec![2, 3, 4] } else { vec![0, 1, 2, 3, 4] }
+        if self.live.is_empty() { vec![3, 4] } else { vec![0, 1, 3, 4] }
     }
 
     pub fn act(&mut self, a: Act) {
@@ -1938,7 +1943,6 @@ impl App {
                     Act::Confirm => match self.idx {
                         0 => self.resume_game(),
                         1 => self.stop_game(None),
-                        2 => self.start_search_edit(),
                         4 => self.open_downloads(None),
                         _ => self.open_settings(),
                     },

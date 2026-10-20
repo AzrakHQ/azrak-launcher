@@ -926,15 +926,16 @@ export component AppWindow inherits Window {
                     TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, 4); } }
                 }
                 // A quarter bigger than a desktop app's: read from the sofa.
-                for ic[i] in [Icons.search, Icons.gear, Icons.disk]: Rectangle {
+                // Settings (3) and Downloads (4); no search button: the Library has its own.
+                for ic[i] in [Icons.gear, Icons.disk]: Rectangle {
                     width: (64px * S.k);
                     height: (64px * S.k);
                     y: (20px * S.k);
                     border-radius: (32px * S.k);
-                    property <bool> f: root.zone == Zone.top && root.idx == i + 2 && root.overlay == 0;
+                    property <bool> f: root.zone == Zone.top && root.idx == i + 3 && root.overlay == 0;
                     background: f ? #ffffff : ta.has-hover ? #ffffff14 : transparent;
                     Image { source: ic; colorize: f ? #0a0d18 : Theme.text2; width: (32px * S.k); height: (32px * S.k); }
-                    ta := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, i + 2); } }
+                    ta := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, i + 3); } }
                 }
                 // The battery: green, amber at 20% or less, red at 10% or less (unless charging).
                 if root.battery-shown: bat := HorizontalLayout {
@@ -942,36 +943,36 @@ export component AppWindow inherits Window {
                         : root.battery-percent <= 10 ? Theme.danger : root.battery-percent <= 20 ? Theme.warn : Theme.text;
                     y: (20px * S.k);
                     height: (64px * S.k);
-                    spacing: (10px * S.k);
+                    spacing: (6px * S.k);
                     alignment: center;
+                    // Upright, like a phone's: the cap on top, filled from the bottom.
                     Rectangle {
-                        width: (46px * S.k);
-                        height: (24px * S.k);
-                        y: (20px * S.k);
-                        // The body, filled as far as there's charge, and the cap on its right.
+                        width: (16px * S.k);
+                        height: (28px * S.k);
+                        y: (18px * S.k);
                         Rectangle {
-                            x: 0;
-                            width: parent.width - (4px * S.k);
-                            border-radius: (6px * S.k);
+                            x: (5px * S.k);
+                            y: 0;
+                            width: (6px * S.k);
+                            height: (3px * S.k);
+                            border-radius: (1px * S.k);
+                            background: bat.level.with-alpha(0.85);
+                        }
+                        Rectangle {
+                            y: (3px * S.k);
+                            height: parent.height - (3px * S.k);
+                            border-radius: (4px * S.k);
                             border-width: (2px * S.k);
                             border-color: bat.level.with-alpha(0.85);
                             Rectangle {
-                                x: (4px * S.k);
-                                y: (4px * S.k);
-                                height: parent.height - (8px * S.k);
-                                width: max(2px * S.k, (parent.width - (8px * S.k)) * root.battery-percent / 100);
-                                border-radius: (3px * S.k);
+                                x: (3px * S.k);
+                                width: parent.width - (6px * S.k);
+                                height: max(2px * S.k, (parent.height - (6px * S.k)) * root.battery-percent / 100);
+                                y: parent.height - (3px * S.k) - self.height;
+                                border-radius: (2px * S.k);
                                 background: bat.level;
-                                animate width { duration: 400ms; }
+                                animate height { duration: 400ms; }
                             }
-                        }
-                        Rectangle {
-                            x: parent.width - (4px * S.k);
-                            y: (8px * S.k);
-                            width: (4px * S.k);
-                            height: (8px * S.k);
-                            border-radius: (2px * S.k);
-                            background: bat.level.with-alpha(0.85);
                         }
                     }
                     // Charging: a bolt beside the number (inside the icon it vanished when nearly empty).
