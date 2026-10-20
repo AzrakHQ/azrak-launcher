@@ -60,13 +60,14 @@ impl App {
         // First start: always get the latest official KytyPS5 (unless the user turned updates off).
         // Any start: fetch it if the emulator is missing.
         let kyty_needed = cfg.kyty_auto_update && ((first && !(managed && cfg.emulator_ok())) || !cfg.emulator_ok());
+        // The start screen waits for the game list and the Home screen's own pictures, nothing
+        // more: every game's pictures and details, and the emulators, keep coming in the
+        // background (the status line shows them). Waiting for them took minutes on a first
+        // start, and on the AzrakOS USB stick every start is a first start.
         self.boot = Boot {
             active: true,
             first,
             waiting_catalog: self.games.is_empty(),
-            waiting_art: first,
-            waiting_kyty: kyty_needed,
-            kyty_needed,
             started: Some(Instant::now()),
             f_catalog: if self.games.is_empty() { 0.0 } else { 1.0 },
             ..Default::default()
@@ -107,14 +108,9 @@ impl App {
         let b = &self.boot;
         let mut parts: Vec<(f32, f32)> = Vec::new();
         if b.first {
-            parts.push((0.12, b.f_catalog));
-            parts.push((0.25, b.f_art));
-            parts.push((0.18, b.f_covers));
+            parts.push((0.6, b.f_catalog));
         }
-        if b.kyty_needed {
-            parts.push((if b.first { 0.35 } else { 0.8 }, b.f_kyty));
-        }
-        parts.push((if parts.is_empty() { 1.0 } else { 0.1 }, b.f_img));
+        parts.push((if parts.is_empty() { 1.0 } else { 0.4 }, b.f_img));
         let total: f32 = parts.iter().map(|p| p.0).sum();
         parts.iter().map(|(w, f)| w * f).sum::<f32>() / total.max(0.001)
     }
@@ -135,7 +131,7 @@ impl App {
         let n = self.locals.len();
         let installed = format!("{n} installed game{} found", if n == 1 { "" } else { "s" });
         let detail = if b.ready && n == 0 {
-            "All set · add your games folder in Settings to play".to_string()
+            "All set · pick a game in the Library to play".to_string()
         } else if b.ready {
             format!("All set · {installed}")
         } else {
@@ -143,7 +139,6 @@ impl App {
         };
         // The step list, in players' words: Settings → Updates has the emulators' names and builds.
         let step = |label: &str, detail: String, state: i32| crate::BootStep { label: label.into(), detail: detail.into(), state };
-        let frac = |t: &str| t.rsplit(' ').next().filter(|x| x.contains('/')).map(|x| x.replace('/', " / ")).unwrap_or_default();
         let mut steps = Vec::new();
         steps.push(if b.cat_failed {
             step("Game list", "Using the saved list".into(), 3)
@@ -153,27 +148,9 @@ impl App {
             step("Game list", format!("{} games", self.groups.members.len()), 2)
         });
         steps.push(if b.waiting_catalog {
-            step("Pictures and details", String::new(), 0)
-        } else if b.waiting_art {
-            step("Pictures and details", frac(&b.art_text), 1)
-        } else {
-            step("Pictures and details", "Done".into(), 2)
-        });
-        // What games run on (today the PS5 emulator; PS4's and PC games' come as they're needed),
-        // named for all of them: the launcher isn't a PS5 app.
-        steps.push(if !b.kyty_needed {
-            if self.cfg.lock().unwrap().emulator_ok() { step("Game support", "Ready".into(), 2) } else { step("Game support", "Not installed".into(), 3) }
-        } else if b.waiting_kyty {
-            step("Game support", if b.f_kyty > 0.0 { format!("{}%", (b.f_kyty * 100.0).round()) } else { "Checking…".into() }, 1)
-        } else if b.kyty_note.starts_with("Could not") {
-            step("Game support", "Failed · retry in Settings".into(), 3)
-        } else {
-            step("Game support", "Ready".into(), 2)
-        });
-        steps.push(if b.waiting_catalog || b.waiting_art {
             step("Your Home screen", String::new(), 0)
         } else if !b.ready {
-            step("Your Home screen", frac(&b.covers_text), 1)
+            step("Your Home screen", format!("{}%", (b.f_img * 100.0).round()), 1)
         } else {
             step("Your Home screen", "Ready".into(), 2)
         });
@@ -408,9 +385,9 @@ impl App {
         self.show_row_background(self.sel, true);
         self.prefetch_neighbors();
         ui.invoke_focus_root();
-        if !self.boot.first {
-            self.warm_covers();
-        }
+        // The Library's covers, in the background (first start too: the start screen no longer
+        // waits for them).
+        self.warm_covers();
         // Background work that was hidden behind the splash now shows in the status line.
         if self.kyty.busy {
             let p = self.kyty.progress.clone();
