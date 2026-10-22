@@ -36,7 +36,6 @@ mod library;
 mod library_layout;
 mod present;
 mod psn;
-mod rename;
 mod sessions;
 mod settings;
 mod util;
@@ -104,8 +103,6 @@ fn main() {
     }
     // First: a signal that ends the launcher is logged (see app.rs).
     app::watch_exit_signals();
-    // An install from before the rename (PS5 Launcher) moves over first.
-    rename::migrate();
     if force_sync {
         // Keep the last-known-good cache if an external snapshot is invalid.
         if let Err(error) = catalog::sync(&|message| eprintln!("{message}")) {

@@ -293,7 +293,6 @@ fn owned_folder(job: &Job) -> Result<PathBuf> {
         Ok(metadata) => {
             ensure!(metadata.is_dir() && !metadata.file_type().is_symlink(), "Transfer folder is not a regular directory");
             ensure!(metadata.uid() == unsafe { libc::geteuid() }, "Transfer folder belongs to another user");
-            crate::rename::adopt_marker(&folder);
             let marker = std::fs::symlink_metadata(folder.join(MARKER)).context("Missing ownership marker")?;
             ensure!(marker.is_file() && !marker.file_type().is_symlink() && marker.nlink() == 1
                 && marker.uid() == unsafe { libc::geteuid() } && marker.len() == job.key.len() as u64,
@@ -1329,11 +1328,11 @@ mod tests {
     /// network namespace whose "VPN" (dummy0) can't reach the local seed:
     ///   unshare -rn sh -c 'ip link set lo up; ip link add dummy0 type dummy;
     ///     ip addr add 10.9.9.1/24 dev dummy0; ip link set dummy0 up;
-    ///     PS5_NETNS_TEST=1 target/release/deps/ps5_launcher-* --ignored vpn_binding'
+    ///     AZRAK_NETNS_TEST=1 target/release/deps/azrak-* --ignored vpn_binding'
     #[test]
     #[ignore]
     fn vpn_binding_keeps_traffic_off_every_other_route() {
-        if std::env::var_os("PS5_NETNS_TEST").is_none() { return; }
+        if std::env::var_os("AZRAK_NETNS_TEST").is_none() { return; }
         fn dummy(_: &str) -> Option<String> { Some("dummy0".into()) }
         fn loopback(_: &str) -> Option<String> { Some("lo".into()) }
         runtime().block_on(async {

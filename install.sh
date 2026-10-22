@@ -9,8 +9,6 @@
 set -euo pipefail
 
 APP=azrak
-# The name before Azrak: an older install is replaced (the launcher moves its settings itself).
-OLD=ps5-launcher
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
@@ -42,9 +40,7 @@ distro_hint() {
 
 uninstall() {
     bold "Removing Azrak Launcher"
-    for name in "$APP" "$OLD"; do
-        rm -f "$BIN_DIR/$name" "$BIN_DIR/$name.previous" "$APPS_DIR/$name.desktop" "$ICON_DIR/$name.svg" "$AUTOSTART_DIR/$name.desktop"
-    done
+    rm -f "$BIN_DIR/$APP" "$BIN_DIR/$APP.previous" "$APPS_DIR/$APP.desktop" "$ICON_DIR/$APP.svg" "$AUTOSTART_DIR/$APP.desktop"
     command -v update-desktop-database >/dev/null && update-desktop-database "$APPS_DIR" 2>/dev/null || true
     ok "Removed. Settings and cache are kept in ~/.config/$APP and ~/.cache/$APP (delete them to reset)."
 }
@@ -104,9 +100,6 @@ fi
 bold "$STEP  Installing"
 cd "$HERE"
 mkdir -p "$BIN_DIR" "$APPS_DIR" "$ICON_DIR"
-# An install from before the rename: its binary, menu entry and icon go (settings move on first start).
-[ -e "$AUTOSTART_DIR/$OLD.desktop" ] && AUTOSTART=1
-rm -f "$BIN_DIR/$OLD" "$BIN_DIR/$OLD.previous" "$APPS_DIR/$OLD.desktop" "$ICON_DIR/$OLD.svg" "$AUTOSTART_DIR/$OLD.desktop"
 install -m 755 "$BIN_SRC" "$BIN_DIR/$APP"
 install -m 644 "assets/$APP.svg" "$ICON_DIR/$APP.svg"
 cat > "$APPS_DIR/$APP.desktop" <<EOF

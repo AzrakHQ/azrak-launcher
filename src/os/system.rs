@@ -9,10 +9,9 @@ use std::process::Command;
 /// Written into the OS image (built in github.com/AzrakHQ/azrak-os).
 pub const MARKER: &str = "/usr/lib/azrak-os/release";
 
-/// Running on AzrakOS (or pretending to, for screenshots: `AZRAK_OS=1`). Also on a PS5 Launcher
-/// OS image that hasn't updated to AzrakOS yet.
+/// Running on AzrakOS (or pretending to, for screenshots: `AZRAK_OS=1`).
 pub fn on_os() -> bool {
-    std::env::var_os("AZRAK_OS").is_some_and(|v| v == "1") || Path::new(MARKER).exists() || Path::new(crate::rename::OLD_OS_MARKER).exists()
+    std::env::var_os("AZRAK_OS").is_some_and(|v| v == "1") || Path::new(MARKER).exists()
 }
 
 /// Run a system tool and wait at most `seconds` (some wait forever for missing hardware, e.g.

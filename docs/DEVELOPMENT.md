@@ -237,7 +237,7 @@ it in a network namespace to prove the binding):
 cargo test --release --offline --no-run
 unshare -rn sh -c 'ip link set lo up; ip link add dummy0 type dummy;
   ip addr add 10.9.9.1/24 dev dummy0; ip link set dummy0 up;
-  PS5_NETNS_TEST=1 target/release/deps/ps5_launcher-* --ignored vpn_binding'
+  AZRAK_NETNS_TEST=1 target/release/deps/azrak-* --ignored vpn_binding'
 ```
 
 The native backend is pinned to **librqbit 9.0.1** with rustls, on a dedicated
@@ -519,16 +519,6 @@ checks with `azrak --supports FEATURE`, is in [AZRAKOS.md](AZRAKOS.md).
 | `~/.local/share/azrak/kyty/` | Managed KytyPS5 builds and their shared saves and caches (`data/`) |
 
 ## Performance
-
-**From PS5 Launcher.** The project was called PS5 Launcher until v1.17. On its first start, an
-older install moves over ([src/rename.rs](../src/rename.rs), the only code that knows the old
-names): the `ps5-launcher` folders under `~/.config`, `~/.local/share` and `~/.cache` become
-`azrak`, the default `~/Games/PS5` and `~/Downloads/PS5` become `~/Games/Azrak` and
-`~/Downloads/Azrak`, every path saved in them is rewritten (settings, transfers, installs, play
-time, the emulators' state and links), download markers and PC game manifests get their new
-names, and an install.sh install gets the `azrak` binary, menu entry and icon. Releases also
-publish `ps5-launcher-linux-x86_64.tar.gz` (the same files, the binary also as `ps5-launcher`)
-for launchers that update from that name.
 
 - **Rendering:** the UI is drawn by the GPU through OpenGL. When nothing on screen moves, the
   launcher uses no CPU or GPU.

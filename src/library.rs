@@ -21,7 +21,6 @@ pub struct LocalGame {
 }
 
 pub fn read_param(dir: &Path) -> Option<LocalGame> {
-    crate::rename::adopt_manifest(dir);
     if let Some(m) = crate::pcgame::Manifest::read(dir) {
         return Some(LocalGame {
             id: sha1_hex(&dir.to_string_lossy())[..12].to_string(),

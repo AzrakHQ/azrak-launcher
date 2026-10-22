@@ -13,7 +13,7 @@ the OS can expect from the launcher. Change both sides together, and keep old ve
 
 | | Detected by | Shows | Pretend for screenshots |
 |---|---|---|---|
-| AzrakOS | `/usr/lib/azrak-os/release` exists (the OS writes the bundled launcher's `--version` into it). Also the older PS5 Launcher OS marker. | Settings → SYSTEM | `AZRAK_OS=1` |
+| AzrakOS | `/usr/lib/azrak-os/release` exists (the OS writes the bundled launcher's `--version` into it). | Settings → SYSTEM | `AZRAK_OS=1` |
 | The AzrakOS USB stick | AzrakOS, plus `rd.live.image` on the kernel command line and the stick's installer (`/usr/libexec/azrak-os/install`) | "Welcome to AzrakOS" (Try / Install) first, and Settings → SYSTEM → Install AzrakOS on this PC | `AZRAK_USB=1`, `AZRAK_INSTALLER=stand-in` |
 
 ## What the OS provides

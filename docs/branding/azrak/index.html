@@ -36,12 +36,11 @@
     .product img { width: 60px; height: 60px; flex: 0 0 60px; }
     .product h2 { margin: 0; font-weight: 500; font-size: 23px; line-height: 1.3; }
     .product h2 span { color: #65bdff; }
-    .proofs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; margin-top: 24px; }
+    .proofs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; margin-top: 24px; }
     .proof { min-width: 0; }
     h3 { margin: 0 0 10px; font-size: 11px; font-weight: 400; color: var(--muted); }
     .sample { display: flex; align-items: center; justify-content: center; gap: 16px; min-height: 140px; background: #0a101e; }
     .sample.light { background: #e9edf4; }
-    .sample.original { background: #0a101e; }
     .sample > img { width: 96px; height: 96px; }
     .sizes { padding: 12px; gap: 13px; }
     .size { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 12px; min-height: 78px; color: var(--muted); font-size: 10px; }
@@ -96,7 +95,7 @@
       <div class="edition">IDENTITY / 01<br>16 October 2026</div>
     </header>
     <section class="identity" aria-label="Azrak primary identity">
-      <img class="emblem" src="logo.svg" alt="Azrak AZ emblem in the original blue-and-white chamfered chassis">
+      <img class="emblem" src="logo.svg" alt="Azrak AZ emblem in its blue-and-white chamfered chassis">
       <div class="name">
         <h1><img class="wordmark" src="wordmark.svg" alt="AZRAK"></h1>
         <p class="descriptor">Launcher</p>
@@ -107,14 +106,13 @@
       <div class="product"><img src="logo.svg" alt=""><h2>Azrak Launcher</h2></div>
       <div class="product"><img src="logo.svg" alt=""><h2>Azrak<span>OS</span></h2></div>
     </section>
-    <section class="proofs" aria-label="Original logo comparison and small-size checks">
-      <div class="proof"><h3>ORIGINAL / P5</h3><div class="sample original"><img src="../../../assets/ps5-launcher.svg" alt="Original P5 emblem for comparison"></div></div>
+    <section class="proofs" aria-label="Light, dark and small-size checks">
       <div class="proof"><h3>AZRAK / LIGHT</h3><div class="sample light"><img src="logo.svg" alt="Azrak icon on a light background"></div></div>
       <div class="proof"><h3>AZRAK / DARK</h3><div class="sample"><img src="logo.svg" alt="Azrak icon on a dark background"></div></div>
       <div class="proof"><h3>ACTUAL SIZE / PX</h3><div class="sample sizes"><div class="size"><img class="s24" src="logo.svg" alt="Azrak at 24 pixels"><span>24</span></div><div class="size"><img class="s32" src="logo.svg" alt="Azrak at 32 pixels"><span>32</span></div><div class="size"><img class="s48" src="logo.svg" alt="Azrak at 48 pixels"><span>48</span></div></div></div>
     </section>
     <footer>
-      <div class="swatches"><span class="swatch"><i class="chip" style="--chip: #f5f7fb" aria-hidden="true"></i>Ice white</span><span class="swatch"><i class="chip" style="--chip: #0a6cff" aria-hidden="true"></i>Electric blue</span><span class="swatch"><i class="chip" style="--chip: #1b2b43" aria-hidden="true"></i>Original chassis</span></div>
+      <div class="swatches"><span class="swatch"><i class="chip" style="--chip: #f5f7fb" aria-hidden="true"></i>Ice white</span><span class="swatch"><i class="chip" style="--chip: #0a6cff" aria-hidden="true"></i>Electric blue</span><span class="swatch"><i class="chip" style="--chip: #1b2b43" aria-hidden="true"></i>Chassis</span></div>
       <div><a href="logo.svg">Logo SVG</a> &middot; <a href="wordmark.svg">Wordmark SVG</a></div>
     </footer>
   </main>
