@@ -277,6 +277,19 @@ fn fetch_remote(progress: &dyn Fn(String)) -> Result<usize, String> {
     Ok(changed)
 }
 
+/// Whether a published catalog differs from the local one. It reads only the 1 KB manifest, so
+/// it's asked at every start and every hour; the full sync (which imports every catalog) runs only
+/// when it says so. A new catalog is then in the Library minutes after it's published.
+pub fn published_changed() -> Result<bool, String> {
+    use sha2::{Digest, Sha256};
+    let manifest = crate::util::http_json(&format!("{}catalog.json", remote_base()))?;
+    Ok(SOURCES.iter().filter(|src| override_path(src).is_none()).any(|src| {
+        manifest["files"][src.file]["sha256"].as_str().is_some_and(|sha| {
+            std::fs::read(data_path(src)).ok().map(|bytes| format!("{:x}", Sha256::digest(&bytes))).as_deref() != Some(sha)
+        })
+    }))
+}
+
 /// When the published catalog was last checked (0: never).
 fn last_check() -> f64 {
     std::fs::read_to_string(cache_dir().join("catalog-checked")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0.0)

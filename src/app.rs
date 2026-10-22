@@ -657,13 +657,14 @@ impl App {
             self.start_sync(false);
         } else {
             self.start_enrich();
+            self.check_published();
         }
         // New releases are published daily; a launcher left open for days still picks them up.
         // AZRAK_CATALOG_INTERVAL (seconds): for testing reloads while something is open.
         let every = std::env::var("AZRAK_CATALOG_INTERVAL").ok().and_then(|s| s.parse::<f64>().ok()).filter(|s| *s >= 1.0)
-            .unwrap_or(crate::catalog::CATALOG_TTL);
+            .unwrap_or(3600.0);
         self.catalog_timer.start(slint::TimerMode::Repeated, Duration::from_secs_f64(every),
-            || with_app(|app| app.start_sync(false)));
+            || with_app(|app| app.check_published()));
     }
 }
 
@@ -1057,6 +1058,20 @@ impl App {
 
     /// Fetch the published catalog and reload. `by_hand` (Settings) always reports back; the
     /// automatic checks only speak up when there are new releases.
+    /// Sync when a newer catalog is published (a small check; see catalog::published_changed).
+    pub fn check_published(&mut self) {
+        if self.syncing {
+            return;
+        }
+        std::thread::spawn(|| {
+            match catalog::published_changed() {
+                Ok(true) => post(|app| app.start_sync(false)),
+                Ok(false) => {}
+                Err(error) => crate::log!("Published catalog not checked: {error}"),
+            }
+        });
+    }
+
     pub fn start_sync(&mut self, by_hand: bool) {
         if self.syncing {
             return;
