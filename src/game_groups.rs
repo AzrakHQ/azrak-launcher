@@ -9,11 +9,20 @@ pub struct Groups {
     by_game: Vec<usize>,
 }
 
+static EDITION: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(
+    r"(?i)\b(?:digital\s+)?(?:deluxe|ultimate|standard|premium|gold|complete|collector'?s|game of the year|goty|definitive)\s+edition\b|\b(?:all\s+dlc)\b"
+).unwrap());
+
 fn name_key(name: &str) -> String {
-    static EDITION: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(
-        r"(?i)\b(?:digital\s+)?(?:deluxe|ultimate|standard|premium|gold|complete|collector'?s|game of the year|goty|definitive)\s+edition\b|\b(?:all\s+dlc)\b"
-    ).unwrap());
     norm(&EDITION.replace_all(name, ""))
+}
+
+/// Looser than `name_key`, for artwork only: bracketed notes and a bare "Game of the Year" go too,
+/// so "Bloodborne: Game of the Year" (PC) finds "Bloodborne Game of the Year Edition (Complete
+/// Edition)" (PS4).
+pub fn art_key(name: &str) -> String {
+    static NOTES: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\([^()]*\)|\b(?:game of the year|goty)\b").unwrap());
+    norm(&NOTES.replace_all(&EDITION.replace_all(name, ""), ""))
 }
 
 impl Groups {

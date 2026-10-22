@@ -142,9 +142,12 @@ impl App {
     pub fn card_req(&self, gi: usize) -> Option<ImgReq> {
         let g = &self.games[gi];
         let info = g.info.as_ref();
+        // Steam's other art is wide: the release's own cover reads better on a 2:3 card.
+        let wide = info.is_some_and(|i| i.source.as_deref() == Some("steam"));
         info.and_then(|i| req_url(&i.portrait, 440, 0.0))
-            .or_else(|| info.and_then(|i| req_url(&i.master, 440, 0.0)))
+            .or_else(|| info.filter(|_| !wide).and_then(|i| req_url(&i.master, 440, 0.0)))
             .or_else(|| req_url(&g.g.cover, 440, if g.g.platform == crate::platform::Platform::Ps4 { crate::images::CROP_PS4_BAND } else { COVER_CROP }))
+            .or_else(|| info.and_then(|i| req_url(&i.master, 440, 0.0)))
             .or_else(|| info.and_then(|i| req_url(&i.hub, 640, 0.0)))
     }
 

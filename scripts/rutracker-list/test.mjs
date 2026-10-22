@@ -380,3 +380,46 @@ test('releases the launcher cannot play are left out by their tag', async () => 
     'My Friend Peppa Pig [EUR/RUS]', '[PS5] Ghost of Tsushima', '[PS4] Vampyr [EUR]', '[PS4] Moving Out [EUR]'])
     assert.ok(!UNPLAYABLE.test(title), title);
 });
+
+test("Steam artwork comes from Steam's own list, hashed paths included", async () => {
+  const { lookup, fillAssets } = await import('./steam.mjs');
+  const realFetch = globalThis.fetch;
+  const listed = id => ({ id, success: 1, assets: { asset_url_format: `steam/apps/${id}/\${FILENAME}?t=1`,
+    library_capsule: 'abc/library_capsule.jpg', library_capsule_2x: 'abc/library_capsule_2x.jpg', library_hero: 'def/library_hero.jpg' } });
+  globalThis.fetch = async (url, options) => {
+    const u = String(url);
+    if (u.includes('storesearch')) return Response.json({ items: [{ type: 'app', id: 3486530, name: 'Stupid Never Dies' }] });
+    if (u.includes('appdetails')) return Response.json({ 3486530: { success: true, data: { name: 'Stupid Never Dies' } } });
+    if (u.includes('GetItems')) {
+      const ids = JSON.parse(new URL(u).searchParams.get('input_json')).ids.map(i => i.appid);
+      const dlc = id => ({ id, success: 1, assets: { asset_url_format: `steam/apps/${id}/\${FILENAME}`, hero_capsule_2x: 'h/hero_capsule_2x.jpg' } });
+      return Response.json({ response: { store_items: ids.map(id => id === 7 ? { id, success: 2 } : id === 8 ? { id, success: 1, assets: {} }
+        : id === 9 ? dlc(id) : listed(id)) } });
+    }
+    if (options?.method === 'HEAD') return new Response('', { status: 404 });
+    return Response.json({ tier: 'gold' });
+  };
+  try {
+    const block = await lookup('Stupid Never Dies [Wine]', new Date('2026-10-22T00:00:00Z'));
+    assert.equal(block.assets.portrait, 'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3486530/abc/library_capsule_2x.jpg?t=1');
+    assert.equal(block.assets.hero, 'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/3486530/def/library_hero.jpg?t=1');
+    assert.equal(block.assets.logo, null);
+    assert.equal(block.partial, undefined, 'everything was answered');
+
+    const topics = [
+      { steam: { appid: 5, assets: { portrait: null, hero: null, logo: 'l' } } },
+      { steam: { appid: 6, assets: { portrait: 'mine', hero: 'mine', logo: null } } }, // complete: not asked
+      { steam: { appid: 7, assets: { portrait: null, hero: null, logo: null } } },     // Steam didn't answer
+      { steam: { appid: 8, assets: { portrait: null, hero: null, logo: null } } },     // has none
+      { steam: { appid: 9, assets: { portrait: null, hero: null, logo: null } } },     // DLC
+      { steam: { appid: null } },
+    ];
+    assert.equal(await fillAssets(topics), 2);
+    assert.match(topics[0].steam.assets.portrait, /\/5\/abc\/library_capsule_2x\.jpg/);
+    assert.equal(topics[0].steam.assets.logo, 'l', 'the rest is kept');
+    assert.equal(topics[1].steam.assets.portrait, 'mine');
+    assert.equal(topics[2].steam.assets.portrait, null);
+    assert.equal(topics[3].steam.assets.portrait, null);
+    assert.equal(topics[4].steam.assets.portrait, 'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/9/h/hero_capsule_2x.jpg');
+  } finally { globalThis.fetch = realFetch; }
+});

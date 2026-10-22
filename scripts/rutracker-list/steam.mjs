@@ -16,7 +16,8 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { platformFrom } from './platforms.mjs';
 
-const ASSETS = 'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps';
+const STORE = 'https://shared.akamai.steamstatic.com/store_item_assets';
+const ASSETS = `${STORE}/steam/apps`;
 const RETRY_DAYS = 30;
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 
@@ -169,6 +170,55 @@ async function exists(url) {
   } catch { return undefined; }
 }
 
+/** The artwork Steam lists for these apps, as { appid: { portrait, hero } } (null where an app has
+ * none; apps Steam didn't answer for are left out), or undefined when Steam couldn't be asked.
+ * Apps from 2024 on keep their files under hashed paths, which a guessed `library_600x900_2x.jpg`
+ * misses: only Steam's own list finds them. */
+export async function storeAssets(appids) {
+  const input = { ids: appids.map(appid => ({ appid })), context: { language: 'english', country_code: 'US' },
+    data_request: { include_assets: true } };
+  let body;
+  try {
+    const response = await fetch(`https://api.steampowered.com/IStoreBrowseService/GetItems/v1/?input_json=${encodeURIComponent(JSON.stringify(input))}`,
+      { signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) return undefined;
+    body = await response.json();
+  } catch { return undefined; }
+  const found = {};
+  for (const item of body?.response?.store_items || []) {
+    if (item.success !== 1) continue;
+    const assets = item.assets || {};
+    const url = file => file && assets.asset_url_format ? `${STORE}/${assets.asset_url_format.replace('${FILENAME}', file)}` : null;
+    // DLC (a PS5 release can be one on Steam) has no library portrait: its near-portrait capsule.
+    const portrait = assets.library_capsule_2x || assets.library_capsule || assets.hero_capsule_2x || assets.hero_capsule;
+    found[item.id] = { portrait: url(portrait), hero: url(assets.library_hero) };
+  }
+  return found;
+}
+
+/** Matches without a portrait or hero (from before Steam's own artwork list was read, or that had
+ * none then) take them from that list, 50 apps a request. Returns how many gained artwork. */
+export async function fillAssets(topics) {
+  const missing = topics.filter(topic => topic.steam?.appid && (!topic.steam.assets?.portrait || !topic.steam.assets?.hero));
+  const ids = [...new Set(missing.map(topic => topic.steam.appid))];
+  const listed = {};
+  for (let i = 0; i < ids.length; i += 50) {
+    if (i) await sleep(1000);
+    const batch = await storeAssets(ids.slice(i, i + 50));
+    if (!batch) break;
+    Object.assign(listed, batch);
+  }
+  let filled = 0;
+  for (const topic of missing) {
+    const art = listed[topic.steam.appid];
+    const had = topic.steam.assets || {};
+    if (!art || (had.portrait || !art.portrait) && (had.hero || !art.hero)) continue;
+    topic.steam = { ...topic.steam, assets: { ...had, portrait: had.portrait || art.portrait, hero: had.hero || art.hero } };
+    filled++;
+  }
+  return filled;
+}
+
 /** ProtonDB's tier for an app ("platinum", "gold", …), null if unrated, undefined if unreachable. */
 let protondbReachable = true;
 async function protondb(appid) {
@@ -225,14 +275,12 @@ export async function lookup(title, now = new Date(), { exact = false, ratings =
   const details = await get(`https://store.steampowered.com/api/appdetails?appids=${item.id}&l=english&cc=US`);
   const data = details?.[item.id]?.success ? details[item.id].data : null;
   if (!data) return { appid: null, query: name, checked_at: now.toISOString() };
-  const base = `${ASSETS}/${item.id}`;
-  const assets = {};
-  let partial = false;
-  for (const [key, file] of [['portrait', 'library_600x900_2x.jpg'], ['hero', 'library_hero.jpg'], ['logo', 'logo.png']]) {
-    const there = await exists(`${base}/${file}`);
-    if (there === undefined) partial = true;
-    assets[key] = there ? `${base}/${file}` : null;
-  }
+  const listed = (await storeAssets([item.id]))?.[item.id];
+  // Steam's list has no logo: it's where older apps keep theirs, or none.
+  const logo = `${ASSETS}/${item.id}/logo.png`;
+  const hasLogo = await exists(logo);
+  const assets = { portrait: listed?.portrait ?? null, hero: listed?.hero ?? null, logo: hasLogo ? logo : null };
+  let partial = !listed || hasLogo === undefined;
   const rating = ratings ? await protondb(item.id) : null;
   if (rating === undefined) partial = true;
   return steamBlock(item.id, data, assets, rating ?? null, now, partial);
@@ -282,6 +330,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const now = new Date();
   // --retry: look up unmatched releases again now (after the matching improved).
   const retry = args.includes('--retry');
+  // Artwork first: one request covers 50 matches, where a lookup takes seconds.
+  const filled = await fillAssets(catalog.topics);
+  if (filled) console.log(`${platform.label}: artwork found for ${filled} earlier matches`);
   const todo = lookupOrder(catalog.topics.filter(t => due(t, now, retry) && (!console_ || needsSteamArt(t)))).slice(0, limit);
   console.log(`${platform.label}: ${todo.length} topics to look up`);
   let found = 0, done = 0;

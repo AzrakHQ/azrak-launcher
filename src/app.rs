@@ -785,6 +785,7 @@ impl App {
                 g,
             });
         }
+        borrow_art(&mut out);
         self.games = out;
         self.groups = crate::game_groups::Groups::new(self.games.iter().map(|game| (&game.g, game.name.as_str())));
         self.refresh_locals();
@@ -3289,6 +3290,47 @@ mod net_retry_tests {
     }
 }
 
+/// Releases with no artwork at all (a new upload whose details aren't read yet, a PS4 game packed
+/// for PC) show another release's of the same game, from any console. Only the pictures: the text
+/// may be about another edition.
+pub fn borrow_art(games: &mut [GameV]) {
+    let has_art = |g: &GameV| g.info.as_ref().is_some_and(|i| !i.portrait.is_empty() || !i.master.is_empty());
+    let mut donors = HashMap::<String, usize>::new();
+    for (i, g) in games.iter().enumerate() {
+        if !has_art(g) && g.g.cover.is_empty() {
+            continue;
+        }
+        for key in [crate::game_groups::art_key(&g.name), crate::game_groups::art_key(&g.g.name)] {
+            if key.is_empty() {
+                continue;
+            }
+            // Official art beats a forum cover.
+            let better = donors.get(&key).is_none_or(|&d| !has_art(&games[d]) && has_art(g));
+            if better {
+                donors.insert(key, i);
+            }
+        }
+    }
+    for i in 0..games.len() {
+        if games[i].info.is_some() || !games[i].g.cover.is_empty() {
+            continue;
+        }
+        let Some(&d) = [&games[i].name, &games[i].g.name].iter().find_map(|n| donors.get(&crate::game_groups::art_key(n))) else { continue };
+        let (donor, platform) = (&games[d], games[i].g.platform);
+        let info = donor.info.as_ref().filter(|_| has_art(donor)).map(|i| Info {
+            source: i.source.clone(), master: i.master.clone(), hub: i.hub.clone(), logo: i.logo.clone(), portrait: i.portrait.clone(),
+            bg: i.bg.clone(), banner: i.banner.clone(), ..Default::default()
+        });
+        // PS4 box art has a blue "PS4" band, cut only from PS4 cards.
+        let cover = (info.is_none() && (donor.g.platform != crate::platform::Platform::Ps4 || platform == crate::platform::Platform::Ps4))
+            .then(|| donor.g.cover.clone());
+        games[i].info = info;
+        if let Some(cover) = cover {
+            games[i].g.cover = cover;
+        }
+    }
+}
+
 #[cfg(test)]
 mod art_tests {
     use super::*;
@@ -3313,5 +3355,29 @@ mod art_tests {
         // PC games: Steam only, even if a title ID happened to match something.
         assert_eq!(pick_art(Platform::Pc, Some(&steam), Some(&sony)).unwrap().source.as_deref(), Some("steam"));
         assert!(pick_art(Platform::Pc, None, Some(&sony)).is_none());
+    }
+
+    #[test]
+    fn releases_without_art_borrow_another_releases_pictures() {
+        let game = |name: &str, platform: Platform, cover: &str, info: Option<Info>| GameV {
+            g: Game { name: name.into(), platform, cover: cover.into(), ..Default::default() }, info, name: name.into(),
+            buckets: vec![], norm: String::new(), rel_day: 0, is_new: false, local: None,
+        };
+        let sony = Info { master: "https://sony/bb.png".into(), short: "About Bloodborne.".into(), ..Default::default() };
+        let mut games = vec![
+            game("Bloodborne Game of the Year Edition (Complete Edition)", Platform::Ps4, "https://forum/bb-ps4.png", Some(sony)),
+            game("Bloodborne: Game of the Year", Platform::Pc, "", None),
+            game("Toy Story 3", Platform::Ps4, "https://forum/ts3-ps4.png", None),
+            game("Toy Story 3", Platform::Pc, "", None),
+            game("Hollow Knight", Platform::Pc, "https://forum/hk.jpg", None),
+            game("Hollow Knight", Platform::Ps5, "", None),
+            game("Unknown Game", Platform::Ps5, "", None),
+        ];
+        borrow_art(&mut games);
+        let bb = games[1].info.as_ref().unwrap();
+        assert_eq!((bb.master.as_str(), bb.short.as_str()), ("https://sony/bb.png", ""), "pictures only");
+        assert_eq!(games[3].g.cover, "", "a PS4 band never lands on a PC card");
+        assert_eq!(games[5].g.cover, "https://forum/hk.jpg");
+        assert!(games[6].info.is_none() && games[6].g.cover.is_empty());
     }
 }

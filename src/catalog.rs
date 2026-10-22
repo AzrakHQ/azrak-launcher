@@ -77,7 +77,8 @@ impl Steam {
             hub: hero.clone(),
             bg: hero,
             logo: self.assets.logo.clone().unwrap_or_default(),
-            portrait: self.assets.portrait.clone().or_else(|| self.header.clone()).unwrap_or_default(),
+            // Only a real portrait: the wide header shrinks to a strip on a 2:3 card.
+            portrait: self.assets.portrait.clone().unwrap_or_default(),
             banner: self.header.clone().unwrap_or_default(),
             shots: self.shots.clone(),
             video: self.video.clone().unwrap_or_default(),
