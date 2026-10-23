@@ -196,7 +196,7 @@ impl App {
     pub fn push_row_text(&mut self) {
         let (name, sub) = match self.row.get(self.sel).copied() {
             None => (String::new(), String::new()),
-            Some(RowItem::All) => ("Game Library".into(), format!("{} games · {} releases", self.groups.members.len(), self.games.len())),
+            Some(RowItem::All) => ("Game Library".into(), format!("{} games · {} releases", self.library_total, self.games.len())),
             Some(RowItem::Local(l)) => {
                 let lv = &self.locals[l];
                 let sub = if let Some(s) = self.session_for_local(l) {
@@ -625,7 +625,9 @@ impl App {
         let mut status_counts = vec![0usize; n];
         let mut genre_counts = std::collections::HashMap::<&str, usize>::new();
         let mut genre_total = 0;
-        for members in &self.groups.members {
+        // As the grid: before a search, only the games it shows.
+        let shown = if words.is_empty() { self.browsable() } else { vec![true; self.groups.members.len()] };
+        for (members, _) in self.groups.members.iter().zip(shown).filter(|(_, shown)| *shown) {
             let mut status = vec![false; n];
             let mut buckets = HashSet::new();
             let mut any = false;
@@ -689,9 +691,9 @@ impl App {
         let rows = self.filtered.len().div_ceil(self.cols.max(1));
         let ui = self.ui();
         ui.set_grid_h((rows as f32 * self.row_h + 60.0) * self.scale);
-        ui.set_count_label(if self.filtered.len() == self.groups.members.len() {
+        ui.set_count_label(if self.filtered.len() == self.library_total {
             format!("{} games · {} releases", self.filtered.len(), self.games.len())
-        } else { format!("{} of {} games · {} releases", self.filtered.len(), self.groups.members.len(), self.games.len()) }.into());
+        } else { format!("{} of {} games · {} releases", self.filtered.len(), self.library_total, self.games.len()) }.into());
         ui.set_grid_empty(if !self.filtered.is_empty() {
             "".into()
         } else if self.games.is_empty() {

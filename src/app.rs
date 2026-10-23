@@ -164,6 +164,8 @@ pub struct App {
     pub cfg: Arc<Mutex<Config>>,
     pub games: Vec<GameV>,
     pub groups: crate::game_groups::Groups,
+    /// Games the Library shows before a search (see `browsable`); the rest come up when searched for.
+    pub library_total: usize,
     pub locals: Vec<LocalV>,
     pub library: Arc<Mutex<Vec<LocalGame>>>,
     pub art: psn::Shared,
@@ -456,6 +458,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         cfg: cfg.clone(),
         games: Vec::new(),
         groups: Default::default(),
+        library_total: 0,
         locals: Vec::new(),
         library,
         art,
@@ -868,18 +871,32 @@ impl App {
         self.sel = prev.and_then(|p| self.row.iter().position(|r| *r == p)).unwrap_or(self.sel.min(self.row.len().saturating_sub(1)));
     }
 
+    /// Whether each game's card shows in the Library before a search: it has a picture, or it's
+    /// yours (installed or downloading). A card with only a name looks broken among covers, so
+    /// those games come up only when searched for.
+    pub fn browsable(&self) -> Vec<bool> {
+        let downloading: std::collections::HashSet<i64> = self.downloads.snapshot().iter().map(|job| job.topic).collect();
+        self.groups.members.iter().map(|members| members.iter().any(|i| {
+            let game = &self.games[*i];
+            game.local.is_some() || downloading.contains(&game.g.id) || self.card_req(*i).is_some()
+        })).collect()
+    }
+
     pub fn build_genres(&mut self) {
+        let shown = self.browsable();
+        let members: Vec<&Vec<usize>> = self.groups.members.iter().zip(&shown).filter(|(_, shown)| **shown).map(|(m, _)| m).collect();
+        self.library_total = members.len();
         let mut counts: HashMap<&'static str, usize> = HashMap::new();
-        for members in &self.groups.members {
+        for members in &members {
             let buckets: std::collections::HashSet<_> = members.iter().flat_map(|i| self.games[*i].buckets.iter().copied()).collect();
             for b in buckets {
                 *counts.entry(b).or_default() += 1;
             }
         }
-        let mut list: Vec<(String, usize)> = vec![("All".into(), self.groups.members.len())];
-        let installed = self.groups.members.iter().filter(|members| members.iter().any(|i| self.games[*i].local.is_some())).count();
+        let mut list: Vec<(String, usize)> = vec![("All".into(), members.len())];
+        let installed = members.iter().filter(|members| members.iter().any(|i| self.games[*i].local.is_some())).count();
         list.push(("Installed".into(), installed));
-        let count = |f: &dyn Fn(&crate::compat::Entry) -> bool| self.groups.members.iter()
+        let count = |f: &dyn Fn(&crate::compat::Entry) -> bool| members.iter()
             .filter(|members| members.iter().any(|i| self.game_compat(&self.games[*i]).is_some_and(f))).count();
         // Linux results only: the launcher runs on Linux.
         list.push(("Playable".into(), count(&|e| e.in_game())));
@@ -892,12 +909,12 @@ impl App {
             self.platform_filter = None;
         } else {
             for p in self.consoles.clone() {
-                let n = self.groups.members.iter().filter(|m| m.iter().any(|i| self.games[*i].g.platform == p)).count();
+                let n = members.iter().filter(|m| m.iter().any(|i| self.games[*i].g.platform == p)).count();
                 list.push((format!("{} games only", p.label()), n));
             }
         }
         self.status_count = list.len();
-        list.push(("All genres".into(), self.groups.members.len()));
+        list.push(("All genres".into(), members.len()));
         let mut rest: Vec<(&str, usize)> = counts.into_iter().collect();
         rest.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
         list.extend(rest.into_iter().map(|(n, c)| (n.to_string(), c)));
@@ -922,11 +939,13 @@ impl App {
                 let a = crate::game_groups::version_key(&g.g.version);
                 !a.is_empty() && a == crate::game_groups::version_key(&self.locals[l].l.version)
             });
-            (installed_version, g.local.is_some(), !g.g.magnet.is_empty(),
+            (installed_version, g.local.is_some(), !g.g.magnet.is_empty(), self.card_req(i).is_some(),
                 g.info.as_ref().is_some_and(|info| !info.master.is_empty()), crate::game_groups::version_key(&g.g.version),
                 g.g.seeders.unwrap_or(0), g.g.id)
         };
-        let mut list: Vec<usize> = self.groups.members.iter().filter_map(|members| {
+        // Before a search, only games with a picture or yours; a search finds every game.
+        let shown = if words.is_empty() { self.browsable() } else { vec![true; self.groups.members.len()] };
+        let mut list: Vec<usize> = self.groups.members.iter().zip(shown).filter(|(_, shown)| *shown).filter_map(|(members, _)| {
             members.iter().copied().filter(|i| matches(*i)).max_by_key(|i| rank(*i))
         }).collect();
         let gs = &self.games;
@@ -1100,9 +1119,9 @@ impl App {
                         app.restore_grid_focus(&anchor);
                         if !first && new > 0 {
                             app.toast(&format!("{new} new release{} in the Library", if new == 1 { "" } else { "s" }),
-                                &format!("{} games · {} releases", app.groups.members.len(), app.games.len()), 1);
+                                &format!("{} games · {} releases", app.library_total, app.games.len()), 1);
                         } else if !first && by_hand {
-                            app.toast("No new releases", &format!("{} games · {} releases · seeders updated", app.groups.members.len(), app.games.len()), 1);
+                            app.toast("No new releases", &format!("{} games · {} releases · seeders updated", app.library_total, app.games.len()), 1);
                         }
                         app.set_status("", false);
                         app.boot_catalog_done();

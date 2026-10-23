@@ -145,7 +145,7 @@ impl App {
         } else if b.waiting_catalog {
             step("Game list", "Loading…".into(), 1)
         } else {
-            step("Game list", format!("{} games", self.groups.members.len()), 2)
+            step("Game list", format!("{} games", self.library_total), 2)
         });
         steps.push(if b.waiting_catalog {
             step("Your Home screen", String::new(), 0)
