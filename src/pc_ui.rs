@@ -39,7 +39,13 @@ impl App {
 
     fn pc_detected(&mut self, specs: Specs) {
         self.pc_checking = false;
+        self.pc_verdicts = [specs.verdict(Platform::Ps5), specs.verdict(Platform::Ps4)];
         self.pc = Some(specs);
+        // Which version each Library card shows depends on what plays here.
+        self.apply_filter();
+        if self.view == 1 {
+            self.push_grid();
+        }
         match self.overlay {
             Overlay::Hub => self.push_hub(),
             Overlay::Settings => self.refresh_settings(),

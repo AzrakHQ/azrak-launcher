@@ -54,8 +54,15 @@ pub fn art_key(name: &str) -> String {
 }
 
 impl Groups {
+    /// Years from the catalog's dates only (the tests' catalogs).
+    #[cfg(test)]
     pub fn new<'a>(games: impl IntoIterator<Item = (&'a Game, &'a str)>) -> Self {
-        let games: Vec<_> = games.into_iter().collect();
+        Self::with_years(games.into_iter().map(|(game, display)| (game, display, release_year(&game.release))))
+    }
+
+    /// `games`: each release, the name it's shown by and the year it came out, if known.
+    pub fn with_years<'a>(games: impl IntoIterator<Item = (&'a Game, &'a str, Option<i32>)>) -> Self {
+        let (games, years): (Vec<(&Game, &str)>, Vec<Option<i32>>) = games.into_iter().map(|(g, d, y)| ((g, d), y)).unzip();
         let mut parent: Vec<usize> = (0..games.len()).collect();
         fn root(parent: &mut [usize], index: usize) -> usize {
             if parent[index] != index { parent[index] = root(parent, parent[index]); }
@@ -65,7 +72,6 @@ impl Groups {
             let (a, b) = (root(parent, a), root(parent, b));
             parent[a] = b;
         }
-        let years: Vec<Option<i32>> = games.iter().map(|(game, _)| release_year(&game.release)).collect();
         let names = |game: &Game, display: &str| -> Vec<String> {
             let mut names = vec![name_key(&game.name), name_key(display)];
             names.retain(|name| !name.is_empty());
@@ -73,8 +79,13 @@ impl Groups {
             names
         };
         // First each platform's releases: same title ID, or same name a few years apart at most.
+        // Dated releases go first, so an undated one finds every game by its name and joins
+        // only when there's one (an undated Prey listed first can't tie 2006 to 2017).
         let mut aliases = HashMap::<String, Vec<usize>>::new();
-        for (index, (game, display)) in games.iter().enumerate() {
+        let mut order: Vec<usize> = (0..games.len()).collect();
+        order.sort_by_key(|&i| years[i].is_none());
+        for index in order {
+            let (game, display) = games[index];
             let ids = std::iter::once(&game.title_id).chain(game.title_ids.iter())
                 .filter(|id| crate::psn::valid_title_id(id)).map(|id| (format!("id:{}", id.to_ascii_uppercase()), true));
             let console = game.platform.label();
@@ -213,6 +224,10 @@ mod tests {
         // Editions dated a few years apart are one game.
         let games = [on(Pc, "Cyberpunk 2077", "2020"), on(Pc, "Cyberpunk 2077: Ultimate Edition", "2023")];
         assert_eq!(groups(&games).members.len(), 1);
+        // An undated release listed first doesn't tie them together.
+        let games = [on(Pc, "Prey", ""), on(Pc, "Prey", "2006"), on(Pc, "Prey", "2017")];
+        let grouped = groups(&games);
+        assert!(!grouped.releases(1).contains(&2));
         assert_eq!(release_year("4 September 2025"), Some(2025));
         assert_eq!(release_year("2013-2018"), Some(2013));
         assert_eq!(release_year(""), None);

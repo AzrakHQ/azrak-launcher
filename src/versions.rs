@@ -10,17 +10,58 @@ use crate::words::Availability;
 /// The order a game's platforms are shown in, the same on every game.
 pub const PLATFORMS: [Platform; 3] = [Platform::Ps5, Platform::Ps4, Platform::Pc];
 
-/// How well a release should play on this PC: a score (higher is better) and what it means.
-pub struct Fit {
-    pub score: u8,
-    pub headline: String,
-    /// The Fact colours: 1 good, 2 warning, 3 bad, 0 unknown.
-    pub kind: i32,
+/// How well a release should play on this PC, from what's known about it. Cheap: the
+/// Library works it out for every release on every keystroke.
+pub enum Plays<'a> {
+    /// A PS5 or PS4 release: the emulator's results and this PC's verdict.
+    Console(Outlook),
+    Native,
+    /// A Windows game: ProtonDB's tier, and whether Wine comes with the release.
+    Wine(Option<&'a str>, bool),
 }
 
-impl Fit {
-    fn new(score: u8, headline: &str, kind: i32) -> Fit {
-        Fit { score, headline: headline.into(), kind }
+impl Plays<'_> {
+    /// Higher plays better.
+    pub fn score(&self) -> u8 {
+        match self {
+            Plays::Console(o) => match o {
+                Outlook::PlaysHere => 6,
+                Outlook::Plays => 5,
+                Outlook::PlaysSlowly => 4,
+                Outlook::Untested => 3,
+                Outlook::StopsEarly => 2,
+                Outlook::DoesntStart => 1,
+                Outlook::CantRunHere => 0,
+            },
+            Plays::Native | Plays::Wine(Some("platinum" | "gold" | "native"), _) => 6,
+            Plays::Wine(Some("borked"), _) => 1,
+            Plays::Wine(Some(_), _) => 4,
+            Plays::Wine(None, _) => 3,
+        }
+    }
+
+    pub fn headline(&self) -> String {
+        match self {
+            Plays::Console(o) => o.headline().into(),
+            Plays::Native => "Native Linux game".into(),
+            Plays::Wine(Some("borked"), _) => "Doesn't run with Wine yet".into(),
+            Plays::Wine(Some(tier), _) => format!("Runs with Wine · {}", title_case(tier)),
+            Plays::Wine(None, true) => "Runs with Wine (included)".into(),
+            Plays::Wine(None, false) => "Needs Proton or Wine".into(),
+        }
+    }
+
+    /// The Fact colours: 1 good, 2 warning, 3 bad, 0 unknown.
+    pub fn kind(&self) -> i32 {
+        match self {
+            Plays::Console(o) => o.kind(),
+            _ => match self.score() {
+                6 => 1,
+                4 => 2,
+                1 => 3,
+                _ => 0,
+            },
+        }
     }
 }
 
@@ -44,50 +85,42 @@ fn availability_rank(a: Availability) -> u8 {
 
 impl App {
     /// How well release `i` should play here.
-    pub fn fit(&self, i: usize) -> Fit {
+    pub fn plays(&self, i: usize) -> Plays<'_> {
         let g = &self.games[i];
         let t = Target { game: Some(i), local: g.local };
         if g.g.platform != Platform::Pc {
-            // Runs for every release on every keystroke: the catalog entry's result directly.
             let compat = if g.local.is_some() { self.target_compat(t) } else { self.game_compat(g) };
-            let outlook = Outlook::of(compat, self.pc_verdict(g.g.platform).as_ref());
-            let score = match outlook {
-                Outlook::PlaysHere => 6,
-                Outlook::Plays => 5,
-                Outlook::PlaysSlowly => 4,
-                Outlook::Untested => 3,
-                Outlook::StopsEarly => 2,
-                Outlook::DoesntStart => 1,
-                Outlook::CantRunHere => 0,
-            };
-            return Fit::new(score, outlook.headline(), outlook.kind());
+            let verdict = self.pc_verdicts.get(usize::from(g.g.platform == Platform::Ps4)).and_then(Option::as_ref);
+            return Plays::Console(Outlook::of(compat, verdict));
         }
         if !self.pc_windows(t) {
-            return Fit::new(6, "Native Linux game", 1);
+            return Plays::Native;
         }
-        match g.g.steam.as_ref().and_then(|s| s.protondb.as_deref()) {
-            Some(tier @ ("platinum" | "gold" | "native")) => Fit::new(6, &format!("Runs with Wine · {}", title_case(tier)), 1),
-            Some("borked") => Fit::new(1, "Doesn't run with Wine yet", 3),
-            Some(tier) => Fit::new(4, &format!("Runs with Wine · {}", title_case(tier)), 2),
-            None if g.g.wine => Fit::new(3, "Runs with Wine (included)", 0),
-            None => Fit::new(3, "Needs Proton or Wine", 0),
-        }
+        Plays::Wine(g.g.steam.as_ref().and_then(|s| s.protondb.as_deref()), g.g.wine)
+    }
+
+    /// Which version of a game to pick, the one you have aside: how well it plays here,
+    /// whether anyone shares it, a picture for its card, then the platform. "Best for this PC"
+    /// and the release a card shows both come from it.
+    fn play_rank(&self, i: usize) -> impl Ord + use<> {
+        let g = &self.games[i];
+        let availability = Availability::of(g.g.seeders);
+        (self.plays(i).score(), availability != Availability::None, self.card_req(i).is_some(),
+            platform_preference(g.g.platform), availability_rank(availability))
     }
 
     /// What makes one release a better pick than another, best highest: the one you have, one
-    /// you can get, how well it plays here, whether anyone shares it, then the platform; then
-    /// a picture for its card, the newest version, the most shared.
+    /// you can get, then `play_rank`; then the newest version, the most shared.
     pub fn release_rank(&self, i: usize) -> impl Ord + use<> {
         let g = &self.games[i];
         let installed_version = g.local.is_some_and(|l| {
             let a = crate::game_groups::version_key(&g.g.version);
             !a.is_empty() && a == crate::game_groups::version_key(&self.locals[l].l.version)
         });
-        let availability = Availability::of(g.g.seeders);
         (
             (installed_version, g.local.is_some(), !g.g.magnet.is_empty()),
-            (self.fit(i).score, availability != Availability::None, platform_preference(g.g.platform), availability_rank(availability)),
-            (self.card_req(i).is_some(), g.info.as_ref().is_some_and(|info| !info.master.is_empty())),
+            self.play_rank(i),
+            g.info.as_ref().is_some_and(|info| !info.master.is_empty()),
             (crate::game_groups::version_key(&g.g.version), g.g.seeders.unwrap_or(0), g.g.id),
         )
     }
@@ -111,10 +144,7 @@ impl App {
         if versions.len() < 2 {
             return None;
         }
-        versions.iter().max_by_key(|(p, i)| {
-            let availability = Availability::of(self.games[*i].g.seeders);
-            (self.fit(*i).score, availability != Availability::None, platform_preference(*p), availability_rank(availability))
-        }).map(|(p, _)| *p)
+        versions.iter().max_by_key(|(_, i)| self.play_rank(*i)).map(|(p, _)| *p)
     }
 
     /// Show the game on another platform: its best release there.
@@ -129,6 +159,8 @@ impl App {
             self.open_hub(Target { game: Some(release), local: self.games[release].local });
         }
         self.set_focus(Z_VERSIONS, i as i32);
+        // Opening the page scrolled it to the top: bring the row back into view.
+        self.scroll_hub();
     }
 
     /// The game's name on its card: on several platforms, the plainest of its releases' names
@@ -170,17 +202,18 @@ impl App {
     /// The Game Hub's "Play it on" row: one tile per platform.
     pub fn version_tiles(&self, t: Target) -> Vec<crate::VersionData> {
         let Some(current) = t.game else { return Vec::new() };
-        let versions = self.platform_versions(current);
+        let shown = self.games[current].g.platform;
+        // The shown platform's tile is the release on screen; "Best for this PC" weighs the
+        // tiles as they read.
+        let versions: Vec<(Platform, usize)> = self.platform_versions(current).into_iter()
+            .map(|(p, best)| (p, if p == shown { current } else { best })).collect();
         if versions.len() < 2 {
             return Vec::new();
         }
         let best = self.best_platform(&versions);
-        let shown = self.games[current].g.platform;
-        versions.iter().map(|&(p, best_release)| {
-            // The shown platform's tile describes the release on screen.
-            let i = if p == shown { current } else { best_release };
+        versions.iter().map(|&(p, i)| {
             let g = &self.games[i];
-            let fit = self.fit(i);
+            let plays = self.plays(i);
             let detail = if g.local.is_some() {
                 "Installed".to_string()
             } else {
@@ -189,8 +222,8 @@ impl App {
             };
             crate::VersionData {
                 platform: p.label().into(),
-                verdict: fit.headline.into(),
-                verdict_kind: fit.kind,
+                verdict: plays.headline().into(),
+                verdict_kind: plays.kind(),
                 detail: detail.into(),
                 best: best == Some(p),
                 current: p == shown,

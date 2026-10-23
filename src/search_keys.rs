@@ -134,13 +134,23 @@ impl App {
         if self.query.trim().is_empty() {
             self.cfg.lock().unwrap().recent_searches.iter().take(MAX_SUGGESTIONS).map(|q| (Suggestion::Recent(q.clone()), q.clone())).collect()
         } else {
-            // Named as their cards are; two cards by one name say which platform each is.
+            // Named as their cards are. Two cards by one name are told apart by year (Doom 2016,
+            // the classic Doom), else by their platforms (a card can span several).
             let games: Vec<(usize, String)> = self.filtered.iter().take(MAX_SUGGESTIONS).map(|&i| (i, self.game_title(i))).collect();
-            games.iter().map(|(i, name)| (Suggestion::Game(self.games[*i].g.id), if games.iter().filter(|(_, o)| o == name).count() > 1 {
-                format!("{name} · {}", self.games[*i].g.platform.label())
-            } else {
-                name.clone()
-            })).collect()
+            let year = |i: usize| crate::game_groups::release_year(&self.games[i].g.release);
+            games.iter().map(|&(i, ref name)| {
+                let twins: Vec<usize> = games.iter().filter(|(_, o)| o == name).map(|(j, _)| *j).collect();
+                let label = if twins.len() < 2 {
+                    name.clone()
+                } else if let Some(y) = year(i).filter(|y| twins.iter().filter(|&&j| year(j) == Some(*y)).count() == 1) {
+                    format!("{name} ({y})")
+                } else {
+                    let platforms: Vec<&str> = crate::versions::PLATFORMS.iter()
+                        .filter(|p| self.groups.releases(i).iter().any(|&r| self.games[r].g.platform == **p)).map(|p| p.label()).collect();
+                    format!("{name} · {}", platforms.join(" · "))
+                };
+                (Suggestion::Game(self.games[i].g.id), label)
+            }).collect()
         }
     }
 

@@ -296,6 +296,8 @@ pub struct App {
     held_toasts: Vec<ToastData>,
     /// This PC's processor, memory and graphics (read in the background at start).
     pub pc: Option<crate::pc::Specs>,
+    /// This PC's verdict for PS5 and PS4 games, worked out once when its specs are read.
+    pub pc_verdicts: [Option<crate::pc::Verdict>; 2],
     pub pc_checking: bool,
     pub boot: crate::boot::Boot,
     pub kyty: crate::kyty_ui::KytyUi,
@@ -570,6 +572,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         power: Default::default(),
         held_toasts: Vec::new(),
         pc: None,
+        pc_verdicts: [None, None],
         pc_checking: false,
         boot: Default::default(),
         kyty: Default::default(),
@@ -812,7 +815,9 @@ impl App {
         }
         borrow_art(&mut out);
         self.games = out;
-        self.groups = crate::game_groups::Groups::new(self.games.iter().map(|game| (&game.g, game.name.as_str())));
+        // The year from the catalog's date, else from the store's.
+        self.groups = crate::game_groups::Groups::with_years(self.games.iter().map(|game| (&game.g, game.name.as_str(),
+            crate::game_groups::release_year(&game.g.release).or_else(|| (game.rel_day != 0).then(|| util::civil_from_days(game.rel_day).0)))));
         borrow_group_art(&mut self.games, &self.groups);
         self.refresh_locals();
     }
@@ -990,7 +995,7 @@ impl App {
             6 => {
                 // Linux results best first, then results from other OSes, untested last; ties by name.
                 let rank = |i: usize| self.game_compat(&gs[i]).map(|e| e.status as u8 + if e.on_linux { 0 } else { 4 }).unwrap_or(9);
-                list.sort_by(|a, b| rank(*a).cmp(&rank(*b)).then_with(|| gs[*a].name.to_lowercase().cmp(&gs[*b].name.to_lowercase())))
+                list.sort_by_cached_key(|i| (rank(*i), self.game_title(*i).to_lowercase()))
             }
             _ => {
                 let newest = |i: usize| self.groups.releases(i).iter().map(|index| gs[*index].g.id).max().unwrap_or(gs[i].g.id);
@@ -3427,7 +3432,7 @@ mod net_retry_tests {
 /// for PC) show another release's of the same game, from any console. Only the pictures: the text
 /// may be about another edition.
 pub fn borrow_art(games: &mut [GameV]) {
-    let has_art = |g: &GameV| g.info.as_ref().is_some_and(|i| !i.portrait.is_empty() || !i.master.is_empty());
+    let has_art = has_official_art;
     let mut donors = HashMap::<String, usize>::new();
     for (i, g) in games.iter().enumerate() {
         if !has_art(g) && g.g.cover.is_empty() {
