@@ -210,7 +210,7 @@ impl App {
                                 app.toast_app("Update available", &format!("Azrak Launcher {} can be installed from Settings.", rel.version), 0);
                             }
                         } else if manual {
-                            app.toast_app("Azrak Launcher is up to date", &format!("You have the latest version, {}.", current_version()), 1);
+                            app.toast_app("You're up to date", &format!("You have the latest version, {}.", current_version()), 1);
                         }
                     }
                     Err(e) => {
@@ -267,7 +267,8 @@ impl App {
                 match res {
                     Ok(()) => {
                         app.upd.installed = Some(rel.version.clone());
-                        app.toast_app("Update ready", &format!("Azrak Launcher {} starts the next time you open it. To switch now, choose Settings → Updates → Azrak Launcher.", rel.version), 1);
+                        crate::log!("launcher update {} installed", rel.version);
+                        app.toast_update_ready(&rel.version);
                     }
                     Err(e) => {
                         crate::log!("launcher update failed: {e}");

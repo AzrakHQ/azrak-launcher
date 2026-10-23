@@ -213,6 +213,7 @@ pub struct App {
     pub grid_window: (usize, usize),
     pub grid_model: Rc<VecModel<crate::CardRow>>,
     pub tile_model: Rc<VecModel<crate::TileData>>,
+    pub toast_model: Rc<VecModel<ToastData>>,
 
     pub hub: Option<Target>,
     pub hub_actions: Vec<ActionDef>,
@@ -286,7 +287,7 @@ pub struct App {
     pub power: crate::os::power::PowerAsk,
     /// Notifications that arrived while a card (Join Wi-Fi, Restart now?) was open: they wait
     /// for it to close instead of covering it.
-    held_toasts: Vec<(String, String, i32, Option<slint::Image>, bool, String)>,
+    held_toasts: Vec<ToastData>,
     /// This PC's processor, memory and graphics (read in the background at start).
     pub pc: Option<crate::pc::Specs>,
     pub pc_checking: bool,
@@ -504,6 +505,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         grid_window: (0, 0),
         grid_model: Rc::new(VecModel::default()),
         tile_model: Rc::new(VecModel::default()),
+        toast_model: Rc::new(VecModel::default()),
         hub: None,
         hub_actions: Vec::new(),
         hub_shots: Vec::new(),
@@ -577,6 +579,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
     };
     ui.set_grid_rows(ModelRc::from(app.grid_model.clone()));
     ui.set_tiles(ModelRc::from(app.tile_model.clone()));
+    ui.set_toasts(ModelRc::from(app.toast_model.clone()));
     ui.set_downloads(ModelRc::from(app.download_model.clone()));
     app.set_catalog(catalog.games.clone());
     app.relayout();
@@ -1381,7 +1384,7 @@ impl App {
         self.my_results.reminded = util::now_secs();
         self.my_results.save();
         self.toast_action(&format!("You've rated {n} game{} you played", if n == 1 { "" } else { "s" }),
-            "Click to share your results with the emulator communities.", 0, "share");
+            "Share your results with the emulator communities.", 0, "share", "Share");
     }
 
     /// "How far did it get?": saves your result on this PC. `after_play` adds "Not now".
@@ -1580,11 +1583,11 @@ impl App {
                     None => (format!("{} closed right after starting", e.name), format!("{emulator} may not support it yet.")),
                 };
                 let more = match (&saved, pc) {
-                    (None, _) => String::new(),
-                    (Some(_), true) => " Click to see its log.".into(),
-                    (Some(_), false) => format!(" Click to see its log; it's saved for your next report to {emulator}."),
+                    (Some(_), false) => format!(" Its log is saved for your next report to {emulator}."),
+                    _ => String::new(),
                 };
-                self.toast_game_action(&what.0, &format!("{}{more}", what.1), 2, &e.game_id, &action);
+                let button = if saved.is_some() { "See the log" } else { "" };
+                self.toast_game_action(&what.0, &format!("{}{more}", what.1), 2, &e.game_id, &action, button);
             } else {
                 self.toast_game(&e.name, &format!("Played for {played}"), 1, &e.game_id);
             }
@@ -3062,39 +3065,61 @@ impl App {
         self.toast_full(text, sub, kind, None, false);
     }
 
-    /// Notification with the launcher's own icon (updates).
+    /// Notification from the launcher itself (updates): its icon, and its name above the title.
     pub fn toast_app(&mut self, text: &str, sub: &str, kind: i32) {
-        self.toast_full(text, sub, kind, None, true);
+        let mut t = toast_data(text, sub, kind);
+        (t.app, t.kicker) = (true, "AZRAK LAUNCHER".into());
+        self.notify(t);
     }
 
     /// Notification with a game's tile as its icon.
     pub fn toast_game(&mut self, text: &str, sub: &str, kind: i32, game_id: &str) {
-        let img = self.locals.iter().position(|l| l.l.id == game_id)
-            .and_then(|l| self.tile_req(RowItem::Local(l)))
-            .and_then(|r| self.images.get(&r.key));
+        let img = self.game_tile(game_id);
         self.toast_full(text, sub, kind, img, false);
     }
 
-    /// A notification that does `action` when clicked (see `toast_clicked`).
-    pub fn toast_action(&mut self, text: &str, sub: &str, kind: i32, action: &str) {
-        self.toast_with(text, sub, kind, None, false, action);
+    fn game_tile(&mut self, game_id: &str) -> Option<slint::Image> {
+        self.locals.iter().position(|l| l.l.id == game_id)
+            .and_then(|l| self.tile_req(RowItem::Local(l)))
+            .and_then(|r| self.images.get(&r.key))
     }
 
-    pub fn toast_game_action(&mut self, text: &str, sub: &str, kind: i32, game_id: &str, action: &str) {
-        let img = self.locals.iter().position(|l| l.l.id == game_id)
-            .and_then(|l| self.tile_req(RowItem::Local(l)))
-            .and_then(|r| self.images.get(&r.key));
-        self.toast_with(text, sub, kind, img, false, action);
+    /// A notification that does `action` when clicked (see `toast_clicked`), with a button saying
+    /// what that is.
+    pub fn toast_action(&mut self, text: &str, sub: &str, kind: i32, action: &str, button: &str) {
+        self.toast_with(text, sub, kind, None, false, action, button);
+    }
+
+    pub fn toast_game_action(&mut self, text: &str, sub: &str, kind: i32, game_id: &str, action: &str, button: &str) {
+        let img = self.game_tile(game_id);
+        self.toast_with(text, sub, kind, img, false, action, button);
     }
 
     pub fn toast_full(&mut self, text: &str, sub: &str, kind: i32, image: Option<slint::Image>, app: bool) {
-        self.toast_with(text, sub, kind, image, app, "");
+        self.toast_with(text, sub, kind, image, app, "", "");
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn toast_with(&mut self, text: &str, sub: &str, kind: i32, image: Option<slint::Image>, app: bool, action: &str, button: &str) {
+        let mut t = toast_data(text, sub, kind);
+        (t.has_image, t.image, t.app, t.action, t.button) = (image.is_some(), image.unwrap_or_default(), app, action.into(), button.into());
+        self.notify(t);
+    }
+
+    /// The new version is installed: one click from the button that starts it. (Ready while the
+    /// start screen is up, it's told when the Home screen shows: see `boot_finish`.)
+    pub fn toast_update_ready(&mut self, version: &str) {
+        if self.boot.active { return; }
+        let mut t = toast_data(&format!("Version {version} is ready"), "Restart the launcher to start using it.", 1);
+        (t.app, t.kicker, t.action, t.button) = (true, "AZRAK LAUNCHER".into(), "app-update".into(), "Restart in Settings".into());
+        // Worth more than a glance: it stays a while.
+        t.life = 20_000;
+        self.notify(t);
     }
 
     /// Clicking a notification does its action and closes it.
     pub fn toast_clicked(&mut self, id: i32, action: &str) {
-        self.toasts.retain(|t| t.id != id);
-        self.push_toasts();
+        self.toast_dismiss(id);
         if let Some(path) = action.strip_prefix("log:") {
             open_url(path);
             return;
@@ -3103,6 +3128,7 @@ impl App {
             "downloads" => self.open_downloads(None),
             "share" => self.open_share_setting(),
             "this-pc" => self.open_setting(crate::settings::SId::ThisPc),
+            "app-update" => self.open_setting(crate::settings::SId::AppUpdate),
             _ => {}
         }
     }
@@ -3115,38 +3141,42 @@ impl App {
     /// Show the notifications held while a card was open.
     fn release_toasts(&mut self) {
         if !self.modal_open() {
-            for (text, sub, kind, image, app, action) in std::mem::take(&mut self.held_toasts) {
-                self.toast_with(&text, &sub, kind, image, app, &action);
+            for t in std::mem::take(&mut self.held_toasts) {
+                self.notify(t);
             }
         }
     }
 
-    pub fn toast_with(&mut self, text: &str, sub: &str, kind: i32, image: Option<slint::Image>, app: bool, action: &str) {
+    pub fn notify(&mut self, mut t: ToastData) {
         // A card is a question being answered: news can wait until it closes, errors can't.
-        if self.modal_open() && kind != 2 {
-            self.held_toasts.push((text.into(), sub.into(), kind, image, app, action.into()));
+        if self.modal_open() && t.kind != 2 {
+            self.held_toasts.push(t);
             return;
         }
         self.toast_seq += 1;
         let id = self.toast_seq;
-        self.toasts.push(ToastData {
-            id,
-            text: text.into(),
-            sub: sub.into(),
-            kind,
-            has_image: image.is_some(),
-            image: image.unwrap_or_default(),
-            app,
-            action: action.into(),
-        });
-        if self.toasts.len() > 3 {
-            self.toasts.remove(0);
+        t.id = id;
+        if t.life == 0 {
+            // Long enough to read: ~4 s plus reading time for the message; errors stay longer.
+            let chars = (t.text.chars().count() + t.sub.chars().count()) as i32;
+            t.life = (3500 + chars * 45).clamp(4000, 10000).max(if t.kind == 2 { 8000 } else { 0 });
+        }
+        let life = t.life as u64;
+        self.toasts.push(t);
+        // Three at most: the oldest makes room.
+        if let Some(oldest) = self.toasts.iter().filter(|t| !t.leaving).nth(3).and(self.toasts.iter().find(|t| !t.leaving)).map(|t| t.id) {
+            self.toast_dismiss(oldest);
         }
         self.push_toasts();
-        // Long enough to read: ~4 s plus reading time for the message; errors stay longer.
-        let chars = (text.chars().count() + sub.chars().count()) as u64;
-        let ms = (3500 + chars * 45).clamp(4000, 10000).max(if kind == 2 { 8000 } else { 0 });
-        slint::Timer::single_shot(Duration::from_millis(ms), move || {
+        slint::Timer::single_shot(Duration::from_millis(life), move || with_app(move |app| app.toast_dismiss(id)));
+    }
+
+    /// Glide a notification away, then drop it.
+    pub fn toast_dismiss(&mut self, id: i32) {
+        let Some(t) = self.toasts.iter_mut().find(|t| t.id == id && !t.leaving) else { return };
+        t.leaving = true;
+        self.push_toasts();
+        slint::Timer::single_shot(Duration::from_millis(320), move || {
             with_app(move |app| {
                 app.toasts.retain(|t| t.id != id);
                 app.push_toasts();
@@ -3177,6 +3207,11 @@ pub fn open_url(url: &str) {
 
 pub fn target_name(app: &App, t: Target) -> String {
     t.local.map(|l| app.locals[l].name.clone()).or_else(|| t.game.map(|g| app.games[g].name.clone())).unwrap_or_default()
+}
+
+/// A notification's text, with nothing else yet (see `App::notify`).
+pub fn toast_data(text: &str, sub: &str, kind: i32) -> ToastData {
+    ToastData { text: text.into(), sub: sub.into(), kind, ..Default::default() }
 }
 
 pub fn model<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {

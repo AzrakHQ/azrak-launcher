@@ -67,7 +67,7 @@ impl App {
             [(_, v), ..] => ("This PC can't run games yet".to_string(), explain(v, Platform::Ps5)),
             [] => return,
         };
-        self.toast_with(&title, &format!("{why}. Select to see this PC's details."), 2, None, false, "this-pc");
+        self.toast_with(&title, &format!("{why}."), 2, None, false, "this-pc", "This PC's details");
         self.cfg.lock().unwrap().pc_noticed = summary;
         self.cfg.lock().unwrap().save();
     }

@@ -394,6 +394,9 @@ impl App {
             self.set_status(&p, true);
         }
         self.shad_tick();
+        if let Some(version) = self.upd.installed.clone() {
+            self.toast_update_ready(&version);
+        }
         // AzrakOS was installed from the USB stick with "Later" before the launcher started.
         if self.osi.tell_installed {
             self.osi_tell_installed();
