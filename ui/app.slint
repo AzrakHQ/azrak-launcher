@@ -1,5 +1,5 @@
 import { S, Theme, Icons, Zone, DownloadData, BootStep, OsiDisk, WjKey, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, ToastData, MenuItem, RunningData } from "theme.slint";
-import { FocusRing, Chip, Btn, Kicker, Badge, Switch, KeyCap, BackButton, Shimmer, Cover } from "widgets.slint";
+import { FocusRing, Chip, Btn, Kicker, Badge, Switch, KeyCap, KeyboardKey, BackButton, Shimmer, Cover } from "widgets.slint";
 import { DownloadsSheet, DownloadConsent } from "downloads.slint";
 import { LibraryFilter, LibrarySortPicker } from "library.slint";
 import { AboutSlint, Palette } from "std-widgets.slint";
@@ -206,6 +206,7 @@ export component AppWindow inherits Window {
     in property <string> sort-label;
     in property <string> count-label;
     in property <string> peer-snapshot-label;
+    in property <string> search-note;                 // nothing matched as typed: what was searched for instead
     in property <[string]> sort-options;
     in property <int> sort-selected;
     in property <bool> library-compact;
@@ -286,6 +287,17 @@ export component AppWindow inherits Window {
     in property <[WjKey]> wj-row2;
     in property <[WjKey]> wj-row3;
     in property <[WjKey]> wj-row4;
+    // The Library's search on a controller (search_keys.rs): the field is `query`.
+    in property <[WjKey]> sk-suggestions;
+    in property <string> sk-suggestions-label;   // "Recent searches" or "Best matches"
+    in property <[WjKey]> sk-row1;
+    in property <[WjKey]> sk-row2;
+    in property <[WjKey]> sk-row3;
+    in property <[WjKey]> sk-row4;
+    in property <[WjKey]> sk-actions;
+    in property <string> sk-count;               // "12 games", or what a typo searched for instead
+    in property <bool> sk-count-warn;
+    in property <bool> sk-enter-done;            // a keyboard's Enter shows the results now
     // "Restart now?" / "Shut down now?" (os/power.rs): busy once confirmed, with no buttons.
     in property <string> power-title;
     in property <string> power-text;
@@ -798,7 +810,11 @@ export component AppWindow inherits Window {
                         VerticalLayout {
                             alignment: center; spacing: (3px * S.k);
                             count := Text { text: root.count-label; font-size: (18px * root.library-type-scale); color: Theme.text2; horizontal-alignment: right; }
-                            snapshot := Text { text: root.peer-snapshot-label; font-size: (16px * root.library-type-scale); color: Theme.text3; horizontal-alignment: right; }
+                            // A typo: the near spelling searched for stands in for the list's date.
+                            snapshot := Text {
+                                text: root.search-note != "" ? root.search-note : root.peer-snapshot-label;
+                                font-size: (16px * root.library-type-scale); color: root.search-note != "" ? Theme.warn : Theme.text3; horizontal-alignment: right;
+                            }
                         }
                     }
                 }
@@ -2290,6 +2306,120 @@ export component AppWindow inherits Window {
         }
 
         // ------------------------------------------------------------ JOIN A WI-FI NETWORK
+        // The Library's search on a controller: docked at the bottom, the results above it.
+        if root.overlay == 14: sk := Rectangle {
+            property <length> key: (64px * S.k);
+            property <length> gap: (8px * S.k);
+            property <length> keys-width: sk.key * 10 + sk.gap * 9;
+            TouchArea { clicked => { root.click(Zone.search-keys, -1); } }
+            Rectangle {
+                y: parent.height - self.height;
+                height: panel.preferred-height;
+                background: @linear-gradient(180deg, #0c1430f5 0%, #060914fc 100%);
+                drop-shadow-blur: (48px * S.k);
+                drop-shadow-color: #000000cc;
+                Rectangle { y: 0; height: 1px; background: Theme.line; }
+                TouchArea {}
+                panel := VerticalLayout {
+                    padding-top: (22px * S.k);
+                    padding-bottom: (20px * S.k);
+                    spacing: (10px * S.k);
+                    // What's typed, and what it finds.
+                    HorizontalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: sk.keys-width;
+                            height: (58px * S.k);
+                            border-radius: (29px * S.k);
+                            background: #232c47;
+                            border-width: (2px * S.k);
+                            border-color: #3d8bff88;
+                            HorizontalLayout {
+                                padding-left: (22px * S.k);
+                                padding-right: (24px * S.k);
+                                spacing: (14px * S.k);
+                                Image { source: Icons.search; colorize: Theme.text2; width: (24px * S.k); height: self.width; y: (parent.height - self.height) / 2; }
+                                HorizontalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: start;
+                                    if root.query != "": Text {
+                                        text: root.query;
+                                        font-size: (24px * S.k);
+                                        color: Theme.text;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                    // The caret: letters go in here.
+                                    Rectangle { width: (2px * S.k); height: (28px * S.k); y: (parent.height - self.height) / 2; background: Theme.accent; }
+                                    if root.query == "": Text {
+                                        text: "  A name, initials (tlou) or a genre";
+                                        font-size: (22px * S.k);
+                                        color: Theme.text3;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                                Text {
+                                    text: root.sk-count;
+                                    font-size: (18px * S.k);
+                                    color: root.sk-count-warn ? Theme.warn : Theme.text2;
+                                    vertical-alignment: center;
+                                    horizontal-alignment: right;
+                                }
+                            }
+                        }
+                    }
+                    // Recent searches, or the best matches to open straight away.
+                    if root.sk-suggestions.length > 0: VerticalLayout {
+                        spacing: (6px * S.k);
+                        HorizontalLayout {
+                            alignment: center;
+                            Text { width: sk.keys-width; text: root.sk-suggestions-label; font-size: (15px * S.k); font-weight: 600; color: Theme.text3; }
+                        }
+                        HorizontalLayout {
+                            spacing: sk.gap;
+                            alignment: center;
+                            for k[c] in root.sk-suggestions: KeyboardKey {
+                                k: k;
+                                unit: sk.key;
+                                gap: sk.gap;
+                                height: (56px * S.k);
+                                two-lines: true;
+                                clicked => { root.click(Zone.search-keys, c); }
+                            }
+                        }
+                    }
+                    Rectangle { height: (2px * S.k); }
+                    VerticalLayout {
+                        spacing: sk.gap;
+                        for row[r] in [root.sk-row1, root.sk-row2, root.sk-row3, root.sk-row4, root.sk-actions]: HorizontalLayout {
+                            spacing: sk.gap;
+                            alignment: center;
+                            for k[c] in row: KeyboardKey {
+                                k: k;
+                                unit: sk.key;
+                                gap: sk.gap;
+                                height: r == 4 ? (56px * S.k) : (52px * S.k);
+                                clicked => { root.click(Zone.search-keys, (r + 1) * 100 + c); }
+                            }
+                        }
+                    }
+                    // The buttons that do the same without moving there.
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: (22px * S.k);
+                        padding-top: (6px * S.k);
+                        for h in root.pad-hints
+                            ? [{ key: "□", what: "Delete" }, { key: "△", what: "Space" }, { key: "R2", what: "Show results" }, { key: "○", what: "Close" }]
+                            : [{ key: "Enter", what: root.sk-enter-done ? "Show results" : "Press the key" }, { key: "Esc", what: "Close" }]: HorizontalLayout {
+                            spacing: (8px * S.k);
+                            KeyCap { text: h.key; round: root.pad-hints && h.key.character-count == 1; }
+                            Text { text: h.what; font-size: (17px * S.k); color: Theme.hint; vertical-alignment: center; }
+                        }
+                    }
+                }
+            }
+        }
+
         if root.overlay == 12: wj := Rectangle {
             property <float> t: animation-tick() / 1ms / 1000;
             property <length> key: (74px * S.k);
@@ -2403,49 +2533,12 @@ export component AppWindow inherits Window {
                                 for row[r] in [root.wj-row0, root.wj-row1, root.wj-row2, root.wj-row3, root.wj-row4]: HorizontalLayout {
                                     spacing: wj.gap;
                                     alignment: center;
-                                    for k[c] in row: Rectangle {
-                                        width: wj.key * k.w + wj.gap * (k.w - 1);
+                                    for k[c] in row: KeyboardKey {
+                                        k: k;
+                                        unit: wj.key;
+                                        gap: wj.gap;
                                         height: r == 4 ? (62px * S.k) : (58px * S.k);
-                                        border-radius: (14px * S.k);
-                                        // White is the highlight only; a switch that's on is filled blue and lit.
-                                        background: k.focused ? (k.accent ? Theme.accent : #ffffff)
-                                            : k.on ? #2f6fe0 : k.accent ? Theme.accent.with-alpha(0.35) : #ffffff12;
-                                        border-width: 1px;
-                                        border-color: k.on && !k.focused ? #8fb6ff66 : #ffffff14;
-                                        drop-shadow-blur: k.focused ? (22px * S.k) : 0;
-                                        drop-shadow-color: k.accent ? #0a6cffaa : #8cb9ff99;
-                                        transform-scale: k.focused ? 1.06 : 1.0;
-                                        animate background, transform-scale { duration: 120ms; }
-                                        HorizontalLayout {
-                                            alignment: center;
-                                            spacing: (8px * S.k);
-                                            if k.icon != "": Image {
-                                                source: Icons.get(k.icon);
-                                                colorize: k.focused && !k.accent ? (k.on ? Theme.accent : #0a0d18) : Theme.text;
-                                                width: (20px * S.k);
-                                                height: self.width;
-                                                y: (parent.height - self.height) / 2;
-                                            }
-                                            Text {
-                                                text: k.label;
-                                                font-size: k.w > 1 ? (18px * S.k) : (24px * S.k);
-                                                font-weight: k.w > 1 ? 600 : 500;
-                                                color: k.focused && !k.accent ? #0a0d18 : Theme.text;
-                                                vertical-alignment: center;
-                                            }
-                                        }
-                                        // The switch's light, like Caps Lock's.
-                                        if k.on: Rectangle {
-                                            x: parent.width - self.width - (9px * S.k);
-                                            y: (9px * S.k);
-                                            width: (8px * S.k);
-                                            height: self.width;
-                                            border-radius: self.width / 2;
-                                            background: k.focused ? Theme.accent : #cfe0ff;
-                                            drop-shadow-blur: (6px * S.k);
-                                            drop-shadow-color: #8fb6ff;
-                                        }
-                                        TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.wifi-join, r * 100 + c); } }
+                                        clicked => { root.click(Zone.wifi-join, r * 100 + c); }
                                     }
                                 }
                             }

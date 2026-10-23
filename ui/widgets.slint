@@ -1,4 +1,4 @@
-import { S, Theme, Icons, ChipData, ActionData } from "theme.slint";
+import { S, Theme, Icons, ChipData, ActionData, WjKey } from "theme.slint";
 
 // White focus ring with a soft blue halo, drawn around its parent.
 export component FocusRing inherits Rectangle {
@@ -50,6 +50,61 @@ export component KeyCap inherits Rectangle {
     border-width: 1px;
     border-color: #ffffff1f;
     t := Text { text: root.text; font-size: (15px * S.k); font-weight: 700; color: root.fg; }
+}
+
+// A key of an on-screen keyboard (the Wi-Fi password, the Library's search), `w` keys wide.
+// White is the highlight only; a switch that's on is filled blue and lit. A long label (a
+// game's name) can take two lines.
+export component KeyboardKey inherits Rectangle {
+    in property <WjKey> k;
+    in property <length> unit;
+    in property <length> gap;
+    in property <bool> two-lines;
+    callback clicked();
+    width: unit * k.w + gap * (k.w - 1);
+    border-radius: (14px * S.k);
+    background: k.focused ? (k.accent ? Theme.accent : #ffffff)
+        : k.on ? #2f6fe0 : k.accent ? Theme.accent.with-alpha(0.35) : #ffffff12;
+    border-width: 1px;
+    border-color: k.on && !k.focused ? #8fb6ff66 : #ffffff14;
+    drop-shadow-blur: k.focused ? (22px * S.k) : 0;
+    drop-shadow-color: k.accent ? #0a6cffaa : #8cb9ff99;
+    transform-scale: k.focused ? 1.06 : 1.0;
+    animate background, transform-scale { duration: 120ms; }
+    HorizontalLayout {
+        alignment: center;
+        spacing: (8px * S.k);
+        if k.icon != "": Image {
+            source: Icons.get(k.icon);
+            colorize: k.focused && !k.accent ? (k.on ? Theme.accent : #0a0d18) : Theme.text;
+            width: (20px * S.k);
+            height: self.width;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: k.label;
+            max-width: root.width - (28px * S.k);
+            overflow: elide;
+            wrap: root.two-lines ? word-wrap : no-wrap;
+            horizontal-alignment: center;
+            font-size: root.two-lines ? (16px * S.k) : k.w > 1 ? (18px * S.k) : (24px * S.k);
+            font-weight: k.w > 1 ? 600 : 500;
+            color: k.focused && !k.accent ? #0a0d18 : Theme.text;
+            vertical-alignment: center;
+        }
+    }
+    // The switch's light, like Caps Lock's.
+    if k.on: Rectangle {
+        x: parent.width - self.width - (9px * S.k);
+        y: (9px * S.k);
+        width: (8px * S.k);
+        height: self.width;
+        border-radius: self.width / 2;
+        background: k.focused ? Theme.accent : #cfe0ff;
+        drop-shadow-blur: (6px * S.k);
+        drop-shadow-color: #8fb6ff;
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
 // Quiet navigation, not another primary action. Shortcut appears on hover; no layout jump.

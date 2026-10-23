@@ -620,20 +620,20 @@ impl App {
     }
 
     pub fn push_genres(&mut self) {
-        let words: Vec<_> = util::norm(&self.query).split_whitespace().map(String::from).collect();
+        let hits = self.search_hits();
         let n = self.status_count;
         let mut status_counts = vec![0usize; n];
         let mut genre_counts = std::collections::HashMap::<&str, usize>::new();
         let mut genre_total = 0;
         // As the grid: before a search, only the games it shows.
-        let shown = if words.is_empty() { self.browsable() } else { vec![true; self.groups.members.len()] };
+        let shown = if self.searching() { vec![true; self.groups.members.len()] } else { self.browsable() };
         for (members, _) in self.groups.members.iter().zip(shown).filter(|(_, shown)| *shown) {
             let mut status = vec![false; n];
             let mut buckets = HashSet::new();
             let mut any = false;
             for &index in members {
                 let game = &self.games[index];
-                if !words.iter().all(|word| game.norm.contains(word)) { continue; }
+                if hits.scores[index].is_none() { continue; }
                 let genre_ok = self.genre == "All" || game.buckets.contains(&self.genre.as_str());
                 // Console chips count what pressing them would show, with the other filters.
                 if genre_ok && self.mixed_consoles && self.status_filter_ok(game) {
@@ -698,9 +698,12 @@ impl App {
             "".into()
         } else if self.games.is_empty() {
             (if self.syncing { "Loading catalog…" } else { "Catalog is empty" }).into()
+        } else if self.search_hits().scores.iter().any(Option::is_some) {
+            "No matches with these filters. Choose All to see them".into()
         } else {
-            "No games match your search".into()
+            format!("No games match “{}”", self.query.trim()).into()
         });
+        ui.set_search_note(self.search_note.clone().into());
         if self.zone == Z_GRID && self.idx as usize >= self.filtered.len() {
             let i = self.filtered.len().saturating_sub(1) as i32;
             self.set_focus(if self.filtered.is_empty() { Z_CHIPS } else { Z_GRID }, i.max(0));

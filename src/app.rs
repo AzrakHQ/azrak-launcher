@@ -44,6 +44,7 @@ pub const Z_CONTROLS: i32 = 19;
 pub const Z_OS_INSTALL: i32 = 20;
 pub const Z_WIFI_JOIN: i32 = 21;
 pub const Z_POWER: i32 = 22;
+pub const Z_SEARCH_KEYS: i32 = 23;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Overlay {
@@ -63,6 +64,8 @@ pub enum Overlay {
     WifiJoin = 12,
     /// "Restart now?" / "Shut down now?" (os/power.rs).
     Power = 13,
+    /// The Library's search on a controller (search_keys.rs).
+    SearchKeys = 14,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -113,7 +116,7 @@ pub struct GameV {
     pub info: Option<Info>,
     pub name: String,
     pub buckets: Vec<&'static str>,
-    pub norm: String,
+    pub search: crate::search::Doc,
     pub rel_day: i64,
     pub is_new: bool,
     pub local: Option<usize>,
@@ -196,6 +199,8 @@ pub struct App {
     pub bg_show_b: bool,
 
     pub filtered: Vec<usize>,
+    /// Nothing matched the search as typed: what it searched for instead.
+    pub search_note: String,
     pub genre: String,
     pub status_filter: String,
     pub genre_list: Vec<(String, usize)>,
@@ -273,6 +278,7 @@ pub struct App {
     /// "Try AzrakOS" (os/install.rs).
     pub held_start: Option<(bool, bool)>,
     pub wj: crate::os::wifi_join::WifiJoin,
+    pub sk: crate::search_keys::SearchKeys,
     /// The laptop's battery as last read, and the lowest level already warned about.
     pub battery: Option<crate::battery::Battery>,
     pub battery_warned: u8,
@@ -485,6 +491,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         bg_key: String::new(),
         bg_show_b: false,
         filtered: Vec::new(),
+        search_note: String::new(),
         genre: "All".into(),
         status_filter: "All".into(),
         genre_list: Vec::new(),
@@ -546,6 +553,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         osi: Default::default(),
         held_start: None,
         wj: Default::default(),
+        sk: Default::default(),
         battery: None,
         battery_warned: 100,
         battery_read: 0.0,
@@ -779,7 +787,9 @@ impl App {
             let added = util::parse_iso_date(&g.date).map(|(y, m, d)| util::days_from_civil(y, m, d));
             let publisher = info.as_ref().map(|i| i.publisher.clone()).unwrap_or_default();
             out.push(GameV {
-                norm: norm(&format!("{} {} {} {} {} {} {}", name, g.name, g.title_ids.join(" "), g.title_id, publisher, g.region, g.version)),
+                search: crate::search::Doc::new(&name, &g.name,
+                    &format!("{} {} {} {} {}", g.title_ids.join(" "), g.title_id, publisher, g.region, g.version),
+                    &format!("{genre_text} {}", buckets.join(" "))),
                 name,
                 buckets,
                 rel_day: rel.map(|(y, m, d)| util::days_from_civil(y, m, d)).unwrap_or(0),
@@ -924,14 +934,24 @@ impl App {
         self.genre_list = list;
     }
 
+    /// Every game's match for the search (search.rs); before one, every game matches.
+    pub fn search_hits(&self) -> crate::search::Hits {
+        crate::search::run(&crate::search::Query::new(&self.query), self.games.iter().map(|g| &g.search))
+    }
+
+    pub fn searching(&self) -> bool {
+        !crate::search::Query::new(&self.query).is_empty()
+    }
+
     pub fn apply_filter(&mut self) {
-        let words: Vec<String> = norm(&self.query).split_whitespace().map(String::from).collect();
+        let query = crate::search::Query::new(&self.query);
+        let hits = self.search_hits();
         let genre = self.genre.as_str();
         let matches = |i: usize| {
                 let g = &self.games[i];
                 (genre == "All" || g.buckets.contains(&genre))
                     && self.matches_status(i)
-                    && words.iter().all(|w| g.norm.contains(w.as_str()))
+                    && hits.scores[i].is_some()
             };
         let rank = |i: usize| {
             let g = &self.games[i];
@@ -944,9 +964,13 @@ impl App {
                 g.g.seeders.unwrap_or(0), g.g.id)
         };
         // Before a search, only games with a picture or yours; a search finds every game.
-        let shown = if words.is_empty() { self.browsable() } else { vec![true; self.groups.members.len()] };
+        let shown = if query.is_empty() { self.browsable() } else { vec![true; self.groups.members.len()] };
+        // How well each game shown matches: its best release.
+        let mut matched = HashMap::new();
         let mut list: Vec<usize> = self.groups.members.iter().zip(shown).filter(|(_, shown)| *shown).filter_map(|(members, _)| {
-            members.iter().copied().filter(|i| matches(*i)).max_by_key(|i| rank(*i))
+            let shown = members.iter().copied().filter(|i| matches(*i)).max_by_key(|i| rank(*i))?;
+            matched.insert(shown, members.iter().filter(|i| matches(**i)).filter_map(|i| hits.scores[*i]).max().unwrap_or(0));
+            Some(shown)
         }).collect();
         let gs = &self.games;
         let score = |i: usize| gs[i].info.as_ref().and_then(|x| x.rating.as_ref()).map(|r| (r.score, r.total)).unwrap_or((-1.0, 0));
@@ -966,6 +990,14 @@ impl App {
                 list.sort_by(|a, b| newest(*b).cmp(&newest(*a)));
             }
         }
+        // A search shows the best matches first; the chosen sort orders equal matches.
+        if !query.is_empty() {
+            list.sort_by_key(|i| std::cmp::Reverse(matched.get(i).copied().unwrap_or(0)));
+        }
+        self.search_note = match list.first() {
+            Some(&top) if hits.near => format!("Showing results for “{}”", query.corrected(&self.games[top].search)),
+            _ => String::new(),
+        };
         self.filtered = list;
     }
 
@@ -1685,6 +1717,9 @@ impl App {
         if self.overlay == Overlay::WifiJoin {
             return self.wifi_join_key(text, ctrl, alt);
         }
+        if self.overlay == Overlay::SearchKeys {
+            return self.search_keys_key(text, ctrl, alt);
+        }
         // Text editing: the TextInput handles typing; we get what it doesn't use.
         if self.overlay == Overlay::Downloads && self.ui().get_download_consent()
             && !self.ui().get_download_editing() && !ctrl && !alt && k(Key::Tab) {
@@ -1805,6 +1840,9 @@ impl App {
         if zone == Z_WIFI_JOIN && self.overlay == Overlay::WifiJoin {
             return self.click_wifi_join(idx);
         }
+        if zone == Z_SEARCH_KEYS && self.overlay == Overlay::SearchKeys {
+            return self.click_search_keys(idx);
+        }
         if zone == Z_POWER && self.overlay == Overlay::Power {
             return self.click_power(idx);
         }
@@ -1836,7 +1874,7 @@ impl App {
         }
         if zone == Z_SEARCH {
             self.set_focus(Z_SEARCH, 0);
-            self.start_search_edit();
+            self.open_search();
             return;
         }
         self.set_focus(zone, idx);
@@ -1924,6 +1962,7 @@ impl App {
             Overlay::Menu => self.act_menu(a),
             Overlay::OsInstall => self.act_os_install(a),
             Overlay::WifiJoin => self.act_wifi_join(a),
+            Overlay::SearchKeys => self.act_search_keys(a),
             Overlay::Power => self.act_power(a),
             Overlay::Settings => self.act_settings(a),
             Overlay::Hub => self.act_hub(a),
@@ -1936,7 +1975,7 @@ impl App {
     fn act_main(&mut self, a: Act) {
         match a {
             Act::Back => return self.back(),
-            Act::Search => return self.start_search_edit(),
+            Act::Search => return self.open_search(),
             Act::Settings => return self.open_settings(),
             Act::TabPrev | Act::TabNext => return self.switch_view(1 - self.view, true),
             Act::Trailer => {
@@ -2011,7 +2050,7 @@ impl App {
                 Act::Right => self.move_focus(Z_SORT, 0),
                 Act::Up => self.move_focus(Z_TABS, 1),
                 Act::Down => self.focus_status(),
-                Act::Confirm => self.start_search_edit(),
+                Act::Confirm => self.open_search(),
                 _ => {}
             },
             Z_SORT => match a {
@@ -3395,7 +3434,7 @@ mod art_tests {
     fn releases_without_art_borrow_another_releases_pictures() {
         let game = |name: &str, platform: Platform, cover: &str, info: Option<Info>| GameV {
             g: Game { name: name.into(), platform, cover: cover.into(), ..Default::default() }, info, name: name.into(),
-            buckets: vec![], norm: String::new(), rel_day: 0, is_new: false, local: None,
+            buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None,
         };
         let sony = Info { master: "https://sony/bb.png".into(), short: "About Bloodborne.".into(), ..Default::default() };
         let mut games = vec![

@@ -12,6 +12,8 @@ mod shad;
 mod shad_ui;
 mod pkgx;
 mod sandbox;
+mod search;
+mod search_keys;
 mod vpn;
 mod pc;
 mod pc_ui;
