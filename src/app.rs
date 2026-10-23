@@ -845,7 +845,7 @@ impl App {
             // Its own store details, with what they lack from its catalog release's.
             let info = match (Self::sanitize(store.get(&l.title_id).cloned()), cat.and_then(|c| self.games[c].info.as_ref())) {
                 (Some(mut own), Some(release)) => {
-                    fill_details(&mut own, false, false, &[release]);
+                    let _ = fill_details(&mut own, false, false, &[release]);
                     Some(own)
                 }
                 (own, release) => own.or_else(|| release.cloned()),
@@ -1135,7 +1135,7 @@ impl App {
         if self.view == 1 && self.zone == Z_GRID && self.overlay == Overlay::None {
             self.set_focus(Z_GRID, pos as i32);
             // Another release on its card, or another game where it was: the backdrop follows.
-            if self.filtered.get(pos).is_some_and(|&g| Some(self.games[g].g.id) != anchor.grid) {
+            if anchor.grid.is_some() && self.filtered.get(pos).is_some_and(|&g| Some(self.games[g].g.id) != anchor.grid) {
                 self.focus_card_changed();
             }
         } else if let Some(saved) = self.stack.iter_mut().find(|(_, zone, _)| *zone == Z_GRID) {
@@ -3532,8 +3532,9 @@ pub fn share_group_details(games: &mut [GameV], groups: &[Vec<usize>]) -> Vec<us
             }
             let g = &games[i].g;
             let mut info = games[i].info.clone().unwrap_or_default();
-            fill_details(&mut info, !g.description.is_empty() || !g.excerpt.is_empty(), !g.genres.is_empty(), &donors);
-            Some((i, info))
+            // A release without details gets some only when there were some to lend.
+            let filled = fill_details(&mut info, !g.description.is_empty() || !g.excerpt.is_empty(), !g.genres.is_empty(), &donors);
+            filled.then_some((i, info))
         }).collect();
         for (i, info) in filled {
             if games[i].info.as_ref().is_none_or(|own| own.genres.is_empty()) && !info.genres.is_empty() {
@@ -3549,8 +3550,11 @@ pub fn share_group_details(games: &mut [GameV], groups: &[Vec<usize>]) -> Vec<us
 /// each detail lending it). The About comes whole from one release (its long text with its short
 /// one, unless there's an own), never over the release's own catalog text (`own_text`); genres
 /// never over its own (`own_genres`); a trailer with its poster. Store page, release date,
-/// region, publisher and pictures (see `borrow_group_art`) aren't touched.
-pub fn fill_details(info: &mut Info, own_text: bool, own_genres: bool, others: &[&Info]) {
+/// region, publisher and pictures (see `borrow_group_art`) aren't touched. True when anything
+/// was filled.
+pub fn fill_details(info: &mut Info, own_text: bool, own_genres: bool, others: &[&Info]) -> bool {
+    let before = (info.long.len(), info.short.len(), info.genres.len(), info.rating.is_some(), info.age.is_some(),
+        info.players.is_some(), info.shots.len(), info.video.len());
     if !own_text && info.long.is_empty() {
         if let Some(o) = others.iter().find(|o| !o.long.is_empty()) {
             info.long = o.long.clone();
@@ -3575,6 +3579,8 @@ pub fn fill_details(info: &mut Info, own_text: bool, own_genres: bool, others: &
             (info.video, info.poster) = (o.video.clone(), o.poster.clone());
         }
     }
+    before != (info.long.len(), info.short.len(), info.genres.len(), info.rating.is_some(), info.age.is_some(),
+        info.players.is_some(), info.shots.len(), info.video.len())
 }
 
 /// A release without official pictures shows another of its game's (by another name: "Hades +
@@ -3673,6 +3679,10 @@ mod art_tests {
         // A release's own screenshots stay its own.
         assert_eq!(games[2].info.as_ref().unwrap().shots, ["ps5.jpg"]);
         assert!(games[3].info.is_none(), "another title on the card lends nothing");
+        // Nothing to lend: a release without details stays without.
+        let mut bare = vec![game("Hades", Platform::Ps5, Some(Info { portrait: "art.jpg".into(), ..Default::default() })), game("Hades", Platform::Pc, None)];
+        share_group_details(&mut bare, &[vec![0, 1]]);
+        assert!(bare[1].info.is_none());
         // A release that gets genres is told, so its genre filters and search can have them.
         let mut games = vec![
             game("Hades", Platform::Ps5, Some(Info { genres: vec!["Action".into()], ..Default::default() })),
@@ -3685,7 +3695,7 @@ mod art_tests {
     fn a_releases_own_text_and_genres_are_never_replaced() {
         let other = Info { long: "Their About.".into(), short: "Theirs.".into(), genres: vec!["RPG".into()], ..Default::default() };
         let mut own = Info::default();
-        fill_details(&mut own, true, true, &[&other]);
+        assert!(!fill_details(&mut own, true, true, &[&other]));
         assert!(own.long.is_empty() && own.short.is_empty() && own.genres.is_empty(), "the catalog's own text and genres show instead");
         // The About is one release's: a short line alone listed first doesn't come with another's long text.
         let blurb = Info { short: "Bundle blurb.".into(), ..Default::default() };

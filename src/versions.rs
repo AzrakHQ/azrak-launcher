@@ -232,16 +232,19 @@ impl App {
         self.groups.releases(index).iter().filter_map(|&i| self.release_year(i)).min()
     }
 
-    /// How many platforms game `index` is on.
-    pub fn platform_count(&self, index: usize) -> usize {
-        let members = self.groups.releases(index);
-        PLATFORMS.iter().filter(|p| members.iter().any(|&i| self.games[i].g.platform == **p)).count()
-    }
-
     /// The platforms game `index` is on, in the usual order.
     pub fn game_platforms(&self, index: usize) -> Vec<Platform> {
+        self.platforms_of(index).collect()
+    }
+
+    /// How many platforms game `index` is on (without building a list).
+    pub fn platform_count(&self, index: usize) -> usize {
+        self.platforms_of(index).count()
+    }
+
+    fn platforms_of(&self, index: usize) -> impl Iterator<Item = Platform> + '_ {
         let members = self.groups.releases(index);
-        PLATFORMS.iter().copied().filter(|p| members.iter().any(|&i| self.games[i].g.platform == *p)).collect()
+        PLATFORMS.iter().copied().filter(move |p| members.iter().any(|&i| self.games[i].g.platform == *p))
     }
 
     /// The game's name on its card: on several platforms, the plainest of its releases' names
@@ -289,13 +292,16 @@ impl App {
         // "Best for this PC" is a platform's, judged by its best release, so it stays put while
         // you browse that platform's releases; the shown platform's tile is the release on screen.
         let best = self.best_platform(&best_releases);
-        let versions: Vec<(Platform, usize)> = best_releases.into_iter().map(|(p, b)| (p, if p == shown { current } else { b })).collect();
-        versions.iter().map(|&(p, i)| {
+        best_releases.into_iter().map(|(p, best_release)| {
+            // The shown platform's tile says what the page says, all of it from the same target
+            // (the release picker keeps the installed copy on the page).
+            let (i, plays, installed) = if p == shown {
+                (current, self.plays_for(t), t.local.is_some())
+            } else {
+                (best_release, self.plays(best_release), self.games[best_release].local.is_some())
+            };
             let g = &self.games[i];
-            // The shown platform's tile says what the page says (with the installed copy kept
-            // across the release picker).
-            let plays = if p == shown { self.plays_for(t) } else { self.plays(i) };
-            let detail = if g.local.is_some() {
+            let detail = if installed {
                 "Installed".to_string()
             } else {
                 [format!("Availability: {}", Availability::of(g.g.seeders).label()), crate::present::size_label(&g.g).unwrap_or_default()]
