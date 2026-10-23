@@ -200,6 +200,43 @@ impl App {
         self.set_focus(Z_VERSIONS, i as i32);
     }
 
+    /// What the Game Hub says about the game itself, the same on every platform: the shown
+    /// release's own store details, and what they lack from the game's other releases (same
+    /// platform first). A PC release's Steam details have no PlayStation rating or About; a
+    /// PS4 release may have no screenshots. Its store page, release date and region stay its own.
+    pub fn game_info(&self, t: Target) -> Option<crate::psn::Info> {
+        let own = self.target_info(t);
+        let Some(index) = t.game.or_else(|| t.local.and_then(|l| self.locals[l].cat)) else { return own };
+        let platform = self.target_platform(t);
+        let mut others: Vec<usize> = self.groups.releases(index).iter().copied().filter(|&i| Some(i) != t.game).collect();
+        others.sort_by_key(|&i| self.games[i].g.platform != platform);
+        let others: Vec<&crate::psn::Info> = others.iter().filter_map(|&i| self.games[i].info.as_ref()).collect();
+        if own.is_none() && others.is_empty() {
+            return None;
+        }
+        let mut info = own.unwrap_or_default();
+        for o in others {
+            macro_rules! fill {
+                ($($f:ident),*) => {$(
+                    if info.$f.is_empty() && !o.$f.is_empty() {
+                        info.$f = o.$f.clone();
+                    }
+                )*};
+            }
+            fill!(publisher, genres, short, long, shots, video, poster, logo, master, hub, portrait, bg, banner);
+            if info.rating.is_none() {
+                info.rating = o.rating.clone();
+            }
+            if info.age.is_none() {
+                info.age = o.age.clone();
+            }
+            if info.players.is_none() {
+                info.players = o.players.clone();
+            }
+        }
+        Some(info)
+    }
+
     /// The year release `i` came out: the catalog's date, else the store's. Grouping and the
     /// search suggestions both go by it.
     pub fn release_year(&self, i: usize) -> Option<i32> {

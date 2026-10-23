@@ -2584,7 +2584,8 @@ impl App {
     pub fn actions_for(&self, t: Target, in_hub: bool) -> Vec<ActionDef> {
         let mut a = Vec::new();
         let mk = |id, label: &str, icon, primary| ActionDef { id, label: label.into(), icon, primary, danger: false, round: false };
-        let info = self.target_info(t);
+        // Its trailer is the game's; its store page stays this version's (game_info keeps both so).
+        let info = self.game_info(t);
         if let Some(l) = t.local {
             if self.session_for_local(l).is_some() {
                 a.push(mk("resume", "Resume", "play", true));
@@ -2788,7 +2789,7 @@ impl App {
 
     /// Play a game's official trailer inside the launcher.
     pub fn play_trailer(&mut self, t: Target) {
-        let Some(url) = self.target_info(t).map(|i| i.video.clone()).filter(|v| !v.is_empty()) else { return };
+        let Some(url) = self.game_info(t).map(|i| i.video.clone()).filter(|v| !v.is_empty()) else { return };
         if !crate::trailer::available() {
             return;
         }
@@ -2897,7 +2898,7 @@ impl App {
         }
         self.hub = Some(t);
         self.hub_actions = self.actions_for(t, true);
-        self.hub_shots = self.target_info(t).map(|i| i.shots.clone()).unwrap_or_default();
+        self.hub_shots = self.game_info(t).map(|i| i.shots.clone()).unwrap_or_default();
         self.ui().set_hub_y(0.0);
         self.ui().set_shots_x(0.0);
         if self.overlay == Overlay::Hub {
