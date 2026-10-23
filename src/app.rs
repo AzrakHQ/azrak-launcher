@@ -980,9 +980,6 @@ impl App {
     }
 
     pub fn apply_filter(&mut self) {
-        // The Library's focused card stays the one focused when the list changes behind it (the
-        // PC's specs or the compatibility list arriving re-pick cards' releases and re-sort them).
-        let anchor = self.catalog_anchor();
         let query = crate::search::Query::new(&self.query);
         let hits = self.search_hits();
         let genre = self.genre.as_str();
@@ -1032,7 +1029,6 @@ impl App {
         };
         self.filtered = list;
         self.hits = hits;
-        self.keep_grid_focus(&anchor);
     }
 
     // ------------------------------------------------------------------ background jobs
@@ -1084,7 +1080,7 @@ impl App {
     }
 
     /// What's open or focused, by topic ID, so a catalog reload can find it again.
-    fn catalog_anchor(&self) -> CatalogAnchor {
+    pub fn catalog_anchor(&self) -> CatalogAnchor {
         let id = |t: Option<Target>| t.map(|t| (t.game.and_then(|g| self.games.get(g)).map(|g| g.g.id), t.local));
         // The Library card in focus: now, or saved under an overlay to return to.
         let grid = if self.view == 1 && self.zone == Z_GRID && self.overlay == Overlay::None { Some(self.idx) }
@@ -1120,30 +1116,30 @@ impl App {
         }
     }
 
-    /// After the list changed (a reload, or a re-sort behind it): the same Library card focused,
+    /// After the list changed behind the Library (a reload; the PC's specs, the compatibility
+    /// list or a result arriving re-pick cards' releases and re-sort them), called after it's
+    /// drawn again: the same Library card focused,
     /// or the nearest one if it's gone. Also the card saved under an open card, so Back comes
     /// to it, in view either way; and the backdrop follows when the card shows another release.
-    fn keep_grid_focus(&mut self, anchor: &CatalogAnchor) {
+    pub fn keep_grid_focus(&mut self, anchor: &CatalogAnchor) {
         let (Some(old), Some(id)) = (anchor.grid_index, anchor.grid) else { return };
         let found = self.filtered.iter().position(|g| self.games[*g].g.id == id)
             .or_else(|| self.filtered.iter().position(|g| self.groups.releases(*g).iter().any(|m| self.games[*m].g.id == id)));
         let pos = found.unwrap_or_else(|| (old.max(0) as usize).min(self.filtered.len().saturating_sub(1)));
-        // The scroll position belongs to the old list: keep the card in view (and within the list).
-        let top = (pos / self.cols.max(1)) as f32 * self.row_h;
-        let in_view = top >= self.grid_scroll && top <= self.grid_scroll + self.row_h * 2.0;
+        // The scroll belongs to the old list: the card in view, and the list not scrolled past
+        // its end; unchanged when both hold already (a refresh doesn't move the grid under you).
+        let y = self.grid_scroll_to_show(pos);
+        if (y - self.grid_scroll).abs() > 0.5 {
+            self.set_grid_scroll(y, 0);
+        }
         if self.view == 1 && self.zone == Z_GRID && self.overlay == Overlay::None {
             self.set_focus(Z_GRID, pos as i32);
-            if !in_view {
-                self.set_grid_scroll(top, 0);
-            }
-            if found.is_some_and(|at| self.games[self.filtered[at]].g.id != id) {
+            // Another release on its card, or another game where it was: the backdrop follows.
+            if self.filtered.get(pos).is_some_and(|&g| self.games[g].g.id != id) {
                 self.focus_card_changed();
             }
         } else if let Some(saved) = self.stack.iter_mut().find(|(_, zone, _)| *zone == Z_GRID) {
             saved.2 = pos as i32;
-            if !in_view {
-                self.set_grid_scroll(top, 0);
-            }
         }
     }
 
@@ -1473,8 +1469,10 @@ impl App {
                 app.my_results.save();
                 app.compat = crate::compat::with_mine(std::mem::take(&mut app.compat), &app.my_results);
                 app.build_genres();
+                let anchor = app.catalog_anchor();
                 app.apply_filter();
                 app.push_all();
+                app.keep_grid_focus(&anchor);
                 if app.overlay == Overlay::Hub {
                     app.push_hub();
                 }
@@ -1566,9 +1564,11 @@ impl App {
                     app.compat = db;
                     if changed {
                         app.build_genres();
+                        let anchor = app.catalog_anchor();
                         app.apply_filter();
                         if !app.boot.active {
                             app.push_all();
+                            app.keep_grid_focus(&anchor);
                         }
                     }
                 }
@@ -2642,8 +2642,8 @@ impl App {
     pub fn target_info(&self, t: Target) -> Option<Info> {
         let installed = t.local.and_then(|l| self.locals[l].info.clone());
         match (t.local, t.game) {
-            // A release that isn't the installed one (it would be linked to it).
-            (Some(l), Some(g)) if self.games[g].local != Some(l) => self.games[g].info.clone().or(installed),
+            // A release that isn't installed (installed ones are linked to their copy).
+            (Some(_), Some(g)) if self.games[g].local.is_none() => self.games[g].info.clone().or(installed),
             _ => installed.or_else(|| t.game.and_then(|g| self.games[g].info.clone())),
         }
     }

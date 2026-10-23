@@ -908,9 +908,18 @@ impl App {
     }
 
     pub fn ensure_grid_visible(&mut self) {
+        let new_y = self.grid_scroll_to_show(self.idx.max(0) as usize);
+        if (new_y - self.grid_scroll).abs() > 0.5 {
+            self.set_grid_scroll(new_y, 260);
+        }
+    }
+
+    /// The Library's scroll that shows card `card` on screen: the current one when it's in view
+    /// already (and the list still reaches that far down).
+    pub fn grid_scroll_to_show(&self, card: usize) -> f32 {
         let (_, h) = self.logical_size();
         let view_h = h - crate::library_layout::TOP;
-        let row = self.idx.max(0) as usize / self.cols.max(1);
+        let row = card / self.cols.max(1);
         let top = row as f32 * self.row_h;
         let y = self.grid_scroll;
         // Rows sit on a grid of row_h (plus a fixed top margin in the UI), so scrolling to a
@@ -923,9 +932,11 @@ impl App {
             // If the selected row doesn't fit below a whole row, put it at the top instead.
             if snapped <= top { snapped } else { top }
         } else {
-            return;
+            y
         };
-        self.set_grid_scroll(new_y, 260);
+        // A shorter list can't stay scrolled past its end (as in set_grid_scroll).
+        let rows = self.filtered.len().div_ceil(self.cols.max(1));
+        new_y.clamp(0.0, (rows as f32 * self.row_h + 60.0 - view_h).max(0.0))
     }
 
     /// The Library's backdrop follows the selected game, once the selection rests for a moment

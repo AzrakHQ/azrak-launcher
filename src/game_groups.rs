@@ -252,6 +252,10 @@ mod tests {
         undated.title_id = "CUSA02092".into();
         let grouped = groups(&[doom, later, undated]);
         assert!(grouped.releases(2).contains(&0) && !grouped.releases(2).contains(&1));
+        // A year from elsewhere (the store's date) counts as the catalog's does.
+        let games = [on(Pc, "Prey", ""), on(Pc, "Prey", ""), on(Ps4, "Prey", "")];
+        let grouped = Groups::with_years(games.iter().zip([Some(2006), Some(2017), Some(2017)]).map(|(g, y)| (g, g.name.as_str(), y)));
+        assert!(!grouped.releases(0).contains(&1) && grouped.releases(1).contains(&2));
         // An undated release listed first doesn't tie them together.
         let games = [on(Pc, "Prey", ""), on(Pc, "Prey", "2006"), on(Pc, "Prey", "2017")];
         let grouped = groups(&games);

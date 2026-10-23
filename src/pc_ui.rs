@@ -40,11 +40,13 @@ impl App {
     fn pc_detected(&mut self, specs: Specs) {
         self.pc_checking = false;
         self.pc = Some(specs);
-        // Which version each Library card shows depends on what plays here (the highlighted
-        // game stays highlighted: see `apply_filter`).
+        // Which version each Library card shows depends on what plays here: the focused card
+        // stays the one focused (keep_grid_focus).
+        let anchor = self.catalog_anchor();
         self.apply_filter();
         if self.view == 1 && !self.boot.active {
             self.push_grid();
+            self.keep_grid_focus(&anchor);
         }
         match self.overlay {
             Overlay::Hub => self.push_hub(),

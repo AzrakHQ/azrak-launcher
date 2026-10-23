@@ -47,25 +47,27 @@ impl Plays<'_> {
             Plays::Wine(Some("borked"), _) => "Doesn't run with Wine yet".into(),
             Plays::Wine(Some(tier), _) => format!("Runs with Wine · {}", title_case(tier)),
             Plays::Wine(None, true) => "Runs with Wine (included)".into(),
-            Plays::Wine(None, false) => match crate::pcgame::windows_runner() {
-                Some((_, runner)) => format!("Runs with {runner}"),
+            Plays::Wine(None, false) => match windows_runner() {
+                Some(runner) => format!("Runs with {runner}"),
                 None => "Needs Proton or Wine".into(),
             },
         }
     }
 
-    /// The Game Hub's "how it runs" box for a PC game: its label, its value and its colour.
+    /// The Game Hub's "how it runs" box for a PC game: its label, its value and (as on its tile)
+    /// its colour.
     pub fn hub_fact(&self) -> (&'static str, String, i32) {
-        match self {
-            Plays::Console(o) => ("ON THIS PC", o.headline().into(), o.kind()),
-            Plays::Native => ("ON LINUX", "Native game".into(), 1),
-            Plays::Wine(Some(tier), _) => ("PROTONDB · RUNS WITH WINE", title_case(tier), protondb_kind(tier)),
-            Plays::Wine(None, true) => ("RUNS WITH", "Wine, included".into(), 0),
-            Plays::Wine(None, false) => match crate::pcgame::windows_runner() {
-                Some((_, runner)) => ("WINDOWS GAME · RUNS WITH", runner.into(), 0),
-                None => ("WINDOWS GAME", "Needs Proton or Wine".into(), 3),
+        let (label, value) = match self {
+            Plays::Console(_) => ("ON THIS PC", self.headline()),
+            Plays::Native => ("ON LINUX", "Native game".into()),
+            Plays::Wine(Some(tier), _) => ("PROTONDB · RUNS WITH WINE", title_case(tier)),
+            Plays::Wine(None, true) => ("RUNS WITH", "Wine, included".into()),
+            Plays::Wine(None, false) => match windows_runner() {
+                Some(runner) => ("WINDOWS GAME · RUNS WITH", runner.into()),
+                None => ("WINDOWS GAME", "Needs Proton or Wine".into()),
             },
-        }
+        };
+        (label, value, self.kind())
     }
 
     /// The Fact colours: 1 good, 2 warning, 3 bad, 0 unknown.
@@ -76,9 +78,16 @@ impl Plays<'_> {
             Plays::Wine(Some(tier), _) => protondb_kind(tier),
             Plays::Wine(None, true) => 0,
             // Nothing to run it with is a game that won't start.
-            Plays::Wine(None, false) => if crate::pcgame::windows_runner().is_some() { 0 } else { 3 },
+            Plays::Wine(None, false) => if windows_runner().is_some() { 0 } else { 3 },
         }
     }
+}
+
+/// What runs Windows games here ("Proton", "Wine"), looked up once: the Game Hub and its tiles ask
+/// on every redraw. (Starting a game looks again.)
+fn windows_runner() -> Option<&'static str> {
+    static RUNNER: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
+    *RUNNER.get_or_init(|| crate::pcgame::windows_runner().map(|(_, runner)| runner))
 }
 
 /// ProtonDB's tier as a Fact colour: 1 good, 2 warning, 3 bad.
