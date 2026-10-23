@@ -134,23 +134,16 @@ impl App {
         if self.query.trim().is_empty() {
             self.cfg.lock().unwrap().recent_searches.iter().take(MAX_SUGGESTIONS).map(|q| (Suggestion::Recent(q.clone()), q.clone())).collect()
         } else {
-            // Named as their cards are. Two cards by one name are told apart by year (Doom 2016,
-            // the classic Doom), else by their platforms (a card can span several).
+            // Named as their cards are. Cards by one name are told apart by the first of their
+            // year (Doom 2016, the classic Doom), platforms or size that differs for each.
             let games: Vec<(usize, String)> = self.filtered.iter().take(MAX_SUGGESTIONS).map(|&i| (i, self.game_title(i))).collect();
-            let year = |i: usize| crate::game_groups::release_year(&self.games[i].g.release);
-            games.iter().map(|&(i, ref name)| {
-                let twins: Vec<usize> = games.iter().filter(|(_, o)| o == name).map(|(j, _)| *j).collect();
-                let label = if twins.len() < 2 {
-                    name.clone()
-                } else if let Some(y) = year(i).filter(|y| twins.iter().filter(|&&j| year(j) == Some(*y)).count() == 1) {
-                    format!("{name} ({y})")
-                } else {
-                    let platforms: Vec<&str> = crate::versions::PLATFORMS.iter()
-                        .filter(|p| self.groups.releases(i).iter().any(|&r| self.games[r].g.platform == **p)).map(|p| p.label()).collect();
-                    format!("{name} · {}", platforms.join(" · "))
-                };
-                (Suggestion::Game(self.games[i].g.id), label)
-            }).collect()
+            let details = |i: usize| -> [Option<String>; 3] {
+                let platforms: Vec<&str> = self.game_platforms(i).iter().map(|p| p.label()).collect();
+                [self.release_year(i).map(|y| format!("({y})")), Some(format!("· {}", platforms.join(" · "))),
+                    crate::present::size_label(&self.games[i].g).map(|s| format!("· {s}"))]
+            };
+            let labels = tell_apart(&games.iter().map(|(i, name)| (name.clone(), details(*i))).collect::<Vec<_>>());
+            games.iter().zip(labels).map(|((i, _), label)| (Suggestion::Game(self.games[*i].g.id), label)).collect()
         }
     }
 
@@ -353,9 +346,40 @@ impl App {
     }
 }
 
+/// Labels for names, each with details that may tell it apart (in order of preference): a
+/// name shared with others gets the first detail that differs for all of them, else a number.
+fn tell_apart<const N: usize>(entries: &[(String, [Option<String>; N])]) -> Vec<String> {
+    entries.iter().enumerate().map(|(at, (name, _))| {
+        let twins: Vec<usize> = (0..entries.len()).filter(|&j| entries[j].0 == *name).collect();
+        if twins.len() < 2 {
+            return name.clone();
+        }
+        let tells = (0..N).find(|&k| {
+            let mut values: Vec<&Option<String>> = twins.iter().map(|&j| &entries[j].1[k]).collect();
+            values.iter().all(|v| v.is_some()) && { values.sort(); values.dedup(); values.len() == twins.len() }
+        });
+        match tells {
+            Some(k) => format!("{name} {}", entries[at].1[k].clone().unwrap_or_default()),
+            None => format!("{name} · {}", twins.iter().position(|&j| j == at).unwrap_or(0) + 1),
+        }
+    }).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn suggestions_by_one_name_are_told_apart() {
+        let e = |name: &str, d: [Option<&str>; 3]| (name.to_string(), d.map(|x| x.map(String::from)));
+        // By year when the years differ.
+        let labels = tell_apart(&[e("Doom", [Some("(2016)"), Some("· PS4 · PC"), None]), e("Doom", [Some("(2021)"), Some("· PS4"), None]), e("Hades", [None, None, None])]);
+        assert_eq!(labels, ["Doom (2016)", "Doom (2021)", "Hades"]);
+        // Same year or none: by platforms, then by size; nothing differs: numbered.
+        assert_eq!(tell_apart(&[e("Prey", [None, Some("· PC"), None]), e("Prey", [None, Some("· PS4 · PC"), None])]), ["Prey · PC", "Prey · PS4 · PC"]);
+        assert_eq!(tell_apart(&[e("Doom", [Some("(2016)"), Some("· PC"), Some("· 40 GB")]), e("Doom", [Some("(2016)"), Some("· PC"), Some("· 12 GB")])]), ["Doom · 40 GB", "Doom · 12 GB"]);
+        assert_eq!(tell_apart(&[e("Doom", [None, Some("· PC"), None]), e("Doom", [None, Some("· PC"), None])]), ["Doom · 1", "Doom · 2"]);
+    }
 
     #[test]
     fn layout() {

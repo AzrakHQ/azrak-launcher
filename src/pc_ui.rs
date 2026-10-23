@@ -41,9 +41,19 @@ impl App {
         self.pc_checking = false;
         self.pc_verdicts = [specs.verdict(Platform::Ps5), specs.verdict(Platform::Ps4)];
         self.pc = Some(specs);
-        // Which version each Library card shows depends on what plays here.
+        // Which version each Library card shows depends on what plays here, and with it the
+        // order of some sorts: the highlighted game stays highlighted wherever it moves.
+        let game = |app: &App, card: usize| app.filtered.get(card).and_then(|&g| app.groups.releases(g).first().copied());
+        let focused = (self.zone == Z_GRID).then(|| game(self, self.idx as usize)).flatten();
         self.apply_filter();
-        if self.view == 1 {
+        if let Some(at) = focused.and_then(|f| (0..self.filtered.len()).find(|&card| game(self, card) == Some(f))) {
+            self.idx = at as i32;
+        }
+        if self.view == 1 && !self.boot.active {
+            if self.zone == Z_GRID {
+                self.set_focus(Z_GRID, self.idx);
+                self.ensure_grid_visible();
+            }
             self.push_grid();
         }
         match self.overlay {
@@ -54,15 +64,20 @@ impl App {
         self.pc_notice();
     }
 
-    pub fn pc_verdict(&self, platform: Platform) -> Option<Verdict> {
-        self.pc.as_ref()?.verdict(platform)
+    /// This PC's verdict for a console's games, worked out when the PC was read (`pc_detected`).
+    pub fn pc_verdict(&self, platform: Platform) -> Option<&Verdict> {
+        match platform {
+            Platform::Ps5 => self.pc_verdicts[0].as_ref(),
+            Platform::Ps4 => self.pc_verdicts[1].as_ref(),
+            Platform::Pc => None,
+        }
     }
 
     /// Once per PC: say so when a console's games can't start here, before anyone downloads one.
     fn pc_notice(&mut self) {
         let Some(specs) = self.pc.clone() else { return };
         let blocked: Vec<(Platform, Verdict)> = [Platform::Ps5, Platform::Ps4].into_iter()
-            .filter_map(|p| specs.verdict(p).filter(|v| matches!(v, Verdict::No(_))).map(|v| (p, v)))
+            .filter_map(|p| self.pc_verdict(p).filter(|v| matches!(v, Verdict::No(_))).map(|v| (p, v.clone())))
             .collect();
         let summary = specs.summary();
         if blocked.is_empty() || self.cfg.lock().unwrap().pc_noticed == summary {
@@ -81,7 +96,7 @@ impl App {
     /// The Hub's line about this PC, under its verdict: "This PC: PS5 games should run well".
     pub fn pc_line(&self, t: Target) -> Option<String> {
         let platform = self.target_platform(t);
-        self.pc_verdict(platform).map(|v| format!("This PC: {}", explain(&v, platform)))
+        self.pc_verdict(platform).map(|v| format!("This PC: {}", explain(v, platform)))
     }
 
     /// Under the Hub's Download button: what pressing it means. The download's size, the folder
@@ -109,8 +124,8 @@ impl App {
     /// For the download dialog: a warning when this game won't start or may be slow here.
     pub fn pc_download_warning(&self, platform: Platform) -> String {
         match self.pc_verdict(platform) {
-            Some(v @ Verdict::No(_)) => format!("This PC can't run {} games yet. {}.", platform.label(), explain(&v, platform)),
-            Some(v @ Verdict::Slow(_)) => format!("It may run slowly on this PC. {}.", explain(&v, platform)),
+            Some(v @ Verdict::No(_)) => format!("This PC can't run {} games yet. {}.", platform.label(), explain(v, platform)),
+            Some(v @ Verdict::Slow(_)) => format!("It may run slowly on this PC. {}.", explain(v, platform)),
             _ => String::new(),
         }
     }

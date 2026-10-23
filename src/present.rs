@@ -139,6 +139,13 @@ impl App {
         info.and_then(|i| req_url(&i.logo, 960, 0.0))
     }
 
+    /// `card_req` would find a picture: the same sources, without building the request (the
+    /// Library asks for every release on every keystroke).
+    pub fn has_card_art(&self, gi: usize) -> bool {
+        let g = &self.games[gi];
+        !g.g.cover.is_empty() || g.info.as_ref().is_some_and(|i| !i.portrait.is_empty() || !i.master.is_empty() || !i.hub.is_empty())
+    }
+
     pub fn card_req(&self, gi: usize) -> Option<ImgReq> {
         let g = &self.games[gi];
         let info = g.info.as_ref();
@@ -1101,7 +1108,7 @@ impl App {
         let pc_windows = self.pc_windows(t);
         let pc_runs: Option<(&str, String, i32)> = pc_game.then(|| match (steam.as_ref().and_then(|s| s.protondb.clone()), wine_packed) {
             (Some(tier), _) if pc_windows => {
-                let kind = match tier.as_str() { "platinum" | "gold" | "native" => 1, "borked" => 3, _ => 2 };
+                let kind = crate::versions::protondb_kind(&tier);
                 ("PROTONDB · RUNS WITH WINE", format!("{}{}", tier[..1].to_uppercase(), &tier[1..]), kind)
             }
             (None, true) => ("RUNS WITH", "Wine, included".to_string(), 0),

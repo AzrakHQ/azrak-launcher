@@ -815,9 +815,8 @@ impl App {
         }
         borrow_art(&mut out);
         self.games = out;
-        // The year from the catalog's date, else from the store's.
-        self.groups = crate::game_groups::Groups::with_years(self.games.iter().map(|game| (&game.g, game.name.as_str(),
-            crate::game_groups::release_year(&game.g.release).or_else(|| (game.rel_day != 0).then(|| util::civil_from_days(game.rel_day).0)))));
+        let years: Vec<Option<i32>> = (0..self.games.len()).map(|i| self.release_year(i)).collect();
+        self.groups = crate::game_groups::Groups::with_years(self.games.iter().zip(years).map(|(game, year)| (&game.g, game.name.as_str(), year)));
         borrow_group_art(&mut self.games, &self.groups);
         self.refresh_locals();
     }
@@ -1355,7 +1354,7 @@ impl App {
     pub fn outlook(&self, t: Target) -> Option<crate::compat::Outlook> {
         let platform = self.target_platform(t);
         (platform != crate::platform::Platform::Pc)
-            .then(|| crate::compat::Outlook::of(self.target_compat(t), self.pc_verdict(platform).as_ref()))
+            .then(|| crate::compat::Outlook::of(self.target_compat(t), self.pc_verdict(platform)))
     }
 
     /// A game's releases for the same platform, oldest version first, so "Version 3 of 3" is

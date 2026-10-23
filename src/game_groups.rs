@@ -93,8 +93,14 @@ impl Groups {
                 .map(|(key, id)| (format!("{console}:{key}"), id));
             for (key, id) in keys {
                 let seen = aliases.entry(key).or_default();
-                // Without a year, a name joins its game only when there's one by that name.
-                let ambiguous = !id && years[index].is_none() && seen.len() > 1;
+                // Without a year, a name joins its game only when there's one by that name (one
+                // game, however many of its releases were listed by name).
+                let ambiguous = !id && years[index].is_none() && {
+                    let mut games: Vec<usize> = seen.iter().map(|&other| root(&mut parent, other)).collect();
+                    games.sort_unstable();
+                    games.dedup();
+                    games.len() > 1
+                };
                 match seen.iter().copied().filter(|_| !ambiguous).find(|&other| id || close(years[index], years[other], SAME_PLATFORM_YEARS)) {
                     Some(other) => join(&mut parent, index, other),
                     None => seen.push(index),
@@ -223,6 +229,14 @@ mod tests {
         assert!(!together(6, 7));
         // Editions dated a few years apart are one game.
         let games = [on(Pc, "Cyberpunk 2077", "2020"), on(Pc, "Cyberpunk 2077: Ultimate Edition", "2023")];
+        assert_eq!(groups(&games).members.len(), 1);
+        // Releases years apart that are one game (a shared title ID) are one game to an undated
+        // release by the same name too.
+        let mut first = on(Ps4, "Game", "2014");
+        first.title_id = "CUSA00001".into();
+        let mut update = on(Ps4, "Game", "2020");
+        update.title_id = "CUSA00001".into();
+        let games = [first, update, on(Ps4, "Game", "")];
         assert_eq!(groups(&games).members.len(), 1);
         // An undated release listed first doesn't tie them together.
         let games = [on(Pc, "Prey", ""), on(Pc, "Prey", "2006"), on(Pc, "Prey", "2017")];

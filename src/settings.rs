@@ -685,7 +685,7 @@ impl App {
             return r;
         };
         r.hint = specs.summary().into();
-        let (ps5, ps4) = (specs.verdict(Platform::Ps5), specs.verdict(Platform::Ps4));
+        let (ps5, ps4) = (self.pc_verdict(Platform::Ps5).cloned(), self.pc_verdict(Platform::Ps4).cloned());
         let (Some(ps5), Some(ps4)) = (ps5, ps4) else {
             (r.value, r.hint_kind) = ("Check again".into(), 2);
             r.hint = format!("{} · the graphics check didn't finish", r.hint).into();

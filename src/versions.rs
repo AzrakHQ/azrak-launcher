@@ -55,13 +55,19 @@ impl Plays<'_> {
     pub fn kind(&self) -> i32 {
         match self {
             Plays::Console(o) => o.kind(),
-            _ => match self.score() {
-                6 => 1,
-                4 => 2,
-                1 => 3,
-                _ => 0,
-            },
+            Plays::Native => 1,
+            Plays::Wine(Some(tier), _) => protondb_kind(tier),
+            Plays::Wine(None, _) => 0,
         }
+    }
+}
+
+/// ProtonDB's tier as a Fact colour: 1 good, 2 warning, 3 bad.
+pub fn protondb_kind(tier: &str) -> i32 {
+    match tier {
+        "platinum" | "gold" | "native" => 1,
+        "borked" => 3,
+        _ => 2,
     }
 }
 
@@ -90,8 +96,7 @@ impl App {
         let t = Target { game: Some(i), local: g.local };
         if g.g.platform != Platform::Pc {
             let compat = if g.local.is_some() { self.target_compat(t) } else { self.game_compat(g) };
-            let verdict = self.pc_verdicts.get(usize::from(g.g.platform == Platform::Ps4)).and_then(Option::as_ref);
-            return Plays::Console(Outlook::of(compat, verdict));
+            return Plays::Console(Outlook::of(compat, self.pc_verdict(g.g.platform)));
         }
         if !self.pc_windows(t) {
             return Plays::Native;
@@ -99,18 +104,21 @@ impl App {
         Plays::Wine(g.g.steam.as_ref().and_then(|s| s.protondb.as_deref()), g.g.wine)
     }
 
-    /// Which version of a game to pick, the one you have aside: how well it plays here,
-    /// whether anyone shares it, a picture for its card, then the platform. "Best for this PC"
-    /// and the release a card shows both come from it.
-    fn play_rank(&self, i: usize) -> impl Ord + use<> {
+    /// Which version plays best here, the one you have aside: how well it plays, whether
+    /// anyone shares it. "Best for this PC" and the release a card shows both start from it.
+    fn play_rank(&self, i: usize) -> (u8, bool) {
+        (self.plays(i).score(), Availability::of(self.games[i].g.seeders) != Availability::None)
+    }
+
+    /// Between versions that play alike: a PC game, then PS4, then PS5; then the most shared.
+    fn tie_rank(&self, i: usize) -> (u8, u8) {
         let g = &self.games[i];
-        let availability = Availability::of(g.g.seeders);
-        (self.plays(i).score(), availability != Availability::None, self.card_req(i).is_some(),
-            platform_preference(g.g.platform), availability_rank(availability))
+        (platform_preference(g.g.platform), availability_rank(Availability::of(g.g.seeders)))
     }
 
     /// What makes one release a better pick than another, best highest: the one you have, one
-    /// you can get, then `play_rank`; then the newest version, the most shared.
+    /// you can get, how it plays (`play_rank`); then a picture for its card (no placeholder
+    /// while a release has one), `tie_rank`, the newest version, the most shared.
     pub fn release_rank(&self, i: usize) -> impl Ord + use<> {
         let g = &self.games[i];
         let installed_version = g.local.is_some_and(|l| {
@@ -120,7 +128,7 @@ impl App {
         (
             (installed_version, g.local.is_some(), !g.g.magnet.is_empty()),
             self.play_rank(i),
-            g.info.as_ref().is_some_and(|info| !info.master.is_empty()),
+            (self.has_card_art(i), self.tie_rank(i), g.info.as_ref().is_some_and(|info| !info.master.is_empty())),
             (crate::game_groups::version_key(&g.g.version), g.g.seeders.unwrap_or(0), g.g.id),
         )
     }
@@ -144,7 +152,8 @@ impl App {
         if versions.len() < 2 {
             return None;
         }
-        versions.iter().max_by_key(|(_, i)| self.play_rank(*i)).map(|(p, _)| *p)
+        // How it plays here and the platform, not which release has a picture.
+        versions.iter().max_by_key(|(_, i)| (self.play_rank(*i), self.tie_rank(*i))).map(|(p, _)| *p)
     }
 
     /// Show the game on another platform: its best release there.
@@ -159,19 +168,28 @@ impl App {
             self.open_hub(Target { game: Some(release), local: self.games[release].local });
         }
         self.set_focus(Z_VERSIONS, i as i32);
-        // Opening the page scrolled it to the top: bring the row back into view.
-        self.scroll_hub();
+    }
+
+    /// The year release `i` came out: the catalog's date, else the store's. Grouping and the
+    /// search suggestions both go by it.
+    pub fn release_year(&self, i: usize) -> Option<i32> {
+        let g = &self.games[i];
+        crate::game_groups::release_year(&g.g.release).or_else(|| (g.rel_day != 0).then(|| crate::util::civil_from_days(g.rel_day).0))
+    }
+
+    /// The platforms game `index` is on, in the usual order.
+    pub fn game_platforms(&self, index: usize) -> Vec<Platform> {
+        let members = self.groups.releases(index);
+        PLATFORMS.iter().copied().filter(|p| members.iter().any(|&i| self.games[i].g.platform == *p)).collect()
     }
 
     /// The game's name on its card: on several platforms, the plainest of its releases' names
     /// ("Hades", not "Hades + Original Soundtrack Bundle"); else the release's own.
     pub fn game_title(&self, index: usize) -> String {
-        let members = self.groups.releases(index);
-        let platforms = PLATFORMS.iter().filter(|p| members.iter().any(|&i| self.games[i].g.platform == **p)).count();
-        if platforms < 2 {
+        if self.game_platforms(index).len() < 2 {
             return self.games[index].name.clone();
         }
-        members.iter().map(|&i| &self.games[i].name).filter(|n| !n.is_empty())
+        self.groups.releases(index).iter().map(|&i| &self.games[i].name).filter(|n| !n.is_empty())
             .min_by_key(|n| n.chars().count()).cloned().unwrap_or_else(|| self.games[index].name.clone())
     }
 
