@@ -960,8 +960,7 @@ impl App {
 
     pub fn push_hub(&mut self) {
         let Some(t) = self.hub else { return };
-        // The game's details, the same on each platform's page (versions.rs).
-        let info = self.game_info(t);
+        let info = self.target_info(t);
         let mut keys = HashSet::new();
         let mut h = HubData::default();
         let (k, a, live) = self.kicker_for(t, true);

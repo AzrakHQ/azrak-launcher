@@ -817,6 +817,7 @@ impl App {
         let years: Vec<Option<i32>> = (0..self.games.len()).map(|i| self.release_year(i)).collect();
         self.groups = crate::game_groups::Groups::with_years(self.games.iter().zip(years).map(|(game, year)| (&game.g, game.name.as_str(), year)));
         borrow_group_art(&mut self.games, &self.groups);
+        share_group_details(&mut self.games, &self.groups.members);
         self.refresh_locals();
     }
 
@@ -830,7 +831,14 @@ impl App {
         let store = self.art.lock().unwrap();
         for l in libs {
             let cat = index.find(&l);
-            let info = Self::sanitize(store.get(&l.title_id).cloned()).or_else(|| cat.and_then(|c| self.games[c].info.clone()));
+            // Its own store details, with what they lack from its catalog release's.
+            let info = match (Self::sanitize(store.get(&l.title_id).cloned()), cat.and_then(|c| self.games[c].info.as_ref())) {
+                (Some(mut own), Some(release)) => {
+                    fill_details(&mut own, false, false, release);
+                    Some(own)
+                }
+                (own, release) => own.or_else(|| release.cloned()),
+            };
             let name = Self::display_name(&l.name, info.as_ref());
             locals.push(LocalV { l, info, cat, name });
         }
@@ -2584,8 +2592,7 @@ impl App {
     pub fn actions_for(&self, t: Target, in_hub: bool) -> Vec<ActionDef> {
         let mut a = Vec::new();
         let mk = |id, label: &str, icon, primary| ActionDef { id, label: label.into(), icon, primary, danger: false, round: false };
-        // Its trailer is the game's; its store page stays this version's (game_info keeps both so).
-        let info = self.game_info(t);
+        let info = self.target_info(t);
         if let Some(l) = t.local {
             if self.session_for_local(l).is_some() {
                 a.push(mk("resume", "Resume", "play", true));
@@ -2633,8 +2640,14 @@ impl App {
         a
     }
 
+    /// The store details of what the page shows: the installed copy's, unless the page shows
+    /// another release of the game than the one installed (the release picker), then that one's.
     pub fn target_info(&self, t: Target) -> Option<Info> {
-        t.local.and_then(|l| self.locals[l].info.clone()).or_else(|| t.game.and_then(|g| self.games[g].info.clone()))
+        let installed = t.local.and_then(|l| self.locals[l].info.clone());
+        match (t.local, t.game) {
+            (Some(l), Some(g)) if self.locals[l].cat != Some(g) => self.games[g].info.clone().or(installed),
+            _ => installed.or_else(|| t.game.and_then(|g| self.games[g].info.clone())),
+        }
     }
 
     pub fn run_action(&mut self, id: &str, t: Target) {
@@ -2789,7 +2802,7 @@ impl App {
 
     /// Play a game's official trailer inside the launcher.
     pub fn play_trailer(&mut self, t: Target) {
-        let Some(url) = self.game_info(t).map(|i| i.video.clone()).filter(|v| !v.is_empty()) else { return };
+        let Some(url) = self.target_info(t).map(|i| i.video.clone()).filter(|v| !v.is_empty()) else { return };
         if !crate::trailer::available() {
             return;
         }
@@ -2898,7 +2911,7 @@ impl App {
         }
         self.hub = Some(t);
         self.hub_actions = self.actions_for(t, true);
-        self.hub_shots = self.game_info(t).map(|i| i.shots.clone()).unwrap_or_default();
+        self.hub_shots = self.target_info(t).map(|i| i.shots.clone()).unwrap_or_default();
         self.ui().set_hub_y(0.0);
         self.ui().set_shots_x(0.0);
         if self.overlay == Overlay::Hub {
@@ -3498,6 +3511,62 @@ fn lend_art(games: &mut [GameV], from: usize, to: usize) {
     }
 }
 
+/// A release's page says what its own details lack from the same game's other releases: its
+/// versions for other platforms, by the same name without edition notes, not a bundle or
+/// another title it's grouped with. Same platform first. Its store page, release date, region
+/// and publisher stay its own, and nothing goes over its own catalog text or genres.
+pub fn share_group_details(games: &mut [GameV], groups: &[Vec<usize>]) {
+    for members in groups.iter().filter(|m| m.len() > 1) {
+        let keys = |g: &GameV| [crate::game_groups::art_key(&g.name), crate::game_groups::art_key(&g.g.name)];
+        // What each release had before any was filled, so the order doesn't matter.
+        let before: Vec<Option<Info>> = members.iter().map(|&m| games[m].info.clone()).collect();
+        for (k, &i) in members.iter().enumerate() {
+            let mine = keys(&games[i]);
+            let mut donors: Vec<usize> = (0..members.len()).filter(|&d| d != k && before[d].is_some())
+                .filter(|&d| keys(&games[members[d]]).iter().any(|key| !key.is_empty() && mine.contains(key))).collect();
+            donors.sort_by_key(|&d| games[members[d]].g.platform != games[i].g.platform);
+            if donors.is_empty() {
+                continue;
+            }
+            let (own_text, own_genres) = (!games[i].g.description.is_empty() || !games[i].g.excerpt.is_empty(), !games[i].g.genres.is_empty());
+            let mut info = games[i].info.clone().unwrap_or_default();
+            for d in donors {
+                fill_details(&mut info, own_text, own_genres, before[d].as_ref().unwrap());
+            }
+            games[i].info = Some(info);
+        }
+    }
+}
+
+/// Fill what `info` lacks from `other`'s (another release of the same game). The About comes
+/// whole from one release (its long text, with its short one unless there's an own), and never
+/// over the release's own catalog text (`own_text`); genres never over its own (`own_genres`); a
+/// trailer with its poster. Store page, release date, region, publisher and pictures (see
+/// `borrow_group_art`) aren't touched.
+pub fn fill_details(info: &mut Info, own_text: bool, own_genres: bool, other: &Info) {
+    if !own_text && info.long.is_empty() && !other.long.is_empty() {
+        info.long = other.long.clone();
+        if info.short.is_empty() {
+            info.short = other.short.clone();
+        }
+    }
+    if !own_text && info.long.is_empty() && info.short.is_empty() {
+        info.short = other.short.clone();
+    }
+    if !own_genres && info.genres.is_empty() {
+        info.genres = other.genres.clone();
+    }
+    info.rating = info.rating.take().or_else(|| other.rating.clone());
+    info.age = info.age.take().or_else(|| other.age.clone());
+    info.players = info.players.take().or_else(|| other.players.clone());
+    if info.shots.is_empty() {
+        info.shots = other.shots.clone();
+    }
+    if info.video.is_empty() && !other.video.is_empty() {
+        (info.video, info.poster) = (other.video.clone(), other.poster.clone());
+    }
+}
+
 /// A release without official pictures shows another of its game's (by another name: "Hades +
 /// Original Soundtrack Bundle" on PC is Hades): official art beats a forum cover, which often
 /// doesn't load; a forum cover is only lent to a release with no picture at all.
@@ -3564,5 +3633,47 @@ mod art_tests {
         assert_eq!(games[3].g.cover, "", "a PS4 band never lands on a PC card");
         assert_eq!(games[5].g.cover, "https://forum/hk.jpg");
         assert!(games[6].info.is_none() && games[6].g.cover.is_empty());
+    }
+    #[test]
+    fn a_games_details_are_shared_by_its_versions_only() {
+        let game = |name: &str, platform: Platform, info: Option<Info>| GameV {
+            g: Game { name: name.into(), platform, ..Default::default() }, info, name: name.into(),
+            buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None,
+        };
+        let ps4 = Info { long: "About Ghost.".into(), short: "Ghost.".into(), rating: Some(crate::psn::Rating { score: 4.6, total: 330 }),
+            shots: vec!["ps4.jpg".into()], video: "ps4.mp4".into(), poster: "ps4-poster.jpg".into(), store: "https://store/ps4".into(),
+            release: "2021".into(), publisher: "Sony Interactive Entertainment".into(), ..Default::default() };
+        let pc = Info { store: "https://steam/pc".into(), release: "2024".into(), publisher: "PlayStation Publishing".into(), ..Default::default() };
+        let ps5 = Info { shots: vec!["ps5.jpg".into()], ..Default::default() };
+        let mut games = vec![
+            game("Ghost of Tsushima", Platform::Ps4, Some(ps4)),
+            game("Ghost of Tsushima DIRECTOR'S CUT", Platform::Pc, Some(pc)),
+            game("Ghost of Tsushima: Director's Cut", Platform::Ps5, Some(ps5)),
+            game("Ghost of Tsushima: Legends Soundtrack Collection", Platform::Pc, None),
+            game("Ghost of Tsushima", Platform::Pc, Some(Info { long: "About it on PC.".into(), ..Default::default() })),
+        ];
+        // The soundtrack shares the card (say by title ID) but is no version of the game.
+        share_group_details(&mut games, &[vec![0, 1, 2, 3, 4]]);
+        let pc = games[1].info.as_ref().unwrap();
+        // Another PC release's About first; what no PC release has comes from the PS4's.
+        assert_eq!((pc.long.as_str(), pc.rating.as_ref().map(|r| r.total)), ("About it on PC.", Some(330)));
+        assert_eq!((pc.video.as_str(), pc.poster.as_str()), ("ps4.mp4", "ps4-poster.jpg"), "a trailer comes with its poster");
+        // Its own store page, release date and publisher.
+        assert_eq!((pc.store.as_str(), pc.release.as_str(), pc.publisher.as_str()), ("https://steam/pc", "2024", "PlayStation Publishing"));
+        // A release's own screenshots stay its own.
+        assert_eq!(games[2].info.as_ref().unwrap().shots, ["ps5.jpg"]);
+        assert!(games[3].info.is_none(), "another title on the card lends nothing");
+    }
+
+    #[test]
+    fn a_releases_own_text_and_genres_are_never_replaced() {
+        let other = Info { long: "Their About.".into(), short: "Theirs.".into(), genres: vec!["RPG".into()], ..Default::default() };
+        let mut own = Info::default();
+        fill_details(&mut own, true, true, &other);
+        assert!(own.long.is_empty() && own.short.is_empty() && own.genres.is_empty(), "the catalog's own text and genres show instead");
+        // Its own short line stays with the long text it lacked.
+        let mut own = Info { short: "Mine.".into(), ..Default::default() };
+        fill_details(&mut own, false, false, &other);
+        assert_eq!((own.long.as_str(), own.short.as_str(), own.genres.len()), ("Their About.", "Mine.", 1));
     }
 }
