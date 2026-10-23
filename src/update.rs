@@ -207,7 +207,8 @@ impl App {
                             if auto || manual {
                                 app.app_update_install(rel);
                             } else {
-                                app.toast_app("Update available", &format!("Azrak Launcher {} can be installed from Settings.", rel.version), 0);
+                                let t = app.toast_app_update("Update available", &format!("Azrak Launcher {} is out.", rel.version), 0, "Update in Settings");
+                                app.notify(t);
                             }
                         } else if manual {
                             app.toast_app("You're up to date", &format!("You have the latest version, {}.", current_version()), 1);
@@ -237,7 +238,8 @@ impl App {
             Err(e) => {
                 crate::log!("launcher update {} available, not installed: {e}", rel.version);
                 self.upd.error = format!("Can't update automatically: {e}");
-                self.toast_app("Update available", &format!("Azrak Launcher {} can't install automatically: {e}.", rel.version), 0);
+                let t = self.toast_app_update("Update available", &format!("Azrak Launcher {} can't install automatically: {e}.", rel.version), 0, "See in Settings");
+                self.notify(t);
                 self.kyty_refresh_settings();
                 return;
             }
@@ -273,7 +275,8 @@ impl App {
                     Err(e) => {
                         crate::log!("launcher update failed: {e}");
                         app.upd.error = format!("Update failed: {e}");
-                        app.toast_app("Update failed", &e, 2);
+                        let t = app.toast_app_update("Update failed", &e, 2, "See in Settings");
+                        app.notify(t);
                     }
                 }
                 app.kyty_refresh_settings();

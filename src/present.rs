@@ -620,7 +620,9 @@ impl App {
     }
 
     pub fn push_genres(&mut self) {
-        let hits = self.search_hits();
+        // As matched for the grid, unless the games changed since.
+        let fresh;
+        let hits = if self.hits.scores.len() == self.games.len() { &self.hits } else { fresh = self.search_hits(); &fresh };
         let n = self.status_count;
         let mut status_counts = vec![0usize; n];
         let mut genre_counts = std::collections::HashMap::<&str, usize>::new();
@@ -698,7 +700,10 @@ impl App {
             "".into()
         } else if self.games.is_empty() {
             (if self.syncing { "Loading catalog…" } else { "Catalog is empty" }).into()
-        } else if self.search_hits().scores.iter().any(Option::is_some) {
+        } else if !self.searching() {
+            let filtered = self.status_filter != "All" || self.platform_filter.is_some() || self.genre != "All";
+            (if filtered { "No games with these filters" } else { "No games to show yet" }).into()
+        } else if self.hits.scores.iter().any(Option::is_some) {
             "No matches with these filters. Choose All to see them".into()
         } else {
             format!("No games match “{}”", self.query.trim()).into()
@@ -710,6 +715,10 @@ impl App {
         }
         self.grid_window = (usize::MAX, 0);
         self.push_grid_window();
+        // The search keyboard's best matches follow the results.
+        if self.overlay == Overlay::SearchKeys {
+            self.sk_push();
+        }
     }
 
     /// Only rows around the viewport exist as UI elements; this keeps the grid instant with any catalog size.

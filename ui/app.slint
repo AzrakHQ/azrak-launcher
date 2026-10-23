@@ -39,8 +39,10 @@ component Toast inherits Rectangle {
         drop-shadow-offset-y: (14px * S.k);
         drop-shadow-color: #000000b3;
         clip: true;
+        // Every card takes its clicks (one without an action just closes), so a click never
+        // lands on what's behind it; none once it's going.
         touch := TouchArea {
-            enabled: root.actionable;
+            enabled: !data.leaving;
             mouse-cursor: root.actionable ? pointer : default;
             clicked => { root.clicked(); }
         }

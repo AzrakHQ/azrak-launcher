@@ -28,6 +28,9 @@ const NICKNAMES: [(&str, &str); 12] = [
     ("re", "biohazard"),
 ];
 
+/// What sites put between slashes besides other names: languages, regions, kinds of release.
+const NOTE_WORDS: [&str; 10] = ["rus", "eng", "eur", "usa", "jpn", "asia", "multi", "retail", "fpkg", "pkg"];
+
 /// Words initials may leave out: "tlou2" is The Last of Us Part II.
 const SKIP: [&str; 6] = ["the", "a", "an", "of", "and", "part"];
 
@@ -177,10 +180,14 @@ impl Doc {
     pub fn new(name: &str, site_name: &str, other: &str, genres: &str) -> Doc {
         static NOTES: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\[[^\]]*\]").unwrap());
         let site = NOTES.replace_all(site_name, " ");
+        // Alternatives are split by " / " ("Split/Second" is one name), and a piece that's a
+        // note ("EN", "v1.01") is no name: typing "en" shouldn't find it as one.
+        let is_name = |words: &[String]| words.iter()
+            .any(|w| w.chars().filter(|c| c.is_alphabetic()).count() >= 3 && !NOTE_WORDS.contains(&w.as_str()));
         let mut names: Vec<Name> = Vec::new();
-        for raw in name.split('/').chain(site.split('/')) {
+        for (i, raw) in name.split(" / ").chain(site.split(" / ")).enumerate() {
             let words: Vec<String> = norm(raw).split_whitespace().map(String::from).collect();
-            if !words.is_empty() && !names.iter().any(|n| n.words == words) {
+            if !words.is_empty() && (i == 0 || is_name(&words)) && !names.iter().any(|n| n.words == words) {
                 names.push(Name::new(raw, words));
             }
         }
@@ -301,6 +308,7 @@ impl Query {
 }
 
 /// Every game's score for a search (see `Doc::score`).
+#[derive(Default)]
 pub struct Hits {
     pub scores: Vec<Option<u8>>,
     /// Nothing matched what was typed, so these are near spellings.
@@ -321,7 +329,7 @@ mod tests {
 
     /// Real names from the catalogs (store name, site name), with look-alikes that used to come
     /// first or match by accident.
-    const GAMES: [(&str, &str); 26] = [
+    const GAMES: [(&str, &str); 29] = [
         ("Code Vein II", "CODE VEIN II"),
         ("Code Violet", "Code Violet"),
         ("Call of Duty: Black Ops 6", "Call of Duty: Black Ops 6"),
@@ -348,6 +356,9 @@ mod tests {
         ("Gran Turismo 7", "Gran Turismo 7"),
         ("Need for Speed Unbound", "Need for Speed UnboundNFS Unbound"),
         ("Astro Bot", "Astro Bot (Digital Deluxe Edition¹)"),
+        ("Patapon Remastered", "Patapon Remastered / EN / v1.01"),
+        ("Enslaved: Odyssey to the West", "Enslaved: Odyssey to the West"),
+        ("Split/Second", "Split/Second: Velocity"),
     ];
 
     fn docs() -> Vec<Doc> {
@@ -413,6 +424,15 @@ mod tests {
         assert_eq!(first("god"), "God of War Ragnarök");
         assert_eq!(first("god of w"), "God of War Ragnarök");
         assert_eq!(first("astro bot"), "Astro Bot");
+    }
+
+    #[test]
+    fn notes_between_slashes_are_not_names() {
+        // "EN" in "Patapon Remastered / EN / v1.01" isn't a name the game is called.
+        assert_eq!(first("en"), "Enslaved: Odyssey to the West");
+        // A slash inside a name keeps it whole.
+        assert_eq!(first("splitsecond"), "Split/Second");
+        assert_eq!(first("gta 5"), "Grand Theft Auto V");
     }
 
     #[test]

@@ -201,6 +201,8 @@ pub struct App {
     pub filtered: Vec<usize>,
     /// Nothing matched the search as typed: what it searched for instead.
     pub search_note: String,
+    /// Every game's match for the search, from the last `apply_filter`.
+    pub hits: crate::search::Hits,
     pub genre: String,
     pub status_filter: String,
     pub genre_list: Vec<(String, usize)>,
@@ -227,6 +229,9 @@ pub struct App {
 
     pub toasts: Vec<ToastData>,
     pub toast_seq: i32,
+    /// A notification's action just opened something: clicks until then are the rest of a
+    /// double-click, not choices on the screen that came up under the pointer.
+    clicks_after: Option<std::time::Instant>,
     pub status: String,
     pub status_busy: bool,
     pub catalog_updated: f64,
@@ -493,6 +498,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         bg_show_b: false,
         filtered: Vec::new(),
         search_note: String::new(),
+        hits: Default::default(),
         genre: "All".into(),
         status_filter: "All".into(),
         genre_list: Vec::new(),
@@ -516,6 +522,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         edit_index: -1,
         toasts: Vec::new(),
         toast_seq: 0,
+        clicks_after: None,
         status: String::new(),
         status_busy: false,
         catalog_updated: catalog.updated,
@@ -937,7 +944,8 @@ impl App {
         self.genre_list = list;
     }
 
-    /// Every game's match for the search (search.rs); before one, every game matches.
+    /// Every game's match for the search (search.rs); before one, every game matches. The
+    /// Library keeps the last in `hits`.
     pub fn search_hits(&self) -> crate::search::Hits {
         crate::search::run(&crate::search::Query::new(&self.query), self.games.iter().map(|g| &g.search))
     }
@@ -1002,6 +1010,7 @@ impl App {
             _ => String::new(),
         };
         self.filtered = list;
+        self.hits = hits;
     }
 
     // ------------------------------------------------------------------ background jobs
@@ -1832,6 +1841,9 @@ impl App {
     pub fn on_click(&mut self, zone: i32, idx: i32) {
         if self.boot.active {
             return self.boot_confirm();
+        }
+        if self.clicks_after.is_some_and(|t| std::time::Instant::now() < t) {
+            return;
         }
         if self.search_editing && zone != Z_SEARCH {
             self.stop_search_edit();
@@ -3106,20 +3118,34 @@ impl App {
         self.notify(t);
     }
 
+    /// News about the launcher's own update; clicking it goes to Settings → Updates → Azrak
+    /// Launcher, where it's installed or restarted into.
+    pub fn toast_app_update(&mut self, text: &str, sub: &str, kind: i32, button: &str) -> ToastData {
+        let mut t = toast_data(text, sub, kind);
+        (t.app, t.kicker, t.action, t.button) = (true, "AZRAK LAUNCHER".into(), "app-update".into(), button.into());
+        t
+    }
+
     /// The new version is installed: one click from the button that starts it. (Ready while the
     /// start screen is up, it's told when the Home screen shows: see `boot_finish`.)
     pub fn toast_update_ready(&mut self, version: &str) {
         if self.boot.active { return; }
-        let mut t = toast_data(&format!("Version {version} is ready"), "Restart the launcher to start using it.", 1);
-        (t.app, t.kicker, t.action, t.button) = (true, "AZRAK LAUNCHER".into(), "app-update".into(), "Restart in Settings".into());
+        let mut t = self.toast_app_update(&format!("Version {version} is ready"), "Restart the launcher to start using it.", 1, "Restart in Settings");
         // Worth more than a glance: it stays a while.
         t.life = 20_000;
         self.notify(t);
     }
 
-    /// Clicking a notification does its action and closes it.
+    /// Clicking a notification does its action (if it has one) and closes it; once, even if
+    /// it's clicked again while it glides away.
     pub fn toast_clicked(&mut self, id: i32, action: &str) {
+        if !self.toasts.iter().any(|t| t.id == id && !t.leaving) {
+            return;
+        }
         self.toast_dismiss(id);
+        if !action.is_empty() {
+            self.clicks_after = Some(std::time::Instant::now() + Duration::from_millis(500));
+        }
         if let Some(path) = action.strip_prefix("log:") {
             open_url(path);
             return;
