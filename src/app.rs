@@ -923,7 +923,7 @@ impl App {
         let downloading: std::collections::HashSet<i64> = self.downloads.snapshot().iter().map(|job| job.topic).collect();
         self.groups.members.iter().map(|members| members.iter().any(|i| {
             let game = &self.games[*i];
-            game.local.is_some() || downloading.contains(&game.g.id) || self.card_req(*i).is_some()
+            game.local.is_some() || downloading.contains(&game.g.id) || self.has_card_art(*i)
         })).collect()
     }
 
@@ -1122,9 +1122,9 @@ impl App {
     /// or the nearest one if it's gone. Also the card saved under an open card, so Back comes
     /// to it, in view either way; and the backdrop follows when the card shows another release.
     pub fn keep_grid_focus(&mut self, anchor: &CatalogAnchor) {
-        let (Some(old), Some(id)) = (anchor.grid_index, anchor.grid) else { return };
-        let found = self.filtered.iter().position(|g| self.games[*g].g.id == id)
-            .or_else(|| self.filtered.iter().position(|g| self.groups.releases(*g).iter().any(|m| self.games[*m].g.id == id)));
+        let Some(old) = anchor.grid_index else { return };
+        let found = anchor.grid.and_then(|id| self.filtered.iter().position(|g| self.games[*g].g.id == id)
+            .or_else(|| self.filtered.iter().position(|g| self.groups.releases(*g).iter().any(|m| self.games[*m].g.id == id))));
         let pos = found.unwrap_or_else(|| (old.max(0) as usize).min(self.filtered.len().saturating_sub(1)));
         // The scroll belongs to the old list: the card in view, and the list not scrolled past
         // its end; unchanged when both hold already (a refresh doesn't move the grid under you).
@@ -1135,7 +1135,7 @@ impl App {
         if self.view == 1 && self.zone == Z_GRID && self.overlay == Overlay::None {
             self.set_focus(Z_GRID, pos as i32);
             // Another release on its card, or another game where it was: the backdrop follows.
-            if self.filtered.get(pos).is_some_and(|&g| self.games[g].g.id != id) {
+            if self.filtered.get(pos).is_some_and(|&g| Some(self.games[g].g.id) != anchor.grid) {
                 self.focus_card_changed();
             }
         } else if let Some(saved) = self.stack.iter_mut().find(|(_, zone, _)| *zone == Z_GRID) {

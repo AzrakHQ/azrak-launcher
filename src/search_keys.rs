@@ -142,7 +142,8 @@ impl App {
                 [self.game_year(i).map(|y| format!("({y})")), Some(format!("· {}", platforms.join(" · "))),
                     crate::present::size_label(&self.games[i].g).map(|s| format!("· {s}"))]
             };
-            let labels = tell_apart(&games.iter().map(|(i, name)| (name.clone(), details(*i))).collect::<Vec<_>>());
+            let names: Vec<String> = games.iter().map(|(_, name)| name.clone()).collect();
+            let labels = tell_apart(&names, |k| details(games[k].0));
             games.iter().zip(labels).map(|((i, _), label)| (Suggestion::Game(self.games[*i].g.id), label)).collect()
         }
     }
@@ -346,21 +347,29 @@ impl App {
     }
 }
 
-/// Labels for names, each with details that may tell it apart (in order of preference): a
-/// name shared with others gets the first detail that differs for all of them, else a number.
-fn tell_apart<const N: usize>(entries: &[(String, [Option<String>; N])]) -> Vec<String> {
-    entries.iter().enumerate().map(|(at, (name, _))| {
-        let twins: Vec<usize> = (0..entries.len()).filter(|&j| entries[j].0 == *name).collect();
+/// Labels for names: a name shared with others gets the first of its details (in order of
+/// preference, from `details`, asked only for shared names) that differs for all of them, else
+/// a number.
+fn tell_apart<const N: usize>(names: &[String], details: impl Fn(usize) -> [Option<String>; N]) -> Vec<String> {
+    let mut asked: Vec<Option<[Option<String>; N]>> = vec![None; names.len()];
+    (0..names.len()).map(|at| {
+        let twins: Vec<usize> = (0..names.len()).filter(|&j| names[j] == names[at]).collect();
         if twins.len() < 2 {
-            return name.clone();
+            return names[at].clone();
         }
+        for &j in &twins {
+            if asked[j].is_none() {
+                asked[j] = Some(details(j));
+            }
+        }
+        let of = |j: usize, k: usize| asked[j].as_ref().and_then(|d| d[k].clone());
         let tells = (0..N).find(|&k| {
-            let mut values: Vec<&Option<String>> = twins.iter().map(|&j| &entries[j].1[k]).collect();
-            values.iter().all(|v| v.is_some()) && { values.sort(); values.dedup(); values.len() == twins.len() }
+            let mut values: Vec<Option<String>> = twins.iter().map(|&j| of(j, k)).collect();
+            values.iter().all(Option::is_some) && { values.sort(); values.dedup(); values.len() == twins.len() }
         });
         match tells {
-            Some(k) => format!("{name} {}", entries[at].1[k].clone().unwrap_or_default()),
-            None => format!("{name} · {}", twins.iter().position(|&j| j == at).unwrap_or(0) + 1),
+            Some(k) => format!("{} {}", names[at], of(at, k).unwrap_or_default()),
+            None => format!("{} · {}", names[at], twins.iter().position(|&j| j == at).unwrap_or(0) + 1),
         }
     }).collect()
 }
@@ -372,6 +381,10 @@ mod tests {
     #[test]
     fn suggestions_by_one_name_are_told_apart() {
         let e = |name: &str, d: [Option<&str>; 3]| (name.to_string(), d.map(|x| x.map(String::from)));
+        let tell_apart = |entries: &[(String, [Option<String>; 3])]| {
+            let names: Vec<String> = entries.iter().map(|(n, _)| n.clone()).collect();
+            tell_apart(&names, |k| entries[k].1.clone())
+        };
         // By year when the years differ.
         let labels = tell_apart(&[e("Doom", [Some("(2016)"), Some("· PS4 · PC"), None]), e("Doom", [Some("(2021)"), Some("· PS4"), None]), e("Hades", [None, None, None])]);
         assert_eq!(labels, ["Doom (2016)", "Doom (2021)", "Hades"]);

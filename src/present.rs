@@ -142,20 +142,29 @@ impl App {
     /// `card_req` would find a picture: the same sources, without building the request (the
     /// Library asks for every release on every keystroke).
     pub fn has_card_art(&self, gi: usize) -> bool {
-        let g = &self.games[gi];
-        !g.g.cover.is_empty() || g.info.as_ref().is_some_and(|i| !i.portrait.is_empty() || !i.master.is_empty() || !i.hub.is_empty())
+        self.card_sources(gi).iter().any(|(url, _, _)| !url.is_empty())
     }
 
     pub fn card_req(&self, gi: usize) -> Option<ImgReq> {
+        self.card_sources(gi).iter().find_map(|(url, w, crop)| req_url(url, *w, *crop))
+    }
+
+    /// Where a card's picture comes from, best first (url, width, crop): `card_req` takes the
+    /// first there is, `has_card_art` says whether there's any.
+    fn card_sources(&self, gi: usize) -> [(&str, u32, f32); 5] {
         let g = &self.games[gi];
         let info = g.info.as_ref();
+        let field = |f: fn(&crate::psn::Info) -> &str| info.map(f).unwrap_or("");
         // Steam's other art is wide: the release's own cover reads better on a 2:3 card.
         let wide = info.is_some_and(|i| i.source.as_deref() == Some("steam"));
-        info.and_then(|i| req_url(&i.portrait, 440, 0.0))
-            .or_else(|| info.filter(|_| !wide).and_then(|i| req_url(&i.master, 440, 0.0)))
-            .or_else(|| req_url(&g.g.cover, 440, if g.g.platform == crate::platform::Platform::Ps4 { crate::images::CROP_PS4_BAND } else { COVER_CROP }))
-            .or_else(|| info.and_then(|i| req_url(&i.master, 440, 0.0)))
-            .or_else(|| info.and_then(|i| req_url(&i.hub, 640, 0.0)))
+        let cover_crop = if g.g.platform == crate::platform::Platform::Ps4 { crate::images::CROP_PS4_BAND } else { COVER_CROP };
+        [
+            (field(|i| &i.portrait), 440, 0.0),
+            (if wide { "" } else { field(|i| &i.master) }, 440, 0.0),
+            (&g.g.cover, 440, cover_crop),
+            (field(|i| &i.master), 440, 0.0),
+            (field(|i| &i.hub), 640, 0.0),
+        ]
     }
 
     // ------------------------------------------------------------------ push everything

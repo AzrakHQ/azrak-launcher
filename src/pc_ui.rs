@@ -44,8 +44,11 @@ impl App {
         // stays the one focused (keep_grid_focus).
         let anchor = self.catalog_anchor();
         self.apply_filter();
-        if self.view == 1 && !self.boot.active {
-            self.push_grid();
+        if !self.boot.active {
+            if self.view == 1 {
+                self.push_grid();
+            }
+            // Also a card saved under an open card while another view shows.
             self.keep_grid_focus(&anchor);
         }
         match self.overlay {
@@ -63,11 +66,10 @@ impl App {
 
     /// Once per PC: say so when a console's games can't start here, before anyone downloads one.
     fn pc_notice(&mut self) {
-        let Some(specs) = self.pc.clone() else { return };
+        let Some(summary) = self.pc.as_ref().map(Specs::summary) else { return };
         let blocked: Vec<(Platform, Verdict)> = [Platform::Ps5, Platform::Ps4].into_iter()
             .filter_map(|p| self.pc_verdict(p).filter(|v| matches!(v, Verdict::No(_))).map(|v| (p, v.clone())))
             .collect();
-        let summary = specs.summary();
         if blocked.is_empty() || self.cfg.lock().unwrap().pc_noticed == summary {
             return;
         }

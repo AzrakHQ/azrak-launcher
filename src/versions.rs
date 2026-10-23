@@ -83,11 +83,19 @@ impl Plays<'_> {
     }
 }
 
-/// What runs Windows games here ("Proton", "Wine"), looked up once: the Game Hub and its tiles ask
-/// on every redraw. (Starting a game looks again.)
+/// What runs Windows games here ("Proton", "Wine"): the Game Hub and its tiles ask on every
+/// redraw, so it's looked up again only after a few seconds (installing Proton shows soon).
 fn windows_runner() -> Option<&'static str> {
-    static RUNNER: std::sync::OnceLock<Option<&'static str>> = std::sync::OnceLock::new();
-    *RUNNER.get_or_init(|| crate::pcgame::windows_runner().map(|(_, runner)| runner))
+    static RUNNER: std::sync::Mutex<Option<(std::time::Instant, Option<&'static str>)>> = std::sync::Mutex::new(None);
+    let mut seen = RUNNER.lock().unwrap();
+    match *seen {
+        Some((at, runner)) if at.elapsed() < std::time::Duration::from_secs(5) => runner,
+        _ => {
+            let runner = crate::pcgame::windows_runner().map(|(_, runner)| runner);
+            *seen = Some((std::time::Instant::now(), runner));
+            runner
+        }
+    }
 }
 
 /// ProtonDB's tier as a Fact colour: 1 good, 2 warning, 3 bad.
@@ -276,7 +284,9 @@ impl App {
         let best = self.best_platform(&versions);
         versions.iter().map(|&(p, i)| {
             let g = &self.games[i];
-            let plays = self.plays(i);
+            // The shown platform's tile says what the page says (with the installed copy kept
+            // across the release picker).
+            let plays = if p == shown { self.plays_for(t) } else { self.plays(i) };
             let detail = if g.local.is_some() {
                 "Installed".to_string()
             } else {
