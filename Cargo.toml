@@ -1,6 +1,6 @@
 [package]
 name = "azrak"
-version = "1.18.3"
+version = "1.18.4"
 edition = "2021"
 description = "Azrak Launcher: a fast, native console-style game launcher for Linux"
 rust-version = "1.92"
