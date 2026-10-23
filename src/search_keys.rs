@@ -134,12 +134,12 @@ impl App {
         if self.query.trim().is_empty() {
             self.cfg.lock().unwrap().recent_searches.iter().take(MAX_SUGGESTIONS).map(|q| (Suggestion::Recent(q.clone()), q.clone())).collect()
         } else {
-            // The same game for two consoles (or a PC) says which is which.
-            let games: Vec<&GameV> = self.filtered.iter().take(MAX_SUGGESTIONS).map(|&i| &self.games[i]).collect();
-            games.iter().map(|g| (Suggestion::Game(g.g.id), if games.iter().filter(|o| o.name == g.name).count() > 1 {
-                format!("{} · {}", g.name, g.g.platform.label())
+            // Named as their cards are; two cards by one name say which platform each is.
+            let games: Vec<(usize, String)> = self.filtered.iter().take(MAX_SUGGESTIONS).map(|&i| (i, self.game_title(i))).collect();
+            games.iter().map(|(i, name)| (Suggestion::Game(self.games[*i].g.id), if games.iter().filter(|(_, o)| o == name).count() > 1 {
+                format!("{name} · {}", self.games[*i].g.platform.label())
             } else {
-                g.name.clone()
+                name.clone()
             })).collect()
         }
     }

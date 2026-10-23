@@ -878,8 +878,9 @@ impl App {
         let mut seen = std::collections::HashSet::new();
         let row: Vec<RowItem> = locals.into_iter().filter(|i| {
             let local = &self.locals[*i];
+            // A game's catalog card spans platforms; an installed PS4 and PC copy are two tiles.
             let key = if let Some(catalog) = local.cat {
-                format!("group:{:?}", self.groups.releases(catalog).first())
+                format!("group:{:?}:{}", self.groups.releases(catalog).first(), local.l.platform.label())
             } else if !local.l.title_id.is_empty() { format!("id:{}", local.l.title_id) }
             else {
                 // The PC and the PS5 version of a game are two games.
@@ -980,7 +981,8 @@ impl App {
         let gs = &self.games;
         let score = |i: usize| gs[i].info.as_ref().and_then(|x| x.rating.as_ref()).map(|r| (r.score, r.total)).unwrap_or((-1.0, 0));
         match self.sort {
-            1 => list.sort_by(|a, b| gs[*a].name.to_lowercase().cmp(&gs[*b].name.to_lowercase())),
+            // By the name the card shows (a game on several platforms: its plainest name).
+            1 => list.sort_by_cached_key(|i| self.game_title(*i).to_lowercase()),
             2 => list.sort_by(|a, b| gs[*b].rel_day.cmp(&gs[*a].rel_day)),
             3 => list.sort_by(|a, b| score(*b).partial_cmp(&score(*a)).unwrap_or(std::cmp::Ordering::Equal)),
             4 => list.sort_by(|a, b| gs[*b].g.size_gb.unwrap_or(-1.0).partial_cmp(&gs[*a].g.size_gb.unwrap_or(-1.0)).unwrap_or(std::cmp::Ordering::Equal)),
@@ -1854,9 +1856,6 @@ impl App {
         if zone == Z_SEARCH_KEYS && self.overlay == Overlay::SearchKeys {
             return self.click_search_keys(idx);
         }
-        if zone == Z_VERSIONS && self.overlay == Overlay::Hub && idx >= 0 {
-            return self.switch_version(idx as usize);
-        }
         if zone == Z_POWER && self.overlay == Overlay::Power {
             return self.click_power(idx);
         }
@@ -2630,7 +2629,7 @@ impl App {
             "trailer" => self.play_trailer(t),
             "download" => self.prepare_download(t),
             "pkg_info" => {
-                let others = t.game.map(|g| self.groups.releases(g).iter().filter(|i| !self.games[**i].g.is_pkg()).count()).unwrap_or(0);
+                let others = t.game.map(|g| self.release_order(g).iter().filter(|i| !self.games[**i].g.is_pkg()).count()).unwrap_or(0);
                 let tip = if others > 0 { "This game has another release that isn't a PKG: switch to it with the release selector." } else { "Look for a release of this game that is a folder, an archive or an exFAT image." };
                 self.toast("This release is a PS5 PKG package", &format!("PS5 games install from extracted releases only, not PKG packages. {tip}"), 0);
             }
@@ -3486,8 +3485,10 @@ fn lend_art(games: &mut [GameV], from: usize, to: usize) {
 /// doesn't load; a forum cover is only lent to a release with no picture at all.
 pub fn borrow_group_art(games: &mut [GameV], groups: &crate::game_groups::Groups) {
     for members in &groups.members {
+        // A portrait (the card's shape) first, then any official art, then a forum cover.
+        let portrait = |g: &GameV| g.info.as_ref().is_some_and(|i| !i.portrait.is_empty());
         let Some(donor) = members.iter().copied().filter(|&i| has_official_art(&games[i]) || !games[i].g.cover.is_empty())
-            .max_by_key(|&i| has_official_art(&games[i])) else { continue };
+            .max_by_key(|&i| (portrait(&games[i]), has_official_art(&games[i]), std::cmp::Reverse(i))) else { continue };
         let official = has_official_art(&games[donor]);
         for &i in members {
             if !has_official_art(&games[i]) && (official || games[i].g.cover.is_empty()) {

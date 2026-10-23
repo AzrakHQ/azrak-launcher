@@ -832,7 +832,8 @@ impl App {
             // Covers show Linux results only; the Game Hub has the rest.
             let (compat, compat_level) = ce.and_then(|e| Some((e.tag()?, e.status.level()))).unwrap_or_default();
             // Size is always visible. Version/region details belong to the selected Hub release.
-            let releases = self.groups.releases(gi).len();
+            // This platform's releases, as the Game Hub numbers them ("Release 1 of 2").
+            let releases = self.release_order(gi).len();
             let meta = size_label(&g.g).unwrap_or_else(|| "Size unknown".into());
             cards.push(CardData {
                 index: k as i32,

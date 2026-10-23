@@ -17,10 +17,13 @@ static EDITION: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(
     r"(?i)\b(?:digital\s+)?(?:deluxe|ultimate|standard|premium|gold|complete|collector'?s|game of the year|goty|definitive)\s+edition\b|\b(?:all\s+dlc)\b|\bdirector['’]?s\s+cut\b|\s\+\s[^+]*\b(?:dlc|pre-?purchase|bonus(?:es)?|entitlements?|season\s+pass|soundtrack|updates?)\b.*$"
 ).unwrap());
 
-/// Releases on one platform with the same name this many years apart or more are different games.
-const SAME_PLATFORM_YEARS: i32 = 2;
+/// Releases on one platform with the same name more than this many years apart are different
+/// games (Doom 2016 and the 1993 one re-released in 2021). Uploaders date editions differently
+/// (Cyberpunk 2077: 2020, its Ultimate Edition 2023), hence a few years' room.
+const SAME_PLATFORM_YEARS: i32 = 4;
 /// A game on another platform comes out later (God of War: PS4 2018, PC 2022) or earlier (PC
-/// first, as many indies), but not this far apart: Tomb Raider (1996, 2013) are two games.
+/// first, as many indies), but not more than this many years apart: Tomb Raider (1996, 2013)
+/// are two games.
 const PORT_YEARS: i32 = 7;
 
 /// The year a release came out, from the catalog's date: "2021", "20.08.2021",
@@ -79,7 +82,9 @@ impl Groups {
                 .map(|(key, id)| (format!("{console}:{key}"), id));
             for (key, id) in keys {
                 let seen = aliases.entry(key).or_default();
-                match seen.iter().copied().find(|&other| id || close(years[index], years[other], SAME_PLATFORM_YEARS)) {
+                // Without a year, a name joins its game only when there's one by that name.
+                let ambiguous = !id && years[index].is_none() && seen.len() > 1;
+                match seen.iter().copied().filter(|_| !ambiguous).find(|&other| id || close(years[index], years[other], SAME_PLATFORM_YEARS)) {
                     Some(other) => join(&mut parent, index, other),
                     None => seen.push(index),
                 }
@@ -205,6 +210,9 @@ mod tests {
         assert!(together(1, 2) && !together(0, 1) && !together(0, 2));
         assert!(together(3, 5) && !together(3, 4) && !together(4, 5));
         assert!(!together(6, 7));
+        // Editions dated a few years apart are one game.
+        let games = [on(Pc, "Cyberpunk 2077", "2020"), on(Pc, "Cyberpunk 2077: Ultimate Edition", "2023")];
+        assert_eq!(groups(&games).members.len(), 1);
         assert_eq!(release_year("4 September 2025"), Some(2025));
         assert_eq!(release_year("2013-2018"), Some(2013));
         assert_eq!(release_year(""), None);
@@ -236,3 +244,4 @@ mod tests {
         assert!(grouped.releases(index).iter().any(|i| file.games[*i].id == 6744684));
     }
 }
+

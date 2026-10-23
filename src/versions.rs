@@ -48,7 +48,9 @@ impl App {
         let g = &self.games[i];
         let t = Target { game: Some(i), local: g.local };
         if g.g.platform != Platform::Pc {
-            let outlook = self.outlook(t).unwrap_or(Outlook::Untested);
+            // Runs for every release on every keystroke: the catalog entry's result directly.
+            let compat = if g.local.is_some() { self.target_compat(t) } else { self.game_compat(g) };
+            let outlook = Outlook::of(compat, self.pc_verdict(g.g.platform).as_ref());
             let score = match outlook {
                 Outlook::PlaysHere => 6,
                 Outlook::Plays => 5,
@@ -120,8 +122,9 @@ impl App {
         let Some(t) = self.hub else { return };
         let Some(current) = t.game else { return };
         let versions = self.platform_versions(current);
-        let Some(&(_, release)) = versions.get(i) else { return };
-        if release != current {
+        let Some(&(platform, release)) = versions.get(i) else { return };
+        // The platform shown stays on the release picked with "Choose another release".
+        if platform != self.games[current].g.platform {
             crate::audio::play(crate::audio::Sound::Select);
             self.open_hub(Target { game: Some(release), local: self.games[release].local });
         }
@@ -173,7 +176,9 @@ impl App {
         }
         let best = self.best_platform(&versions);
         let shown = self.games[current].g.platform;
-        versions.iter().map(|&(p, i)| {
+        versions.iter().map(|&(p, best_release)| {
+            // The shown platform's tile describes the release on screen.
+            let i = if p == shown { current } else { best_release };
             let g = &self.games[i];
             let fit = self.fit(i);
             let detail = if g.local.is_some() {
