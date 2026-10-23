@@ -731,8 +731,9 @@ export component AppWindow inherits Window {
                             HorizontalLayout {
                                 height: (26px * root.library-type-scale);
                                 spacing: (6px * S.k);
-                                // The size always reads in full; the platforms make room.
-                                Text { text: c.meta; min-width: self.preferred-width; font-size: (18px * root.library-type-scale); font-weight: 500; color: Theme.text2; }
+                                // The size fits beside the platforms; only a long "Size unknown" on
+                                // the narrowest cards shortens.
+                                Text { text: c.meta; font-size: (18px * root.library-type-scale); font-weight: 500; color: Theme.text2; overflow: elide; }
                                 Rectangle { horizontal-stretch: 1; }
                                 // The platforms the game is on, off the cover (one card, every
                                 // platform: Hades on PS5, PS4 and PC): filled tags, each in its

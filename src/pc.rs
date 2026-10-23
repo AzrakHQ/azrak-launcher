@@ -46,8 +46,25 @@ pub struct Specs {
     /// `None` when the graphics check didn't finish (a driver crash or hang).
     pub gpus: Option<Vec<Gpu>>,
     /// The verdicts for PS5 and PS4 games, worked out on first use: the Library asks for every
-    /// release on every keystroke. Private, so specs are never built with someone else's.
-    verdicts: std::sync::OnceLock<[Option<Verdict>; 2]>,
+    /// release on every keystroke. Specs are read once and not changed after.
+    verdicts: Verdicts,
+}
+
+/// `Specs::verdicts`: worked out from the rest of the specs, so a copy starts without it (and
+/// works them out from its own) and specs compare by the PC they describe.
+#[derive(Debug, Default)]
+struct Verdicts(std::sync::OnceLock<[Option<Verdict>; 2]>);
+
+impl Clone for Verdicts {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for Verdicts {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -90,7 +107,7 @@ impl Verdict {
 impl Specs {
     /// `verdict`, worked out once; none for PC games.
     pub fn verdict_for(&self, platform: Platform) -> Option<&Verdict> {
-        let v = self.verdicts.get_or_init(|| [self.verdict(Platform::Ps5), self.verdict(Platform::Ps4)]);
+        let v = self.verdicts.0.get_or_init(|| [self.verdict(Platform::Ps5), self.verdict(Platform::Ps4)]);
         match platform {
             Platform::Ps5 => v[0].as_ref(),
             Platform::Ps4 => v[1].as_ref(),
@@ -597,6 +614,10 @@ mod tests {
         assert_eq!(Specs { gpus: None, ..big.clone() }.verdict(Platform::Ps5), None);
         // Worked out once, and the same as asking each time.
         assert_eq!((big.verdict_for(Platform::Ps5), big.verdict_for(Platform::Pc)), (big.verdict(Platform::Ps5).as_ref(), None));
+        // A changed copy works out its own: none of the original's.
+        let mut copy = big.clone();
+        copy.gpus = None;
+        assert_eq!((copy.verdict_for(Platform::Ps5), copy == Specs { gpus: None, ..big.clone() }), (None, true));
     }
 
     #[test]

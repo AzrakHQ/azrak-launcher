@@ -789,18 +789,11 @@ impl App {
         for g in games {
             let info = Self::sanitize(self.art_for_game(&g));
             let name = Self::display_name(&g.name, info.as_ref());
-            let genre_text = g.genres.iter().chain(info.iter().flat_map(|i| i.genres.iter())).cloned().collect::<Vec<_>>().join(" | ");
-            let mut buckets: Vec<&'static str> = self.genre_res.iter().filter(|(_, re)| re.is_match(&genre_text)).map(|(n, _)| *n).collect();
-            if buckets.is_empty() {
-                buckets.push("Other");
-            }
+            let (buckets, search) = self.genre_tags(&g, info.as_ref(), &name);
             let rel = util::parse_long_date(&g.release).or_else(|| info.as_ref().and_then(|i| util::parse_iso_date(&i.release)));
             let added = util::parse_iso_date(&g.date).map(|(y, m, d)| util::days_from_civil(y, m, d));
-            let publisher = info.as_ref().map(|i| i.publisher.clone()).unwrap_or_default();
             out.push(GameV {
-                search: crate::search::Doc::new(&name, &g.name,
-                    &format!("{} {} {} {} {}", g.title_ids.join(" "), g.title_id, publisher, g.region, g.version),
-                    &format!("{genre_text} {}", buckets.join(" "))),
+                search,
                 name,
                 buckets,
                 rel_day: rel.map(|(y, m, d)| util::days_from_civil(y, m, d)).unwrap_or(0),
@@ -817,8 +810,26 @@ impl App {
         let years: Vec<Option<i32>> = (0..self.games.len()).map(|i| self.release_year(i)).collect();
         self.groups = crate::game_groups::Groups::with_years(self.games.iter().zip(years).map(|(game, year)| (&game.g, game.name.as_str(), year)));
         borrow_group_art(&mut self.games, &self.groups);
-        share_group_details(&mut self.games, &self.groups.members);
+        // A release that got its genres from another: its genre filters and search see them.
+        for i in share_group_details(&mut self.games, &self.groups.members) {
+            let (buckets, search) = self.genre_tags(&self.games[i].g, self.games[i].info.as_ref(), &self.games[i].name);
+            (self.games[i].buckets, self.games[i].search) = (buckets, search);
+        }
         self.refresh_locals();
+    }
+
+    /// A release's genre buckets (the Library's genre filters) and what search finds it by.
+    fn genre_tags(&self, g: &Game, info: Option<&Info>, name: &str) -> (Vec<&'static str>, crate::search::Doc) {
+        let genre_text = g.genres.iter().chain(info.iter().flat_map(|i| i.genres.iter())).cloned().collect::<Vec<_>>().join(" | ");
+        let mut buckets: Vec<&'static str> = self.genre_res.iter().filter(|(_, re)| re.is_match(&genre_text)).map(|(n, _)| *n).collect();
+        if buckets.is_empty() {
+            buckets.push("Other");
+        }
+        let publisher = info.map(|i| i.publisher.as_str()).unwrap_or_default();
+        let search = crate::search::Doc::new(name, &g.name,
+            &format!("{} {} {} {} {}", g.title_ids.join(" "), g.title_id, publisher, g.region, g.version),
+            &format!("{genre_text} {}", buckets.join(" ")));
+        (buckets, search)
     }
 
     /// Rebuild installed games and link them to catalog entries.
@@ -834,7 +845,7 @@ impl App {
             // Its own store details, with what they lack from its catalog release's.
             let info = match (Self::sanitize(store.get(&l.title_id).cloned()), cat.and_then(|c| self.games[c].info.as_ref())) {
                 (Some(mut own), Some(release)) => {
-                    fill_details(&mut own, false, false, release);
+                    fill_details(&mut own, false, false, &[release]);
                     Some(own)
                 }
                 (own, release) => own.or_else(|| release.cloned()),
@@ -969,13 +980,9 @@ impl App {
     }
 
     pub fn apply_filter(&mut self) {
-        // The Library's highlighted game (on the grid, or saved under an open card) stays the
-        // one highlighted when the list changes behind it: the PC's specs or the compatibility
-        // list arriving re-pick cards' releases and re-sort them. By release ID, which outlives
-        // a catalog reload.
-        let card_release = |app: &App, card: i32| usize::try_from(card).ok().and_then(|c| app.filtered.get(c)).and_then(|&g| app.games.get(g)).map(|g| g.g.id);
-        let focused = (self.zone == Z_GRID).then(|| card_release(self, self.idx)).flatten();
-        let saved: Vec<Option<i64>> = self.stack.iter().map(|&(_, zone, idx)| (zone == Z_GRID).then(|| card_release(self, idx)).flatten()).collect();
+        // The Library's focused card stays the one focused when the list changes behind it (the
+        // PC's specs or the compatibility list arriving re-pick cards' releases and re-sort them).
+        let anchor = self.catalog_anchor();
         let query = crate::search::Query::new(&self.query);
         let hits = self.search_hits();
         let genre = self.genre.as_str();
@@ -1025,23 +1032,7 @@ impl App {
         };
         self.filtered = list;
         self.hits = hits;
-        let card_of = |app: &App, release: i64| app.filtered.iter()
-            .position(|&g| app.groups.releases(g).iter().any(|&m| app.games[m].g.id == release));
-        for (k, release) in saved.into_iter().enumerate() {
-            if let Some(at) = release.and_then(|r| card_of(self, r)) {
-                self.stack[k].2 = at as i32;
-            }
-        }
-        if let Some((release, at)) = focused.and_then(|r| card_of(self, r).map(|at| (r, at))) {
-            self.set_focus(Z_GRID, at as i32);
-            if self.view == 1 && !self.boot.active {
-                self.ensure_grid_visible();
-                // Its card shows another release now: its backdrop follows.
-                if self.games[self.filtered[at]].g.id != release {
-                    self.focus_card_changed();
-                }
-            }
-        }
+        self.keep_grid_focus(&anchor);
     }
 
     // ------------------------------------------------------------------ background jobs
@@ -1129,22 +1120,28 @@ impl App {
         }
     }
 
-    /// After a reload and push_all: keep the same Library card focused, or the nearest one if it's
-    /// gone (the list may now be shorter than where the focus was).
-    fn restore_grid_focus(&mut self, anchor: &CatalogAnchor) {
-        let Some(old) = anchor.grid_index else { return };
-        let found = anchor.grid.and_then(|id| self.filtered.iter().position(|g| self.games[*g].g.id == id)
-            .or_else(|| self.filtered.iter().position(|g| self.groups.releases(*g).iter().any(|m| self.games[*m].g.id == id))));
+    /// After the list changed (a reload, or a re-sort behind it): the same Library card focused,
+    /// or the nearest one if it's gone. Also the card saved under an open card, so Back comes
+    /// to it, in view either way; and the backdrop follows when the card shows another release.
+    fn keep_grid_focus(&mut self, anchor: &CatalogAnchor) {
+        let (Some(old), Some(id)) = (anchor.grid_index, anchor.grid) else { return };
+        let found = self.filtered.iter().position(|g| self.games[*g].g.id == id)
+            .or_else(|| self.filtered.iter().position(|g| self.groups.releases(*g).iter().any(|m| self.games[*m].g.id == id)));
         let pos = found.unwrap_or_else(|| (old.max(0) as usize).min(self.filtered.len().saturating_sub(1)));
         // The scroll position belongs to the old list: keep the card in view (and within the list).
+        let top = (pos / self.cols.max(1)) as f32 * self.row_h;
+        let in_view = top >= self.grid_scroll && top <= self.grid_scroll + self.row_h * 2.0;
         if self.view == 1 && self.zone == Z_GRID && self.overlay == Overlay::None {
             self.set_focus(Z_GRID, pos as i32);
-            self.set_grid_scroll(self.grid_scroll, 0);
-            self.ensure_grid_visible();
-        } else if let Some(entry) = self.stack.iter_mut().find(|(_, zone, _)| *zone == Z_GRID) {
-            entry.2 = pos as i32;
-            let top = (pos / self.cols.max(1)) as f32 * self.row_h;
-            if top < self.grid_scroll || top > self.grid_scroll + self.row_h * 2.0 {
+            if !in_view {
+                self.set_grid_scroll(top, 0);
+            }
+            if found.is_some_and(|at| self.games[self.filtered[at]].g.id != id) {
+                self.focus_card_changed();
+            }
+        } else if let Some(saved) = self.stack.iter_mut().find(|(_, zone, _)| *zone == Z_GRID) {
+            saved.2 = pos as i32;
+            if !in_view {
                 self.set_grid_scroll(top, 0);
             }
         }
@@ -1191,7 +1188,7 @@ impl App {
                         app.set_catalog(file.games);
                         app.restore_targets(&anchor);
                         app.push_all();
-                        app.restore_grid_focus(&anchor);
+                        app.keep_grid_focus(&anchor);
                         if !first && new > 0 {
                             app.toast(&format!("{new} new release{} in the Library", if new == 1 { "" } else { "s" }),
                                 &format!("{} games · {} releases", app.library_total, app.games.len()), 1);
@@ -1271,7 +1268,7 @@ impl App {
         self.restore_targets(&anchor);
         if !self.boot.active {
             self.push_all();
-            self.restore_grid_focus(&anchor);
+            self.keep_grid_focus(&anchor);
         }
     }
 
@@ -2640,12 +2637,13 @@ impl App {
         a
     }
 
-    /// The store details of what the page shows: the installed copy's, unless the page shows
-    /// another release of the game than the one installed (the release picker), then that one's.
+    /// The store details of what the page shows: the installed copy's, unless the page shows a
+    /// release of the game that isn't installed (the release picker), then that one's.
     pub fn target_info(&self, t: Target) -> Option<Info> {
         let installed = t.local.and_then(|l| self.locals[l].info.clone());
         match (t.local, t.game) {
-            (Some(l), Some(g)) if self.locals[l].cat != Some(g) => self.games[g].info.clone().or(installed),
+            // A release that isn't the installed one (it would be linked to it).
+            (Some(l), Some(g)) if self.games[g].local != Some(l) => self.games[g].info.clone().or(installed),
             _ => installed.or_else(|| t.game.and_then(|g| self.games[g].info.clone())),
         }
     }
@@ -3514,56 +3512,67 @@ fn lend_art(games: &mut [GameV], from: usize, to: usize) {
 /// A release's page says what its own details lack from the same game's other releases: its
 /// versions for other platforms, by the same name without edition notes, not a bundle or
 /// another title it's grouped with. Same platform first. Its store page, release date, region
-/// and publisher stay its own, and nothing goes over its own catalog text or genres.
-pub fn share_group_details(games: &mut [GameV], groups: &[Vec<usize>]) {
+/// and publisher stay its own, and nothing goes over its own catalog text or genres. Returns the
+/// releases that got genres, whose filters and search need them too.
+pub fn share_group_details(games: &mut [GameV], groups: &[Vec<usize>]) -> Vec<usize> {
+    let mut got_genres = Vec::new();
     for members in groups.iter().filter(|m| m.len() > 1) {
-        let keys = |g: &GameV| [crate::game_groups::art_key(&g.name), crate::game_groups::art_key(&g.g.name)];
-        // What each release had before any was filled, so the order doesn't matter.
-        let before: Vec<Option<Info>> = members.iter().map(|&m| games[m].info.clone()).collect();
-        for (k, &i) in members.iter().enumerate() {
-            let mine = keys(&games[i]);
-            let mut donors: Vec<usize> = (0..members.len()).filter(|&d| d != k && before[d].is_some())
-                .filter(|&d| keys(&games[members[d]]).iter().any(|key| !key.is_empty() && mine.contains(key))).collect();
+        let keys: Vec<[String; 2]> = members.iter()
+            .map(|&m| [crate::game_groups::art_key(&games[m].name), crate::game_groups::art_key(&games[m].g.name)]).collect();
+        // Worked out from the details as loaded, then filled in, so the order doesn't matter.
+        let filled: Vec<(usize, Info)> = members.iter().enumerate().filter_map(|(k, &i)| {
+            let mut donors: Vec<usize> = (0..members.len())
+                .filter(|&d| d != k && games[members[d]].info.is_some() && keys[d].iter().any(|key| !key.is_empty() && keys[k].contains(key)))
+                .collect();
             donors.sort_by_key(|&d| games[members[d]].g.platform != games[i].g.platform);
+            let donors: Vec<&Info> = donors.iter().filter_map(|&d| games[members[d]].info.as_ref()).collect();
             if donors.is_empty() {
-                continue;
+                return None;
             }
-            let (own_text, own_genres) = (!games[i].g.description.is_empty() || !games[i].g.excerpt.is_empty(), !games[i].g.genres.is_empty());
+            let g = &games[i].g;
             let mut info = games[i].info.clone().unwrap_or_default();
-            for d in donors {
-                fill_details(&mut info, own_text, own_genres, before[d].as_ref().unwrap());
+            fill_details(&mut info, !g.description.is_empty() || !g.excerpt.is_empty(), !g.genres.is_empty(), &donors);
+            Some((i, info))
+        }).collect();
+        for (i, info) in filled {
+            if games[i].info.as_ref().is_none_or(|own| own.genres.is_empty()) && !info.genres.is_empty() {
+                got_genres.push(i);
             }
             games[i].info = Some(info);
         }
     }
+    got_genres
 }
 
-/// Fill what `info` lacks from `other`'s (another release of the same game). The About comes
-/// whole from one release (its long text, with its short one unless there's an own), and never
-/// over the release's own catalog text (`own_text`); genres never over its own (`own_genres`); a
-/// trailer with its poster. Store page, release date, region, publisher and pictures (see
-/// `borrow_group_art`) aren't touched.
-pub fn fill_details(info: &mut Info, own_text: bool, own_genres: bool, other: &Info) {
-    if !own_text && info.long.is_empty() && !other.long.is_empty() {
-        info.long = other.long.clone();
-        if info.short.is_empty() {
-            info.short = other.short.clone();
+/// Fill what `info` lacks from `others` (other releases of the same game, the first to have
+/// each detail lending it). The About comes whole from one release (its long text with its short
+/// one, unless there's an own), never over the release's own catalog text (`own_text`); genres
+/// never over its own (`own_genres`); a trailer with its poster. Store page, release date,
+/// region, publisher and pictures (see `borrow_group_art`) aren't touched.
+pub fn fill_details(info: &mut Info, own_text: bool, own_genres: bool, others: &[&Info]) {
+    if !own_text && info.long.is_empty() {
+        if let Some(o) = others.iter().find(|o| !o.long.is_empty()) {
+            info.long = o.long.clone();
+            if info.short.is_empty() {
+                info.short = o.short.clone();
+            }
+        } else if info.short.is_empty() {
+            info.short = others.iter().find(|o| !o.short.is_empty()).map(|o| o.short.clone()).unwrap_or_default();
         }
     }
-    if !own_text && info.long.is_empty() && info.short.is_empty() {
-        info.short = other.short.clone();
-    }
     if !own_genres && info.genres.is_empty() {
-        info.genres = other.genres.clone();
+        info.genres = others.iter().find(|o| !o.genres.is_empty()).map(|o| o.genres.clone()).unwrap_or_default();
     }
-    info.rating = info.rating.take().or_else(|| other.rating.clone());
-    info.age = info.age.take().or_else(|| other.age.clone());
-    info.players = info.players.take().or_else(|| other.players.clone());
+    info.rating = info.rating.take().or_else(|| others.iter().find_map(|o| o.rating.clone()));
+    info.age = info.age.take().or_else(|| others.iter().find_map(|o| o.age.clone()));
+    info.players = info.players.take().or_else(|| others.iter().find_map(|o| o.players.clone()));
     if info.shots.is_empty() {
-        info.shots = other.shots.clone();
+        info.shots = others.iter().find(|o| !o.shots.is_empty()).map(|o| o.shots.clone()).unwrap_or_default();
     }
-    if info.video.is_empty() && !other.video.is_empty() {
-        (info.video, info.poster) = (other.video.clone(), other.poster.clone());
+    if info.video.is_empty() {
+        if let Some(o) = others.iter().find(|o| !o.video.is_empty()) {
+            (info.video, info.poster) = (o.video.clone(), o.poster.clone());
+        }
     }
 }
 
@@ -3653,7 +3662,7 @@ mod art_tests {
             game("Ghost of Tsushima", Platform::Pc, Some(Info { long: "About it on PC.".into(), ..Default::default() })),
         ];
         // The soundtrack shares the card (say by title ID) but is no version of the game.
-        share_group_details(&mut games, &[vec![0, 1, 2, 3, 4]]);
+        assert_eq!(share_group_details(&mut games, &[vec![0, 1, 2, 3, 4]]), Vec::<usize>::new(), "no genres to share here");
         let pc = games[1].info.as_ref().unwrap();
         // Another PC release's About first; what no PC release has comes from the PS4's.
         assert_eq!((pc.long.as_str(), pc.rating.as_ref().map(|r| r.total)), ("About it on PC.", Some(330)));
@@ -3663,17 +3672,29 @@ mod art_tests {
         // A release's own screenshots stay its own.
         assert_eq!(games[2].info.as_ref().unwrap().shots, ["ps5.jpg"]);
         assert!(games[3].info.is_none(), "another title on the card lends nothing");
+        // A release that gets genres is told, so its genre filters and search can have them.
+        let mut games = vec![
+            game("Hades", Platform::Ps5, Some(Info { genres: vec!["Action".into()], ..Default::default() })),
+            game("Hades", Platform::Pc, None),
+        ];
+        assert_eq!(share_group_details(&mut games, &[vec![0, 1]]), [1]);
     }
 
     #[test]
     fn a_releases_own_text_and_genres_are_never_replaced() {
         let other = Info { long: "Their About.".into(), short: "Theirs.".into(), genres: vec!["RPG".into()], ..Default::default() };
         let mut own = Info::default();
-        fill_details(&mut own, true, true, &other);
+        fill_details(&mut own, true, true, &[&other]);
         assert!(own.long.is_empty() && own.short.is_empty() && own.genres.is_empty(), "the catalog's own text and genres show instead");
+        // The About is one release's: a short line alone listed first doesn't come with another's long text.
+        let blurb = Info { short: "Bundle blurb.".into(), ..Default::default() };
+        let full = Info { short: "Ghost.".into(), long: "About Ghost.".into(), ..Default::default() };
+        let mut own = Info::default();
+        fill_details(&mut own, false, false, &[&blurb, &full]);
+        assert_eq!((own.short.as_str(), own.long.as_str()), ("Ghost.", "About Ghost."));
         // Its own short line stays with the long text it lacked.
         let mut own = Info { short: "Mine.".into(), ..Default::default() };
-        fill_details(&mut own, false, false, &other);
+        fill_details(&mut own, false, false, &[&other]);
         assert_eq!((own.long.as_str(), own.short.as_str(), own.genres.len()), ("Their About.", "Mine.", 1));
     }
 }

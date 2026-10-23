@@ -853,9 +853,7 @@ impl App {
                 badge: if g.local.is_some() { "Installed".into() } else if g.is_new { "New".into() } else { "".into() },
                 console: if self.mixed_consoles { g.g.platform.label().into() } else { "".into() },
                 // Every platform the game is on, in the usual order.
-                consoles: model(crate::versions::PLATFORMS.iter()
-                    .filter(|p| self.groups.releases(gi).iter().any(|&i| self.games[i].g.platform == **p))
-                    .filter(|_| self.mixed_consoles)
+                consoles: model(self.game_platforms(gi).into_iter().filter(|_| self.mixed_consoles)
                     .map(|p| SharedString::from(p.label())).collect()),
                 compat: compat.into(),
                 compat_level,
