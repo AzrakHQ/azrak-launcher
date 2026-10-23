@@ -879,7 +879,13 @@ impl App {
         }
         self.build_row();
         self.build_genres();
+        // An install, an uninstall or a folder change can re-pick and re-sort cards: the focused
+        // card stays the one focused. (In a reload the list is new: set_catalog's callers do it.)
+        let anchor = self.catalog_anchor();
         self.apply_filter();
+        if !self.boot.active {
+            self.keep_grid_focus(&anchor);
+        }
     }
 
     fn playtime_key(l: &LocalGame) -> String {
@@ -1123,6 +1129,13 @@ impl App {
     /// to it, in view either way; and the backdrop follows when the card shows another release.
     pub fn keep_grid_focus(&mut self, anchor: &CatalogAnchor) {
         let Some(old) = anchor.grid_index else { return };
+        if self.filtered.is_empty() {
+            // Nothing to focus: the filters, as push_grid does with an empty Library.
+            if let Some(saved) = self.stack.iter_mut().find(|(_, zone, _)| *zone == Z_GRID) {
+                (saved.1, saved.2) = (Z_CHIPS, 0);
+            }
+            return;
+        }
         let found = anchor.grid.and_then(|id| self.filtered.iter().position(|g| self.games[*g].g.id == id)
             .or_else(|| self.filtered.iter().position(|g| self.groups.releases(*g).iter().any(|m| self.games[*m].g.id == id))));
         let pos = found.unwrap_or_else(|| (old.max(0) as usize).min(self.filtered.len().saturating_sub(1)));
@@ -3522,6 +3535,9 @@ pub fn share_group_details(games: &mut [GameV], groups: &[Vec<usize>]) -> Vec<us
             .map(|&m| [crate::game_groups::art_key(&games[m].name), crate::game_groups::art_key(&games[m].g.name)]).collect();
         // Worked out from the details as loaded, then filled in, so the order doesn't matter.
         let filled: Vec<(usize, Info)> = members.iter().enumerate().filter_map(|(k, &i)| {
+            if games[i].info.as_ref().is_some_and(|info| !lacks_details(info, &games[i].g)) {
+                return None;
+            }
             let mut donors: Vec<usize> = (0..members.len())
                 .filter(|&d| d != k && games[members[d]].info.is_some() && keys[d].iter().any(|key| !key.is_empty() && keys[k].contains(key)))
                 .collect();
@@ -3553,34 +3569,59 @@ pub fn share_group_details(games: &mut [GameV], groups: &[Vec<usize>]) -> Vec<us
 /// region, publisher and pictures (see `borrow_group_art`) aren't touched. True when anything
 /// was filled.
 pub fn fill_details(info: &mut Info, own_text: bool, own_genres: bool, others: &[&Info]) -> bool {
-    let before = (info.long.len(), info.short.len(), info.genres.len(), info.rating.is_some(), info.age.is_some(),
-        info.players.is_some(), info.shots.len(), info.video.len());
+    let mut filled = false;
     if !own_text && info.long.is_empty() {
         if let Some(o) = others.iter().find(|o| !o.long.is_empty()) {
             info.long = o.long.clone();
             if info.short.is_empty() {
                 info.short = o.short.clone();
             }
+            filled = true;
         } else if info.short.is_empty() {
-            info.short = others.iter().find(|o| !o.short.is_empty()).map(|o| o.short.clone()).unwrap_or_default();
+            if let Some(o) = others.iter().find(|o| !o.short.is_empty()) {
+                info.short = o.short.clone();
+                filled = true;
+            }
         }
     }
     if !own_genres && info.genres.is_empty() {
-        info.genres = others.iter().find(|o| !o.genres.is_empty()).map(|o| o.genres.clone()).unwrap_or_default();
+        if let Some(o) = others.iter().find(|o| !o.genres.is_empty()) {
+            info.genres = o.genres.clone();
+            filled = true;
+        }
     }
-    info.rating = info.rating.take().or_else(|| others.iter().find_map(|o| o.rating.clone()));
-    info.age = info.age.take().or_else(|| others.iter().find_map(|o| o.age.clone()));
-    info.players = info.players.take().or_else(|| others.iter().find_map(|o| o.players.clone()));
+    if info.rating.is_none() {
+        info.rating = others.iter().find_map(|o| o.rating.clone());
+        filled |= info.rating.is_some();
+    }
+    if info.age.is_none() {
+        info.age = others.iter().find_map(|o| o.age.clone());
+        filled |= info.age.is_some();
+    }
+    if info.players.is_none() {
+        info.players = others.iter().find_map(|o| o.players.clone());
+        filled |= info.players.is_some();
+    }
     if info.shots.is_empty() {
-        info.shots = others.iter().find(|o| !o.shots.is_empty()).map(|o| o.shots.clone()).unwrap_or_default();
+        if let Some(o) = others.iter().find(|o| !o.shots.is_empty()) {
+            info.shots = o.shots.clone();
+            filled = true;
+        }
     }
     if info.video.is_empty() {
         if let Some(o) = others.iter().find(|o| !o.video.is_empty()) {
             (info.video, info.poster) = (o.video.clone(), o.poster.clone());
+            filled = true;
         }
     }
-    before != (info.long.len(), info.short.len(), info.genres.len(), info.rating.is_some(), info.age.is_some(),
-        info.players.is_some(), info.shots.len(), info.video.len())
+    filled
+}
+
+/// Whether `fill_details` could add anything to a release's details (cheap: no copy).
+fn lacks_details(info: &Info, g: &Game) -> bool {
+    let own_text = !g.description.is_empty() || !g.excerpt.is_empty();
+    (!own_text && info.long.is_empty()) || (g.genres.is_empty() && info.genres.is_empty()) || info.rating.is_none()
+        || info.age.is_none() || info.players.is_none() || info.shots.is_empty() || info.video.is_empty()
 }
 
 /// A release without official pictures shows another of its game's (by another name: "Hades +
