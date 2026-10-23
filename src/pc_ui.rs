@@ -39,7 +39,7 @@ impl App {
 
     fn pc_detected(&mut self, specs: Specs) {
         self.pc_checking = false;
-        self.pc = Some(specs);
+        self.pc = Some(crate::pc::Reading::new(specs));
         // Which version each Library card shows depends on what plays here: the focused card
         // stays the one focused (keep_grid_focus).
         let anchor = self.catalog_anchor();
@@ -61,12 +61,12 @@ impl App {
 
     /// This PC's verdict for a platform's games (worked out once per reading of the PC).
     pub fn pc_verdict(&self, platform: Platform) -> Option<&Verdict> {
-        self.pc.as_ref()?.verdict_for(platform)
+        self.pc.as_ref()?.verdict(platform)
     }
 
     /// Once per PC: say so when a console's games can't start here, before anyone downloads one.
     fn pc_notice(&mut self) {
-        let Some(summary) = self.pc.as_ref().map(Specs::summary) else { return };
+        let Some(summary) = self.pc.as_ref().map(|pc| pc.specs().summary()) else { return };
         let blocked: Vec<(Platform, Verdict)> = [Platform::Ps5, Platform::Ps4].into_iter()
             .filter_map(|p| self.pc_verdict(p).filter(|v| matches!(v, Verdict::No(_))).map(|v| (p, v.clone())))
             .collect();

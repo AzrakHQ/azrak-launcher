@@ -740,10 +740,7 @@ impl App {
     /// Only rows around the viewport exist as UI elements; this keeps the grid instant with any catalog size.
     /// Scroll the Library to `pos` (design px from the top), gliding over `glide_ms`.
     pub fn set_grid_scroll(&mut self, pos: f32, glide_ms: i64) {
-        let (_, h) = self.logical_size();
-        let rows = self.filtered.len().div_ceil(self.cols.max(1));
-        let max = (rows as f32 * self.row_h + 60.0 - (h - crate::library_layout::TOP)).max(0.0);
-        let pos = pos.clamp(0.0, max);
+        let pos = pos.clamp(0.0, self.grid_scroll_max());
         let from = self.grid_scroll;
         self.grid_scroll = pos;
         let ui = self.ui();
@@ -848,8 +845,9 @@ impl App {
             // Covers show Linux results only; the Game Hub has the rest.
             let (compat, compat_level) = ce.and_then(|e| Some((e.tag()?, e.status.level()))).unwrap_or_default();
             // Size is always visible. Version/region details belong to the selected Hub release.
-            // This platform's releases, as the Game Hub numbers them ("Release 1 of 2").
-            let releases = self.release_order(gi).len();
+            // A one-console Library says how many releases (as the Game Hub numbers them); a mixed
+            // one shows the platforms there instead.
+            let releases = if self.mixed_consoles { 0 } else { self.release_order(gi).len() };
             let meta = size_label(&g.g).unwrap_or_else(|| "Size unknown".into());
             cards.push(CardData {
                 index: k as i32,
@@ -943,9 +941,15 @@ impl App {
         } else {
             y
         };
-        // A shorter list can't stay scrolled past its end (as in set_grid_scroll).
+        // A shorter list can't stay scrolled past its end.
+        new_y.clamp(0.0, self.grid_scroll_max())
+    }
+
+    /// How far the Library scrolls: its last row (and the margin under it) at the bottom.
+    pub fn grid_scroll_max(&self) -> f32 {
+        let (_, h) = self.logical_size();
         let rows = self.filtered.len().div_ceil(self.cols.max(1));
-        new_y.clamp(0.0, (rows as f32 * self.row_h + 60.0 - view_h).max(0.0))
+        (rows as f32 * self.row_h + 60.0 - (h - crate::library_layout::TOP)).max(0.0)
     }
 
     /// The Library's backdrop follows the selected game, once the selection rests for a moment
@@ -1122,7 +1126,7 @@ impl App {
         let steam = g.and_then(|g| g.steam.clone());
         // How it runs, said as on its "Play it on" tile (versions.rs): native, or Wine-packed,
         // or an installed .exe (catalogued or not) through Proton or Wine.
-        let pc_runs: Option<(&str, String, i32)> = pc_game.then(|| self.plays_for(t).hub_fact());
+        let pc_runs: Option<(&str, String, i32)> = pc_game.then(|| self.plays_for(t).hub_fact()).flatten();
         // Three overview boxes: how it runs (PC games), how easy it is to get, which version.
         // The size is in the line under Download.
         let availability = g.filter(|_| t.local.is_none()).map(|g| crate::words::Availability::of(g.seeders));

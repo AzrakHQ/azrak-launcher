@@ -680,7 +680,7 @@ impl App {
         use crate::pc::Verdict;
         use crate::platform::Platform;
         let mut r = row(4, "This PC");
-        let Some(specs) = self.pc.as_ref().filter(|_| !self.pc_checking) else {
+        let Some(specs) = self.pc.as_ref().map(|pc| pc.specs()).filter(|_| !self.pc_checking) else {
             (r.value, r.hint) = ("Checking…".into(), "Reads the processor, memory and graphics card".into());
             return r;
         };

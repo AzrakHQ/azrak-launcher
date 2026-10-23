@@ -295,7 +295,7 @@ pub struct App {
     /// for it to close instead of covering it.
     held_toasts: Vec<ToastData>,
     /// This PC's processor, memory and graphics (read in the background at start).
-    pub pc: Option<crate::pc::Specs>,
+    pub pc: Option<crate::pc::Reading>,
     pub pc_checking: bool,
     pub boot: crate::boot::Boot,
     pub kyty: crate::kyty_ui::KytyUi,
@@ -2640,11 +2640,12 @@ impl App {
     /// The store details of what the page shows: the installed copy's, unless the page shows a
     /// release of the game that isn't installed (the release picker), then that one's.
     pub fn target_info(&self, t: Target) -> Option<Info> {
-        let installed = t.local.and_then(|l| self.locals[l].info.clone());
+        let installed = || t.local.and_then(|l| self.locals[l].info.clone());
+        let release = || t.game.and_then(|g| self.games[g].info.clone());
         match (t.local, t.game) {
             // A release that isn't installed (installed ones are linked to their copy).
-            (Some(_), Some(g)) if self.games[g].local.is_none() => self.games[g].info.clone().or(installed),
-            _ => installed.or_else(|| t.game.and_then(|g| self.games[g].info.clone())),
+            (Some(_), Some(g)) if self.games[g].local.is_none() => release().or_else(installed),
+            _ => installed().or_else(release),
         }
     }
 

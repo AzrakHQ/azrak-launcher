@@ -45,25 +45,34 @@ pub struct Specs {
     pub ram_gb: f32,
     /// `None` when the graphics check didn't finish (a driver crash or hang).
     pub gpus: Option<Vec<Gpu>>,
-    /// The verdicts for PS5 and PS4 games, worked out on first use: the Library asks for every
-    /// release on every keystroke. Specs are read once and not changed after.
-    verdicts: Verdicts,
 }
 
-/// `Specs::verdicts`: worked out from the rest of the specs, so a copy starts without it (and
-/// works them out from its own) and specs compare by the PC they describe.
-#[derive(Debug, Default)]
-struct Verdicts(std::sync::OnceLock<[Option<Verdict>; 2]>);
+/// This PC as read, with its verdicts for PS5 and PS4 games worked out once (the Library asks
+/// for every release on every keystroke). Read-only, so the verdicts always match the specs: a
+/// new reading is a new `Reading`.
+#[derive(Clone, Debug)]
+pub struct Reading {
+    specs: Specs,
+    verdicts: [Option<Verdict>; 2],
+}
 
-impl Clone for Verdicts {
-    fn clone(&self) -> Self {
-        Self::default()
+impl Reading {
+    pub fn new(specs: Specs) -> Reading {
+        let verdicts = [specs.verdict(Platform::Ps5), specs.verdict(Platform::Ps4)];
+        Reading { specs, verdicts }
     }
-}
 
-impl PartialEq for Verdicts {
-    fn eq(&self, _: &Self) -> bool {
-        true
+    pub fn specs(&self) -> &Specs {
+        &self.specs
+    }
+
+    /// `Specs::verdict`, worked out when read; none for PC games.
+    pub fn verdict(&self, platform: Platform) -> Option<&Verdict> {
+        match platform {
+            Platform::Ps5 => self.verdicts[0].as_ref(),
+            Platform::Ps4 => self.verdicts[1].as_ref(),
+            Platform::Pc => None,
+        }
     }
 }
 
@@ -105,15 +114,6 @@ impl Verdict {
 }
 
 impl Specs {
-    /// `verdict`, worked out once; none for PC games.
-    pub fn verdict_for(&self, platform: Platform) -> Option<&Verdict> {
-        let v = self.verdicts.0.get_or_init(|| [self.verdict(Platform::Ps5), self.verdict(Platform::Ps4)]);
-        match platform {
-            Platform::Ps5 => v[0].as_ref(),
-            Platform::Ps4 => v[1].as_ref(),
-            Platform::Pc => None,
-        }
-    }
 
     /// The graphics card games will use: the strongest one that isn't software.
     pub fn gpu(&self) -> Option<&Gpu> {
@@ -238,7 +238,6 @@ fn pretend(text: &str) -> Option<Specs> {
         x86_64_v3: v3 == "1",
         ram_gb: ram.parse().ok()?,
         gpus: Some(parse_probe(&gpus.replace(',', "\t").replace('|', "\n"))),
-        verdicts: Default::default(),
     })
 }
 
@@ -529,7 +528,7 @@ mod tests {
     use super::*;
 
     fn pc(cores: u32, threads: u32, v3: bool, ram: f32, gpus: Vec<Gpu>) -> Specs {
-        Specs { cpu: "Test CPU".into(), cores, threads, x86_64_v3: v3, ram_gb: ram, gpus: Some(gpus), ..Default::default() }
+        Specs { cpu: "Test CPU".into(), cores, threads, x86_64_v3: v3, ram_gb: ram, gpus: Some(gpus) }
     }
 
     fn gpu(name: &str, vulkan: (u32, u32), discrete: bool, vram: f32) -> Gpu {
@@ -612,12 +611,9 @@ mod tests {
         assert_eq!(unknown.verdict(Platform::Ps5), None);
         // A graphics check that crashed tells nothing.
         assert_eq!(Specs { gpus: None, ..big.clone() }.verdict(Platform::Ps5), None);
-        // Worked out once, and the same as asking each time.
-        assert_eq!((big.verdict_for(Platform::Ps5), big.verdict_for(Platform::Pc)), (big.verdict(Platform::Ps5).as_ref(), None));
-        // A changed copy works out its own: none of the original's.
-        let mut copy = big.clone();
-        copy.gpus = None;
-        assert_eq!((copy.verdict_for(Platform::Ps5), copy == Specs { gpus: None, ..big.clone() }), (None, true));
+        // A reading's verdicts are the specs' own.
+        let reading = Reading::new(big.clone());
+        assert_eq!((reading.verdict(Platform::Ps5), reading.verdict(Platform::Pc)), (big.verdict(Platform::Ps5).as_ref(), None));
     }
 
     #[test]

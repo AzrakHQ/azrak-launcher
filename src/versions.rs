@@ -16,8 +16,9 @@ pub enum Plays<'a> {
     /// A PS5 or PS4 release: the emulator's results and this PC's verdict.
     Console(Outlook),
     Native,
-    /// A Windows game: ProtonDB's tier, and whether Wine comes with the release.
-    Wine(Option<&'a str>, bool),
+    /// A Windows game: ProtonDB's tier, whether Wine comes with the release, and what runs it
+    /// here otherwise ("Proton", "Wine"; looked up once, so its words and colour agree).
+    Wine(Option<&'a str>, bool, Option<&'static str>),
 }
 
 impl Plays<'_> {
@@ -33,10 +34,12 @@ impl Plays<'_> {
                 Outlook::DoesntStart => 1,
                 Outlook::CantRunHere => 0,
             },
-            Plays::Native | Plays::Wine(Some("platinum" | "gold" | "native"), _) => 6,
-            Plays::Wine(Some("borked"), _) => 1,
-            Plays::Wine(Some(_), _) => 4,
-            Plays::Wine(None, _) => 3,
+            Plays::Native | Plays::Wine(Some("platinum" | "gold" | "native"), ..) => 6,
+            Plays::Wine(Some("borked"), ..) => 1,
+            Plays::Wine(Some(_), ..) => 4,
+            // Nothing here to run it with: it won't start.
+            Plays::Wine(None, false, None) => 1,
+            Plays::Wine(None, ..) => 3,
         }
     }
 
@@ -44,30 +47,26 @@ impl Plays<'_> {
         match self {
             Plays::Console(o) => o.headline().into(),
             Plays::Native => "Native Linux game".into(),
-            Plays::Wine(Some("borked"), _) => "Doesn't run with Wine yet".into(),
-            Plays::Wine(Some(tier), _) => format!("Runs with Wine · {}", title_case(tier)),
-            Plays::Wine(None, true) => "Runs with Wine (included)".into(),
-            Plays::Wine(None, false) => match windows_runner() {
-                Some(runner) => format!("Runs with {runner}"),
-                None => "Needs Proton or Wine".into(),
-            },
+            Plays::Wine(Some("borked"), ..) => "Doesn't run with Wine yet".into(),
+            Plays::Wine(Some(tier), ..) => format!("Runs with Wine · {}", title_case(tier)),
+            Plays::Wine(None, true, _) => "Runs with Wine (included)".into(),
+            Plays::Wine(None, false, Some(runner)) => format!("Runs with {runner}"),
+            Plays::Wine(None, false, None) => "Needs Proton or Wine".into(),
         }
     }
 
     /// The Game Hub's "how it runs" box for a PC game: its label, its value and (as on its tile)
-    /// its colour.
-    pub fn hub_fact(&self) -> (&'static str, String, i32) {
+    /// its colour. None for console games, whose page says it in its verdict line.
+    pub fn hub_fact(&self) -> Option<(&'static str, String, i32)> {
         let (label, value) = match self {
-            Plays::Console(_) => ("ON THIS PC", self.headline()),
+            Plays::Console(_) => return None,
             Plays::Native => ("ON LINUX", "Native game".into()),
-            Plays::Wine(Some(tier), _) => ("PROTONDB · RUNS WITH WINE", title_case(tier)),
-            Plays::Wine(None, true) => ("RUNS WITH", "Wine, included".into()),
-            Plays::Wine(None, false) => match windows_runner() {
-                Some(runner) => ("WINDOWS GAME · RUNS WITH", runner.into()),
-                None => ("WINDOWS GAME", "Needs Proton or Wine".into()),
-            },
+            Plays::Wine(Some(tier), ..) => ("PROTONDB · RUNS WITH WINE", title_case(tier)),
+            Plays::Wine(None, true, _) => ("RUNS WITH", "Wine, included".into()),
+            Plays::Wine(None, false, Some(runner)) => ("WINDOWS GAME · RUNS WITH", (*runner).into()),
+            Plays::Wine(None, false, None) => ("WINDOWS GAME", "Needs Proton or Wine".into()),
         };
-        (label, value, self.kind())
+        Some((label, value, self.kind()))
     }
 
     /// The Fact colours: 1 good, 2 warning, 3 bad, 0 unknown.
@@ -75,10 +74,10 @@ impl Plays<'_> {
         match self {
             Plays::Console(o) => o.kind(),
             Plays::Native => 1,
-            Plays::Wine(Some(tier), _) => protondb_kind(tier),
-            Plays::Wine(None, true) => 0,
+            Plays::Wine(Some(tier), ..) => protondb_kind(tier),
             // Nothing to run it with is a game that won't start.
-            Plays::Wine(None, false) => if windows_runner().is_some() { 0 } else { 3 },
+            Plays::Wine(None, false, None) => 3,
+            Plays::Wine(None, ..) => 0,
         }
     }
 }
@@ -148,7 +147,10 @@ impl App {
         }
         let g = t.game.map(|i| &self.games[i].g);
         let tier = g.and_then(|g| g.steam.as_ref()).and_then(|s| s.protondb.as_deref()).filter(|tier| !tier.is_empty());
-        Plays::Wine(tier, g.is_some_and(|g| g.wine))
+        let packed = g.is_some_and(|g| g.wine);
+        // Only asked when it's what would run it.
+        let runner = (tier.is_none() && !packed).then(windows_runner).flatten();
+        Plays::Wine(tier, packed, runner)
     }
 
     /// Which version plays best here, the one you have aside: how well it plays, whether
@@ -230,6 +232,12 @@ impl App {
         self.groups.releases(index).iter().filter_map(|&i| self.release_year(i)).min()
     }
 
+    /// How many platforms game `index` is on.
+    pub fn platform_count(&self, index: usize) -> usize {
+        let members = self.groups.releases(index);
+        PLATFORMS.iter().filter(|p| members.iter().any(|&i| self.games[i].g.platform == **p)).count()
+    }
+
     /// The platforms game `index` is on, in the usual order.
     pub fn game_platforms(&self, index: usize) -> Vec<Platform> {
         let members = self.groups.releases(index);
@@ -239,7 +247,7 @@ impl App {
     /// The game's name on its card: on several platforms, the plainest of its releases' names
     /// ("Hades", not "Hades + Original Soundtrack Bundle"); else the release's own.
     pub fn game_title(&self, index: usize) -> String {
-        if self.game_platforms(index).len() < 2 {
+        if self.platform_count(index) < 2 {
             return self.games[index].name.clone();
         }
         self.groups.releases(index).iter().map(|&i| &self.games[i].name).filter(|n| !n.is_empty())
@@ -274,14 +282,14 @@ impl App {
     pub fn version_tiles(&self, t: Target) -> Vec<crate::VersionData> {
         let Some(current) = t.game else { return Vec::new() };
         let shown = self.games[current].g.platform;
-        // The shown platform's tile is the release on screen; "Best for this PC" weighs the
-        // tiles as they read.
-        let versions: Vec<(Platform, usize)> = self.platform_versions(current).into_iter()
-            .map(|(p, best)| (p, if p == shown { current } else { best })).collect();
-        if versions.len() < 2 {
+        let best_releases = self.platform_versions(current);
+        if best_releases.len() < 2 {
             return Vec::new();
         }
-        let best = self.best_platform(&versions);
+        // "Best for this PC" is a platform's, judged by its best release, so it stays put while
+        // you browse that platform's releases; the shown platform's tile is the release on screen.
+        let best = self.best_platform(&best_releases);
+        let versions: Vec<(Platform, usize)> = best_releases.into_iter().map(|(p, b)| (p, if p == shown { current } else { b })).collect();
         versions.iter().map(|&(p, i)| {
             let g = &self.games[i];
             // The shown platform's tile says what the page says (with the installed copy kept
@@ -316,13 +324,16 @@ mod tests {
 
     #[test]
     fn the_tile_and_the_game_hub_say_the_same() {
-        for plays in [Plays::Native, Plays::Wine(Some("gold"), false), Plays::Wine(Some("silver"), true),
-            Plays::Wine(Some("borked"), false), Plays::Wine(None, true), Plays::Wine(None, false)] {
-            assert_eq!(plays.kind(), plays.hub_fact().2);
+        for plays in [Plays::Native, Plays::Wine(Some("gold"), false, None), Plays::Wine(Some("silver"), true, None),
+            Plays::Wine(Some("borked"), false, None), Plays::Wine(None, true, None), Plays::Wine(None, false, Some("Proton")), Plays::Wine(None, false, None)] {
+            assert_eq!(Some(plays.kind()), plays.hub_fact().map(|f| f.2));
         }
-        assert_eq!(Plays::Wine(Some("gold"), false).hub_fact().1, "Gold");
+        assert_eq!(Plays::Wine(Some("gold"), false, None).hub_fact().unwrap().1, "Gold");
         // Colours are what a version is, not its place in the ranking.
-        assert_eq!((Plays::Native.kind(), Plays::Wine(Some("silver"), false).kind(), Plays::Wine(Some("borked"), false).kind()), (1, 2, 3));
+        assert_eq!((Plays::Native.kind(), Plays::Wine(Some("silver"), false, None).kind(), Plays::Wine(Some("borked"), false, None).kind()), (1, 2, 3));
+        // Nothing to run a Windows game with: red, and ranked as won't start.
+        assert_eq!((Plays::Wine(None, false, None).kind(), Plays::Wine(None, false, None).score()), (3, 1));
+        assert!(Plays::Console(Outlook::Plays).hub_fact().is_none());
         // An empty tier can't reach a title (none is asked for) and wouldn't break one.
         assert_eq!(title_case(""), "");
     }
