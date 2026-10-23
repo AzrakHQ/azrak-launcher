@@ -6,63 +6,124 @@ import { AboutSlint, Palette } from "std-widgets.slint";
 
 export { S, Theme, Zone }
 
-// Notification card: icon tile, title, message. Slides in from the right.
+// Notification card: who it's from, what happened and, when clicking it does something, a button
+// saying what. It glides in from the right, a thin line runs out while it's up, and it glides
+// away with the gap it leaves closing behind it.
 component Toast inherits Rectangle {
     in property <ToastData> data;
     callback clicked();
     property <bool> shown: false;
+    property <bool> away: !shown || data.leaving;
+    property <bool> actionable: data.action != "";
     property <color> tint: data.kind == 1 ? Theme.ok : data.kind == 2 ? Theme.danger : #3d8bff;
-    init => { shown = true; }
+    property <duration> born;
+    init => { born = animation-tick(); shown = true; }
     width: (480px * S.k);
-    height: max((84px * S.k), body.preferred-height + (36px * S.k));
-    border-radius: (18px * S.k);
-    background: #141c33fa;
-    border-width: 1px;
-    border-color: #ffffff1f;
-    drop-shadow-blur: (36px * S.k);
-    drop-shadow-offset-y: (10px * S.k);
-    drop-shadow-color: #00000099;
-    opacity: shown ? 1 : 0;
-    transform-scale: shown ? 1.0 : 0.96;
-    animate opacity { duration: 240ms; easing: ease-out-quad; }
-    animate transform-scale { duration: 360ms; easing: ease-out-back; }
-    if data.action != "": touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => { root.clicked(); }
-    }
-    // Icon tile: a real picture when we have one, otherwise a tinted symbol.
-    Rectangle {
-        x: (18px * S.k);
-        y: (18px * S.k);
-        width: (48px * S.k);
-        height: (48px * S.k);
-        border-radius: (13px * S.k);
+    // The gap under the card is part of its height, so the cards below close up smoothly.
+    height: data.leaving ? 0 : card.height + (14px * S.k);
+    animate height { duration: 300ms; easing: ease-in-out-quad; }
+    card := Rectangle {
+        x: root.away ? (64px * S.k) : 0;
+        y: 0;
+        width: parent.width;
+        height: max((96px * S.k), body.preferred-height + (44px * S.k));
+        opacity: root.away ? 0 : 1;
+        animate x { duration: 460ms; easing: cubic-bezier(0.16, 1, 0.3, 1); }
+        animate opacity { duration: 280ms; easing: ease-out-quad; }
+        border-radius: (22px * S.k);
+        background: @linear-gradient(180deg, #1c2646f5 0%, #111831f5 100%);
+        border-width: 1px;
+        border-color: root.actionable && touch.has-hover ? #ffffff3d : #ffffff1a;
+        animate border-color { duration: 160ms; }
+        drop-shadow-blur: (44px * S.k);
+        drop-shadow-offset-y: (14px * S.k);
+        drop-shadow-color: #000000b3;
         clip: true;
-        background: data.has-image || data.app ? #00000000 : root.tint.with-alpha(0.18);
-        if data.app: Image { source: Icons.app; width: parent.width; height: parent.height; }
-        if data.has-image && !data.app: Image { source: data.image; width: parent.width; height: parent.height; image-fit: cover; }
-        if !data.has-image && !data.app: Image {
-            source: data.kind == 1 ? Icons.check : data.kind == 2 ? Icons.alert : Icons.info;
-            colorize: root.tint;
-            width: (26px * S.k);
-            height: (26px * S.k);
+        touch := TouchArea {
+            enabled: root.actionable;
+            mouse-cursor: root.actionable ? pointer : default;
+            clicked => { root.clicked(); }
         }
-    }
-    body := VerticalLayout {
-        x: (82px * S.k);
-        y: (18px * S.k);
-        width: parent.width - (82px * S.k) - (22px * S.k);
-        height: parent.height - (36px * S.k);
-        alignment: center;
-        spacing: (3px * S.k);
-        Text { text: data.text; font-size: (20px * S.k); font-weight: 600; color: Theme.text; wrap: word-wrap; }
-        if data.sub != "": Text {
-            text: data.sub;
-            font-size: (17px * S.k);
-            color: Theme.text2;
-            wrap: word-wrap;
-            max-height: (120px * S.k);
-            overflow: elide;
+        // Light catching the top edge.
+        Rectangle {
+            y: 0;
+            height: 1px;
+            background: @linear-gradient(90deg, #ffffff00 0%, #ffffff2e 50%, #ffffff00 100%);
+        }
+        // Icon tile: a real picture when we have one, otherwise a tinted symbol.
+        Rectangle {
+            x: (20px * S.k);
+            y: (22px * S.k);
+            width: (52px * S.k);
+            height: (52px * S.k);
+            border-radius: (14px * S.k);
+            clip: true;
+            background: data.has-image || data.app ? #00000000 : root.tint.with-alpha(0.16);
+            border-width: data.has-image || data.app ? 0 : 1px;
+            border-color: root.tint.with-alpha(0.28);
+            if data.app: Image { source: Icons.app; width: parent.width; height: parent.height; }
+            if data.has-image && !data.app: Image { source: data.image; width: parent.width; height: parent.height; image-fit: cover; }
+            if !data.has-image && !data.app: Image {
+                source: data.kind == 1 ? Icons.check : data.kind == 2 ? Icons.alert : Icons.info;
+                colorize: root.tint;
+                width: (26px * S.k);
+                height: (26px * S.k);
+            }
+        }
+        body := VerticalLayout {
+            x: (90px * S.k);
+            y: (22px * S.k);
+            width: parent.width - (90px * S.k) - (24px * S.k);
+            height: parent.height - (44px * S.k);
+            alignment: center;
+            spacing: (4px * S.k);
+            if data.kicker != "": Text {
+                text: data.kicker;
+                font-size: (13px * S.k);
+                font-weight: 700;
+                letter-spacing: (1.4px * S.k);
+                color: Theme.text3;
+            }
+            Text { text: data.text; font-size: (20px * S.k); font-weight: 650; color: Theme.text; wrap: word-wrap; }
+            if data.sub != "": Text {
+                text: data.sub;
+                font-size: (16.5px * S.k);
+                color: Theme.text2;
+                wrap: word-wrap;
+                max-height: (120px * S.k);
+                overflow: elide;
+            }
+            if data.button != "": HorizontalLayout {
+                alignment: start;
+                padding-top: (10px * S.k);
+                Rectangle {
+                    height: (40px * S.k);
+                    border-radius: (20px * S.k);
+                    background: touch.has-hover ? #ffffff : #ffffffe6;
+                    animate background { duration: 160ms; }
+                    HorizontalLayout {
+                        padding-left: (18px * S.k);
+                        padding-right: (14px * S.k);
+                        spacing: (6px * S.k);
+                        Text { text: data.button; font-size: (16.5px * S.k); font-weight: 650; color: #0b1020; vertical-alignment: center; }
+                        Image {
+                            source: Icons.chevr;
+                            colorize: #0b1020;
+                            width: (18px * S.k);
+                            height: (18px * S.k);
+                            y: (parent.height - self.height) / 2;
+                        }
+                    }
+                }
+            }
+        }
+        // Time left before it goes.
+        if data.life > 0: Rectangle {
+            x: 0;
+            y: parent.height - (3px * S.k);
+            height: (3px * S.k);
+            width: parent.width * max(0, 1 - (animation-tick() - root.born) / 1ms / data.life);
+            background: root.tint.with-alpha(0.55);
         }
     }
 }
@@ -2751,7 +2812,6 @@ export component AppWindow inherits Window {
             x: root.width - (48px * S.k) - (480px * S.k);
             y: (104px * S.k);
             width: (480px * S.k);
-            spacing: (12px * S.k);
             alignment: start;
             for t in root.toasts: Toast { data: t; clicked => { root.toast-clicked(t.id, t.action); } }
         }

@@ -1270,8 +1270,23 @@ impl App {
         ui.set_launch_icon(ici.unwrap_or_default());
     }
 
+    /// Row by row, so the cards already showing keep their place and their animations.
     pub fn push_toasts(&mut self) {
-        self.ui().set_toasts(model(self.toasts.clone()));
+        let m = &self.toast_model;
+        let mut row = 0;
+        while row < m.row_count() {
+            let shown = m.row_data(row);
+            match self.toasts.iter().find(|t| shown.as_ref().is_some_and(|s| s.id == t.id)) {
+                Some(t) => {
+                    if shown.as_ref() != Some(t) { m.set_row_data(row, t.clone()); }
+                    row += 1;
+                }
+                None => { m.remove(row); }
+            }
+        }
+        for t in &self.toasts {
+            if !m.iter().any(|shown| shown.id == t.id) { m.push(t.clone()); }
+        }
     }
 }
 

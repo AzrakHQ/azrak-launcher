@@ -235,6 +235,8 @@ export struct OsiDisk { label: string, detail: string, warn: bool }
 export struct WjKey { label: string, w: float, focused: bool, accent: bool, on: bool, icon: string }
 
 // action: what clicking the notification does (empty: nothing).
-export struct ToastData { id: int, text: string, sub: string, kind: int, image: image, has-image: bool, app: bool, action: string }
+// `kicker`: who it's from, above the title; `button`: what clicking does; `life`: how long it stays
+// (ms); `leaving`: on its way out.
+export struct ToastData { id: int, text: string, sub: string, kind: int, image: image, has-image: bool, app: bool, action: string, kicker: string, button: string, life: int, leaving: bool }
 export struct MenuItem { label: string, icon: string }
 export struct RunningData { active: bool, name: string, time: string }

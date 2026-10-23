@@ -102,9 +102,9 @@ impl App {
             if self.download_states.insert(job.key.clone(), job.state).is_some_and(|old| old != job.state) {
                 changed = true;
                 if job.state == State::Complete {
-                    self.toast_action("Download complete", &format!("{} · click to install it from Downloads", job.name), 1, "downloads");
+                    self.toast_action("Download complete", &job.name, 1, "downloads", "Install from Downloads");
                 } else if job.state == State::Failed {
-                    self.toast_action("Download stopped", &format!("{} · click to see why in Downloads", job.name), 2, "downloads");
+                    self.toast_action("Download stopped", &job.name, 2, "downloads", "See why");
                 }
             }
         }
