@@ -100,24 +100,43 @@ export function normalize(name) {
     .join(' ');
 }
 
-/** The search result that is this game, or null: same name, or almost (the release's edition
- * words aside); with `exact`, the same name only. Soundtracks, DLC and demos never match. */
+/** A name's numbers, each with the word before it: "Call of Duty 4: Modern Warfare" has "duty 4",
+ * "Call of Duty: Modern Warfare 4" has "warfare 4", so the same words in another order don't make
+ * them one game. A year at the end, as Steam tells same-named games apart ("(2007)"), doesn't count. */
+function numbers(normalized) {
+  const words = normalized.split(' ');
+  return new Set(words.flatMap((w, i) => /^\d+$/.test(w) && !(i === words.length - 1 && i > 0 && /^(19|20)\d\d$/.test(w)) ? [`${words[i - 1] ?? ''} ${w}`] : []));
+}
+
+/** Whether each of the Steam name's numbers is in the release name, after the same word. */
+export function numbersAgree(name, steamName) {
+  const ours = numbers(normalize(name));
+  return [...numbers(normalize(steamName))].every(n => ours.has(n));
+}
+
+/** How well a Steam app name matches a release name, or null when it isn't this game: the same
+ * name, or almost (the release's edition words aside); with `exact`, the same name only. Their
+ * numbers always agree. */
+function matchScore(want, have, exact) {
+  if (!want || !have) return null;
+  if (have === want) return 1;
+  const ours = numbers(want), theirs = numbers(have);
+  if (ours.size !== theirs.size || [...ours].some(n => !theirs.has(n))) return null;
+  const words = new Set(want.split(' ')), other = new Set(have.split(' '));
+  const score = [...words].filter(w => other.has(w)).length / Math.max(words.size, other.size);
+  return score >= (exact ? 1 : 0.8) ? score : null;
+}
+
+/** The search result that is this game, or null (see matchScore). Soundtracks, DLC and demos
+ * never match. */
 export function bestMatch(name, items, { exact = false } = {}) {
   const want = normalize(name);
   if (!want) return null;
-  const words = new Set(want.split(' '));
   let best = null;
   for (const item of items || []) {
     if (item.type !== 'app' || /\b(soundtrack|ost|dlc|demo|artbook|season pass|playtest)\b/i.test(item.name)) continue;
-    const have = normalize(item.name);
-    let score;
-    if (have === want) score = 1;
-    else {
-      const other = new Set(have.split(' '));
-      const common = [...words].filter(w => other.has(w)).length;
-      score = common / Math.max(words.size, other.size);
-    }
-    if (score >= (exact ? 1 : 0.8) && (!best || score > best.score)) best = { score, item };
+    const score = matchScore(want, normalize(item.name), exact);
+    if (score !== null && (!best || score > best.score)) best = { score, item };
   }
   return best?.item ?? null;
 }
@@ -288,13 +307,14 @@ export async function lookup(title, now = new Date(), { exact = false, ratings =
 
 /** Whether a topic needs (another) lookup: never looked up; a match whose artwork or rating
  * couldn't be checked (`partial`, or no ProtonDB answer from before that flag); no match for 30
- * days, or searched under a name cleanName now gives differently. With `retry`: every miss, and
- * matches missing artwork. */
+ * days, or searched under a name cleanName now gives differently; a match from before numbers had to
+ * agree, to a game numbered otherwise ("Heroes of Might and Magic" → "… III"). With `retry`: every miss, and matches missing artwork. */
 export function due(topic, now, retry = false) {
   const steam = topic.steam;
   if (!steam) return true;
   if (steam.appid == null) return retry || steam.query !== cleanName(topic.title)
     || now - new Date(steam.checked_at || 0) > RETRY_DAYS * 86400_000;
+  if (steam.name && !numbersAgree(cleanName(topic.title), steam.name)) return true;
   return Boolean(steam.partial) || !('protondb' in steam)
     || (retry && Object.values(steam.assets || {}).some(url => url == null));
 }

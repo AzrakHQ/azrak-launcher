@@ -232,6 +232,12 @@ test('PC releases are matched to their Steam app by name, never to soundtracks o
   assert.equal(bestMatch('Ori and the Blind Forest', [{ type: 'app', id: 1, name: 'Ori and the Will of the Wisps' }]), null);
   assert.equal(bestMatch('Some Indie Game', []), null);
   assert.equal(bestMatch("King's Bounty", [{ type: 'app', id: 2, name: "King's Bounty: Crossworlds" }]), null, 'a spin-off is another game');
+  const cod = [{ type: 'app', id: 4435490, name: 'Call of Duty®: Modern Warfare® 4' }, { type: 'app', id: 7940, name: 'Call of Duty® 4: Modern Warfare® (2007)' }];
+  assert.equal(bestMatch('Call of Duty 4: Modern Warfare', cod).id, 7940, 'the same words with the number elsewhere are another game');
+  assert.equal(bestMatch('Call of Duty: Modern Warfare 4', cod).id, 4435490);
+  assert.equal(bestMatch('Heroes of Might and Magic', [{ type: 'app', id: 3, name: 'Heroes Of Might And Magic III' }]), null);
+  assert.equal(bestMatch('Metro 2033 Redux', [{ type: 'app', id: 286690, name: 'Metro 2033 Redux' }]).id, 286690);
+  assert.equal(bestMatch('Slay the Spire 2 Slay the Spire 2', [{ type: 'app', id: 4, name: 'Slay the Spire 2' }]).id, 4, 'a number said twice is still one');
   const { collection } = await import('./steam.mjs');
   assert.equal(collection("[Антология] Assassin's Creed (2008-2014) [amd64] [RUS]"), true);
   assert.equal(collection('[Trilogy] Mass Effect (1 + 2 + 3) [amd64]'), true);
@@ -300,6 +306,10 @@ test('Steam matches whose artwork or rating could not be checked are looked up a
   const { protondb, ...older } = complete; // no ProtonDB answer, from before `partial`
   assert.equal(due({ steam: older }, now), true);
   assert.equal(due({ title: 'Celeste', steam: { appid: null, query: 'Celeste', checked_at: now.toISOString() } }, now), false);
+  const cod = { ...complete, name: 'Call of Duty®: Modern Warfare® 4' };
+  assert.equal(due({ title: 'Call of Duty 4: Modern Warfare [x86] [RUS] [Wine]', steam: cod }, now), true, 'an earlier match to another numbered game');
+  assert.equal(due({ title: 'Call of Duty: Modern Warfare 4 (2026) [RUS + ENG]', steam: cod }, now), false);
+  assert.equal(due({ title: 'Metro: Last Light Redux Next Gen [amd64]', steam: { ...complete, name: 'Metro: Last Light Redux' } }, now), false, 'a looser earlier match stays');
 });
 
 test('a match that only lacks its ProtonDB rating just asks ProtonDB', async () => {
