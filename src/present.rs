@@ -836,7 +836,7 @@ impl App {
             let meta = size_label(&g.g).unwrap_or_else(|| "Size unknown".into());
             cards.push(CardData {
                 index: k as i32,
-                title: g.name.clone().into(),
+                title: self.game_title(gi).into(),
                 meta: meta.into(),
                 releases: if releases > 1 { format!("{releases} releases") } else { String::new() }.into(),
                 availability: crate::words::Availability::of(g.g.seeders).label().into(),
@@ -844,6 +844,11 @@ impl App {
                 rating: g.info.as_ref().and_then(|i| i.rating.as_ref()).map(|r| format!("{:.1}", r.score)).unwrap_or_default().into(),
                 badge: if g.local.is_some() { "Installed".into() } else if g.is_new { "New".into() } else { "".into() },
                 console: if self.mixed_consoles { g.g.platform.label().into() } else { "".into() },
+                // Every platform the game is on, in the usual order.
+                consoles: model(crate::versions::PLATFORMS.iter()
+                    .filter(|p| self.groups.releases(gi).iter().any(|&i| self.games[i].g.platform == **p))
+                    .filter(|_| self.mixed_consoles)
+                    .map(|p| SharedString::from(p.label())).collect()),
                 compat: compat.into(),
                 compat_level,
                 loaded: img.is_some(),
@@ -1061,13 +1066,15 @@ impl App {
             info.as_ref().map(|i| i.publisher.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| g.map(|g| g.detail("publisher")).unwrap_or_default()),
             g.map(|g| g.release.clone()).unwrap_or_default(), g.map(|g| g.region.clone()).unwrap_or_default(),
         ].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ").into();
+        // The game on other platforms: "Play it on" PS5 / PS4 / PC (versions.rs).
+        h.versions = model(self.version_tiles(t));
         if let Some(index) = t.game {
             // "Version 3 of 3 (newest)": releases numbered oldest first; no topic numbers.
             let members = self.release_order(index);
             h.release_count = members.len() as i32;
             let position = members.iter().position(|i| *i == index).unwrap_or(0) + 1;
             let newest = if position == members.len() { " (newest)" } else { "" };
-            h.release_label = format!("Version {position} of {}{newest}", members.len()).into();
+            h.release_label = format!("Release {position} of {}{newest}", members.len()).into();
             let game = &self.games[index].g;
             h.release_detail = [game.version.clone(), game.region.clone(), size_label(game).unwrap_or_default(), game.name.clone()].into_iter()
                 .filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ").into();
@@ -1205,7 +1212,8 @@ impl App {
             self.ui().get_hub().details.iter().map(|row| row.items.row_count()).sum::<usize>() as f32 * 38.0
         } else { 0.0 };
         // The verdict (~100) and the line under Download (~36) sit above the screenshots too.
-        let shots_top = 130.0 + 30.0 + 16.0 + 210.0 + 22.0 + 40.0 + 30.0 + 68.0 + 160.0 + 80.0 + facts_rows * 106.0 + details;
+        let versions = if self.ui().get_hub().versions.row_count() > 0 { 170.0 } else { 0.0 };
+        let shots_top = 130.0 + 30.0 + 16.0 + 210.0 + 22.0 + 40.0 + 30.0 + 68.0 + 160.0 + 80.0 + versions + facts_rows * 106.0 + details;
         let ui = self.ui();
         // Never scroll past the real end of the page (measured by the UI, not estimated).
         let max = ((ui.get_hub_content_h() - ui.get_hub_view_h()) / self.scale).max(0.0);

@@ -41,6 +41,7 @@ mod psn;
 mod sessions;
 mod settings;
 mod util;
+mod versions;
 mod words;
 
 slint::include_modules!();

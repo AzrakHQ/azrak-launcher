@@ -45,6 +45,7 @@ pub const Z_OS_INSTALL: i32 = 20;
 pub const Z_WIFI_JOIN: i32 = 21;
 pub const Z_POWER: i32 = 22;
 pub const Z_SEARCH_KEYS: i32 = 23;
+pub const Z_VERSIONS: i32 = 24;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Overlay {
@@ -812,6 +813,7 @@ impl App {
         borrow_art(&mut out);
         self.games = out;
         self.groups = crate::game_groups::Groups::new(self.games.iter().map(|game| (&game.g, game.name.as_str())));
+        borrow_group_art(&mut self.games, &self.groups);
         self.refresh_locals();
     }
 
@@ -964,16 +966,8 @@ impl App {
                     && self.matches_status(i)
                     && hits.scores[i].is_some()
             };
-        let rank = |i: usize| {
-            let g = &self.games[i];
-            let installed_version = g.local.is_some_and(|l| {
-                let a = crate::game_groups::version_key(&g.g.version);
-                !a.is_empty() && a == crate::game_groups::version_key(&self.locals[l].l.version)
-            });
-            (installed_version, g.local.is_some(), !g.g.magnet.is_empty(), self.card_req(i).is_some(),
-                g.info.as_ref().is_some_and(|info| !info.master.is_empty()), crate::game_groups::version_key(&g.g.version),
-                g.g.seeders.unwrap_or(0), g.g.id)
-        };
+        // Each card shows its best release among those the filters let through (versions.rs).
+        let rank = |i: usize| self.release_rank(i);
         // Before a search, only games with a picture or yours; a search finds every game.
         let shown = if query.is_empty() { self.browsable() } else { vec![true; self.groups.members.len()] };
         // How well each game shown matches: its best release.
@@ -1357,9 +1351,11 @@ impl App {
             .then(|| crate::compat::Outlook::of(self.target_compat(t), self.pc_verdict(platform).as_ref()))
     }
 
-    /// A game's releases, oldest version first, so "Version 3 of 3" is the newest one.
+    /// A game's releases for the same platform, oldest version first, so "Version 3 of 3" is
+    /// the newest one. (Other platforms are the Game Hub's "Play it on" row.)
     pub fn release_order(&self, index: usize) -> Vec<usize> {
-        let mut members = self.groups.releases(index).to_vec();
+        let platform = self.games[index].g.platform;
+        let mut members: Vec<usize> = self.groups.releases(index).iter().copied().filter(|&i| self.games[i].g.platform == platform).collect();
         members.sort_by_key(|i| (crate::game_groups::version_key(&self.games[*i].g.version), self.games[*i].g.id));
         members
     }
@@ -1858,6 +1854,9 @@ impl App {
         if zone == Z_SEARCH_KEYS && self.overlay == Overlay::SearchKeys {
             return self.click_search_keys(idx);
         }
+        if zone == Z_VERSIONS && self.overlay == Overlay::Hub && idx >= 0 {
+            return self.switch_version(idx as usize);
+        }
         if zone == Z_POWER && self.overlay == Overlay::Power {
             return self.click_power(idx);
         }
@@ -1939,7 +1938,7 @@ impl App {
         ui.set_idx(idx);
     }
 
-    fn move_focus(&mut self, zone: i32, idx: i32) {
+    pub fn move_focus(&mut self, zone: i32, idx: i32) {
         self.set_focus(zone, idx);
         audio::play(Sound::Move);
     }
@@ -2287,23 +2286,24 @@ impl App {
         match (self.zone, a) {
             (Z_HUB, Act::Left) if self.idx > 0 => self.move_focus(Z_HUB, self.idx - 1),
             (Z_HUB, Act::Right) if (self.idx as usize) + 1 < self.hub_actions.len() => self.move_focus(Z_HUB, self.idx + 1),
-            (Z_HUB, Act::Down) => {
-                if self.hub.and_then(|t| t.game).is_some_and(|i| self.groups.releases(i).len() > 1) {
-                    self.move_focus(Z_RELEASES, 0);
-                } else { self.move_focus(Z_HUB_DETAILS, 0); }
+            (Z_HUB | Z_VERSIONS | Z_RELEASES, Act::Down) => {
+                self.hub_step(1);
+                self.scroll_hub();
+            }
+            (Z_VERSIONS, Act::Left) if self.idx > 0 => self.move_focus(Z_VERSIONS, self.idx - 1),
+            (Z_VERSIONS, Act::Right) if (self.idx as usize) + 1 < self.hub_version_count() => self.move_focus(Z_VERSIONS, self.idx + 1),
+            (Z_VERSIONS, Act::Confirm) => self.switch_version(self.idx as usize),
+            (Z_VERSIONS | Z_RELEASES, Act::Up) => {
+                self.hub_step(-1);
                 self.scroll_hub();
             }
             (Z_RELEASES, Act::Left) => self.cycle_hub_release(-1),
             (Z_RELEASES, Act::Right | Act::Confirm) => self.cycle_hub_release(1),
-            (Z_RELEASES, Act::Up) => self.move_focus(Z_HUB, 0),
-            (Z_RELEASES, Act::Down) => self.move_focus(Z_HUB_DETAILS, 0),
             (Z_HUB_DETAILS, Act::Confirm) => {
                 let ui = self.ui(); ui.set_hub_details_open(!ui.get_hub_details_open());
             }
             (Z_HUB_DETAILS, Act::Up) => {
-                if self.hub.and_then(|t| t.game).is_some_and(|i| self.groups.releases(i).len() > 1) {
-                    self.move_focus(Z_RELEASES, 0);
-                } else { self.move_focus(Z_HUB, 0); }
+                self.hub_step(-1);
                 self.scroll_hub();
             }
             (Z_HUB_DETAILS, Act::Down) => {
@@ -3450,17 +3450,49 @@ pub fn borrow_art(games: &mut [GameV]) {
             continue;
         }
         let Some(&d) = [&games[i].name, &games[i].g.name].iter().find_map(|n| donors.get(&crate::game_groups::art_key(n))) else { continue };
-        let (donor, platform) = (&games[d], games[i].g.platform);
-        let info = donor.info.as_ref().filter(|_| has_art(donor)).map(|i| Info {
-            source: i.source.clone(), master: i.master.clone(), hub: i.hub.clone(), logo: i.logo.clone(), portrait: i.portrait.clone(),
-            bg: i.bg.clone(), banner: i.banner.clone(), ..Default::default()
-        });
-        // PS4 box art has a blue "PS4" band, cut only from PS4 cards.
-        let cover = (info.is_none() && (donor.g.platform != crate::platform::Platform::Ps4 || platform == crate::platform::Platform::Ps4))
-            .then(|| donor.g.cover.clone());
-        games[i].info = info;
-        if let Some(cover) = cover {
-            games[i].g.cover = cover;
+        lend_art(games, d, i);
+    }
+}
+
+fn has_official_art(g: &GameV) -> bool {
+    g.info.as_ref().is_some_and(|i| !i.portrait.is_empty() || !i.master.is_empty())
+}
+
+/// Release `to` shows `from`'s pictures.
+fn lend_art(games: &mut [GameV], from: usize, to: usize) {
+    let (donor, platform) = (&games[from], games[to].g.platform);
+    let info = donor.info.as_ref().filter(|_| has_official_art(donor)).map(|i| Info {
+        source: i.source.clone(), master: i.master.clone(), hub: i.hub.clone(), logo: i.logo.clone(), portrait: i.portrait.clone(),
+        bg: i.bg.clone(), banner: i.banner.clone(), ..Default::default()
+    });
+    // PS4 box art has a blue "PS4" band, cut only from PS4 cards.
+    let cover = (info.is_none() && (donor.g.platform != crate::platform::Platform::Ps4 || platform == crate::platform::Platform::Ps4))
+        .then(|| donor.g.cover.clone());
+    match (games[to].info.as_mut(), info) {
+        // Its own store details stay; only the pictures come from the other release.
+        (Some(own), Some(art)) => {
+            (own.source, own.master, own.hub, own.logo, own.portrait, own.bg, own.banner) =
+                (art.source, art.master, art.hub, art.logo, art.portrait, art.bg, art.banner);
+        }
+        (own, art) => if own.is_none() { games[to].info = art; },
+    }
+    if let Some(cover) = cover {
+        games[to].g.cover = cover;
+    }
+}
+
+/// A release without official pictures shows another of its game's (by another name: "Hades +
+/// Original Soundtrack Bundle" on PC is Hades): official art beats a forum cover, which often
+/// doesn't load; a forum cover is only lent to a release with no picture at all.
+pub fn borrow_group_art(games: &mut [GameV], groups: &crate::game_groups::Groups) {
+    for members in &groups.members {
+        let Some(donor) = members.iter().copied().filter(|&i| has_official_art(&games[i]) || !games[i].g.cover.is_empty())
+            .max_by_key(|&i| has_official_art(&games[i])) else { continue };
+        let official = has_official_art(&games[donor]);
+        for &i in members {
+            if !has_official_art(&games[i]) && (official || games[i].g.cover.is_empty()) {
+                lend_art(games, donor, i);
+            }
         }
     }
 }

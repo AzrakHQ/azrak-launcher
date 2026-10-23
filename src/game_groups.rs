@@ -1,4 +1,8 @@
 //! Presentation-only grouping. Release records, topic IDs and magnets stay untouched.
+//!
+//! One card per game: its releases (regions, editions, updates) and its versions for each
+//! platform (PS5, PS4, PC). A name alone doesn't make two releases the same game when they came
+//! out years apart: Doom (2016) isn't the 1993 Doom re-released, Prey (2017) isn't Prey (2006).
 use crate::{catalog::Game, util::norm};
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -10,8 +14,29 @@ pub struct Groups {
 }
 
 static EDITION: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(
-    r"(?i)\b(?:digital\s+)?(?:deluxe|ultimate|standard|premium|gold|complete|collector'?s|game of the year|goty|definitive)\s+edition\b|\b(?:all\s+dlc)\b"
+    r"(?i)\b(?:digital\s+)?(?:deluxe|ultimate|standard|premium|gold|complete|collector'?s|game of the year|goty|definitive)\s+edition\b|\b(?:all\s+dlc)\b|\bdirector['’]?s\s+cut\b|\s\+\s[^+]*\b(?:dlc|pre-?purchase|bonus(?:es)?|entitlements?|season\s+pass|soundtrack|updates?)\b.*$"
 ).unwrap());
+
+/// Releases on one platform with the same name this many years apart or more are different games.
+const SAME_PLATFORM_YEARS: i32 = 2;
+/// A game on another platform comes out later (God of War: PS4 2018, PC 2022) or earlier (PC
+/// first, as many indies), but not this far apart: Tomb Raider (1996, 2013) are two games.
+const PORT_YEARS: i32 = 7;
+
+/// The year a release came out, from the catalog's date: "2021", "20.08.2021",
+/// "4 September 2025", "2013-2018" (the first).
+pub fn release_year(release: &str) -> Option<i32> {
+    static YEAR: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\b(19[7-9]\d|20\d\d)\b").unwrap());
+    YEAR.find(release).and_then(|m| m.as_str().parse().ok())
+}
+
+/// Close enough in years to be the same game; an unknown year doesn't say otherwise.
+fn close(a: Option<i32>, b: Option<i32>, within: i32) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => (a - b).abs() <= within,
+        _ => true,
+    }
+}
 
 fn name_key(name: &str) -> String {
     norm(&EDITION.replace_all(name, ""))
@@ -33,21 +58,79 @@ impl Groups {
             if parent[index] != index { parent[index] = root(parent, parent[index]); }
             parent[index]
         }
-        let mut aliases = HashMap::<String, usize>::new();
+        fn join(parent: &mut [usize], a: usize, b: usize) {
+            let (a, b) = (root(parent, a), root(parent, b));
+            parent[a] = b;
+        }
+        let years: Vec<Option<i32>> = games.iter().map(|(game, _)| release_year(&game.release)).collect();
+        let names = |game: &Game, display: &str| -> Vec<String> {
+            let mut names = vec![name_key(&game.name), name_key(display)];
+            names.retain(|name| !name.is_empty());
+            names.dedup();
+            names
+        };
+        // First each platform's releases: same title ID, or same name a few years apart at most.
+        let mut aliases = HashMap::<String, Vec<usize>>::new();
         for (index, (game, display)) in games.iter().enumerate() {
-            let names = [name_key(&game.name), name_key(display)];
             let ids = std::iter::once(&game.title_id).chain(game.title_ids.iter())
-                .filter(|id| crate::psn::valid_title_id(id)).map(|id| format!("id:{}", id.to_ascii_uppercase()));
-            // A PS4 and a PS5 release of the same game stay separate cards: different emulators.
+                .filter(|id| crate::psn::valid_title_id(id)).map(|id| (format!("id:{}", id.to_ascii_uppercase()), true));
             let console = game.platform.label();
-            let keys = ids.chain(names.into_iter().filter(|name| !name.is_empty()).map(|name| format!("name:{name}")))
-                .map(|key| format!("{console}:{key}"));
-            for key in keys {
-                if let Some(&other) = aliases.get(&key) {
-                    let (a, b) = (root(&mut parent, index), root(&mut parent, other));
-                    parent[a] = b;
-                } else { aliases.insert(key, index); }
+            let keys = ids.chain(names(game, display).into_iter().map(|name| (format!("name:{name}"), false)))
+                .map(|(key, id)| (format!("{console}:{key}"), id));
+            for (key, id) in keys {
+                let seen = aliases.entry(key).or_default();
+                match seen.iter().copied().find(|&other| id || close(years[index], years[other], SAME_PLATFORM_YEARS)) {
+                    Some(other) => join(&mut parent, index, other),
+                    None => seen.push(index),
+                }
             }
+        }
+        // Then the same game on other platforms: same name, and each the other's nearest in
+        // years (PS4's Doom 2016 and PC's DOOM 2016, not PS4's classic Doom re-release).
+        let roots: Vec<usize> = (0..games.len()).map(|i| root(&mut parent, i)).collect();
+        let mut year_of = HashMap::<usize, i32>::new();
+        let mut by_name = HashMap::<String, Vec<usize>>::new();
+        for (index, (game, display)) in games.iter().enumerate() {
+            let r = roots[index];
+            if let Some(y) = years[index] {
+                year_of.entry(r).and_modify(|e| *e = (*e).min(y)).or_insert(y);
+            }
+            // Looser names here: "God of War (2018)" on PS4 is "God of War" on PC; the years
+            // keep "Resident Evil 4 (Remake)" from the 2007 one.
+            let mut loose = vec![art_key(&game.name), art_key(display)];
+            loose.retain(|name| !name.is_empty());
+            loose.dedup();
+            for name in loose {
+                let list = by_name.entry(name).or_default();
+                if !list.contains(&r) { list.push(r); }
+            }
+        }
+        let platform = |r: usize| games[r].0.platform;
+        let mut links = Vec::new();
+        for list in by_name.values() {
+            // The other platform's card nearest in years to `from`'s, if any is close enough. An
+            // unknown year only links a name that's one card on each side.
+            let nearest = |from: usize, on: crate::platform::Platform| -> Option<usize> {
+                let there: Vec<usize> = list.iter().copied().filter(|&r| platform(r) == on).collect();
+                let here = list.iter().filter(|&&r| platform(r) == platform(from)).count();
+                match (year_of.get(&from), there.as_slice()) {
+                    (None, &[only]) if here == 1 => Some(only),
+                    (Some(_), &[only]) if here == 1 && !year_of.contains_key(&only) => Some(only),
+                    (Some(&y), _) => there.iter().filter_map(|&r| year_of.get(&r).map(|&ry| ((ry - y).abs(), r)))
+                        .filter(|(gap, _)| *gap <= PORT_YEARS).min().map(|(_, r)| r),
+                    _ => None,
+                }
+            };
+            for &a in list {
+                for &b in list {
+                    if a < b && platform(a) != platform(b) && nearest(a, platform(b)) == Some(b) && nearest(b, platform(a)) == Some(a) {
+                        links.push((a, b));
+                    }
+                }
+            }
+        }
+        for (a, b) in links {
+            join(&mut parent, a, b);
         }
         let mut groups = Self::default();
         let mut roots = HashMap::new();
@@ -88,15 +171,43 @@ mod tests {
         assert_eq!(grouped.releases(0), &[0, 1, 2, 3]);
         assert_eq!(games[0].magnet, "first magnet"); assert_eq!(games[1].magnet, "second magnet");
     }
+    fn on(platform: crate::platform::Platform, name: &str, release: &str) -> Game {
+        Game { name: name.into(), platform, release: release.into(), ..Default::default() }
+    }
+
     #[test]
-    fn ps4_and_ps5_releases_of_a_game_stay_separate() {
+    fn a_games_versions_for_each_platform_are_one_card() {
+        use crate::platform::Platform::{Pc, Ps4, Ps5};
         let mut ps4 = game("Firewatch", "CUSA04118");
-        ps4.platform = crate::platform::Platform::Ps4;
+        ps4.platform = Ps4;
         let mut ps4_eur = game("Firewatch", "CUSA04987");
-        ps4_eur.platform = crate::platform::Platform::Ps4;
-        let games = vec![game("Firewatch", "PPSA01234"), ps4, ps4_eur];
-        let groups = Groups::new(games.iter().map(|g| (g, g.name.as_str())));
-        assert_eq!(groups.members, vec![vec![0], vec![1, 2]]);
+        ps4_eur.platform = Ps4;
+        let games = vec![game("Firewatch", "PPSA01234"), ps4, ps4_eur, on(Pc, "Firewatch", "")];
+        assert_eq!(groups(&games).members, vec![vec![0, 1, 2, 3]]);
+        // A port years later is the same game; a Director's Cut is an edition.
+        let games = [on(Ps4, "God of War (2018)", "2018"), on(Pc, "God of War", "2022"),
+            on(Ps4, "Ghost of Tsushima", "2020"), on(Ps5, "Ghost of Tsushima: Director's Cut", "20.08.2021"), on(Pc, "Ghost of Tsushima", "2024")];
+        assert_eq!(groups(&games).members, vec![vec![0, 1], vec![2, 3, 4]]);
+        // What came with a release ("+ DLC") is no part of its name; a second game is.
+        assert_eq!(name_key("Ghost of Tsushima DIRECTOR'S CUT + Pre-purchase Entitlements"), "ghost of tsushima");
+        assert_eq!(name_key("Final Fantasy VII Remake + 6 DLC + BP 5."), "final fantasy vii remake");
+        assert_eq!(name_key("DOOM + DOOM II"), "doom doom ii");
+    }
+
+    #[test]
+    fn same_names_years_apart_are_different_games() {
+        use crate::platform::Platform::{Pc, Ps4};
+        let games = [on(Pc, "Prey", "2006"), on(Pc, "Prey", "2017"), on(Ps4, "Prey", "2017"),
+            on(Ps4, "Doom", "2016"), on(Ps4, "Doom", "2021"), on(Pc, "DOOM", "2016"),
+            on(Pc, "Tomb Raider", "1996"), on(Ps4, "Tomb Raider: Definitive Edition", "2014")];
+        let grouped = groups(&games);
+        let together = |a: usize, b: usize| grouped.releases(a).contains(&b);
+        assert!(together(1, 2) && !together(0, 1) && !together(0, 2));
+        assert!(together(3, 5) && !together(3, 4) && !together(4, 5));
+        assert!(!together(6, 7));
+        assert_eq!(release_year("4 September 2025"), Some(2025));
+        assert_eq!(release_year("2013-2018"), Some(2013));
+        assert_eq!(release_year(""), None);
     }
 
     #[test]

@@ -672,18 +672,18 @@ export component AppWindow inherits Window {
                                     }
                                 }
                                 Badge { x: (10px * S.k); y: (10px * S.k); text: c.badge; size: (14px * S.k); }
-                                // The console, big enough to tell Hades on PS5, PS4 and PC apart at a
-                                // glance: each has its own colour.
-                                if c.console != "": Rectangle {
+                                // The platforms the game is on, big enough to tell at a glance: each
+                                // has its own colour. One card, every platform (Hades: PS5, PS4, PC).
+                                for p[pi] in c.consoles: Rectangle {
                                     x: parent.width - self.width - (8px * S.k);
-                                    y: (8px * S.k);
-                                    width: cl.preferred-width + (18px * S.k);
-                                    height: (30px * S.k);
+                                    y: (8px * S.k) + pi * (self.height + (5px * S.k));
+                                    width: (56px * root.library-type-scale);
+                                    height: (28px * root.library-type-scale);
                                     border-radius: (8px * S.k);
-                                    background: c.console == "PS4" ? #12306be8 : c.console == "PC" ? #12452fe8 : #000000d9;
+                                    background: p == "PS4" ? #12306be8 : p == "PC" ? #12452fe8 : #000000d9;
                                     border-width: 1px;
-                                    border-color: c.console == "PS4" ? #8fc2ff80 : c.console == "PC" ? #7ee2b080 : #ffffff59;
-                                    cl := Text { text: c.console; font-size: (17px * root.library-type-scale); font-weight: 800; letter-spacing: (0.5px * S.k); color: c.console == "PS4" ? #b8d8ff : c.console == "PC" ? #a8f0cc : #ffffff; }
+                                    border-color: p == "PS4" ? #8fc2ff80 : p == "PC" ? #7ee2b080 : #ffffff59;
+                                    Text { text: p; font-size: (16px * root.library-type-scale); font-weight: 800; letter-spacing: (0.5px * S.k); color: p == "PS4" ? #b8d8ff : p == "PC" ? #a8f0cc : #ffffff; }
                                 }
                                 if c.compat != "": Rectangle {
                                     x: (10px * S.k);
@@ -1277,7 +1277,64 @@ export component AppWindow inherits Window {
                         Text { text: root.hub.download-note; font-size: (19px * S.k); color: root.hub.download-note-warn ? Theme.warn : Theme.text2; overflow: elide; }
                     }
                     Rectangle { height: (22px * S.k); }
-                    // Other versions of this game (editions, regions, updates): big arrows, plain words.
+                    // The game on each platform: how it should play here, how easy it is to get,
+                    // and which to pick. Choosing one shows the game there.
+                    if root.hub.versions.length > 0: VerticalLayout {
+                        spacing: (12px * S.k);
+                        padding-bottom: (18px * S.k);
+                        Text { text: "PLAY IT ON"; font-size: (15px * S.k); font-weight: 700; letter-spacing: (1.4px * S.k); color: Theme.text3; }
+                        HorizontalLayout {
+                            spacing: (14px * S.k);
+                            for v[i] in root.hub.versions: Rectangle {
+                                property <bool> f: root.zone == Zone.versions && root.idx == i && root.overlay == 1;
+                                horizontal-stretch: 1;
+                                height: (116px * S.k);
+                                border-radius: (16px * S.k);
+                                background: v.current ? #ffffff1c : #ffffff0d;
+                                border-width: f ? (3px * S.k) : v.current ? (2px * S.k) : 1px;
+                                border-color: f ? Theme.text : v.current ? Theme.accent : Theme.line;
+                                animate background, border-color { duration: 140ms; }
+                                VerticalLayout {
+                                    padding: (16px * S.k);
+                                    spacing: (5px * S.k);
+                                    HorizontalLayout {
+                                        spacing: (10px * S.k);
+                                        Text {
+                                            text: v.platform;
+                                            font-size: (22px * S.k);
+                                            font-weight: 800;
+                                            letter-spacing: (0.5px * S.k);
+                                            color: v.platform == "PS4" ? #b8d8ff : v.platform == "PC" ? #a8f0cc : #ffffff;
+                                            vertical-alignment: center;
+                                        }
+                                        if v.best: Rectangle {
+                                            width: best-text.preferred-width + (18px * S.k);
+                                            height: (26px * S.k);
+                                            y: (parent.height - self.height) / 2;
+                                            border-radius: (13px * S.k);
+                                            background: Theme.ok.with-alpha(0.18);
+                                            border-width: 1px;
+                                            border-color: Theme.ok.with-alpha(0.45);
+                                            best-text := Text { text: "Best for this PC"; font-size: (14px * S.k); font-weight: 700; color: Theme.ok; }
+                                        }
+                                        Rectangle { horizontal-stretch: 1; }
+                                        if v.current: Text { text: "Showing"; font-size: (14px * S.k); font-weight: 600; color: Theme.text3; vertical-alignment: center; }
+                                    }
+                                    Text {
+                                        text: v.verdict;
+                                        font-size: (18px * S.k);
+                                        font-weight: 600;
+                                        color: v.verdict-kind == 1 ? Theme.ok : v.verdict-kind == 2 ? Theme.warn : v.verdict-kind == 3 ? Theme.danger : Theme.text2;
+                                        overflow: elide;
+                                    }
+                                    Text { text: v.detail; font-size: (16px * S.k); color: Theme.text3; overflow: elide; }
+                                }
+                                TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.versions, i); } }
+                            }
+                        }
+                        Text { text: "Each version has its own saves and updates."; font-size: (15px * S.k); color: Theme.text3; }
+                    }
+                    // Other releases of this version (editions, regions, updates): big arrows, plain words.
                     if root.hub.release-count > 1: Rectangle {
                         height: (72px * S.k); border-radius: (14px * S.k); background: #ffffff0d;
                         border-width: root.zone == Zone.releases ? (3px * S.k) : 1px;
@@ -1298,7 +1355,7 @@ export component AppWindow inherits Window {
                                 Text { text: root.hub.release-label; font-size: (20px * S.k); font-weight: 600; color: Theme.text; overflow: elide; }
                                 if root.hub.release-detail != "": Text { text: root.hub.release-detail; font-size: (16px * S.k); color: Theme.text3; overflow: elide; }
                             }
-                            Text { text: "Choose another version"; font-size: (17px * S.k); color: root.zone == Zone.releases ? Theme.text : Theme.text2; vertical-alignment: center; }
+                            Text { text: "Choose another release"; font-size: (17px * S.k); color: root.zone == Zone.releases ? Theme.text : Theme.text2; vertical-alignment: center; }
                             Rectangle {
                                 width: (52px * S.k);
                                 Rectangle {

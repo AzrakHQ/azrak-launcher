@@ -111,6 +111,7 @@ export global Zone {
     out property <int> wifi-join: 21;
     out property <int> power: 22;
     out property <int> search-keys: 23;
+    out property <int> versions: 24;
 }
 
 // dot: KytyPS5 compatibility level (0 none, 1 in-game, 2 menus, 3 boots, 4 doesn't boot, 5 untested)
@@ -160,6 +161,8 @@ export struct CardData {
     compat-level: int,
     // "PS4" / "PS5" when the Library has more than one console; empty otherwise.
     console: string,
+    // Every platform the game is on (PS5, PS4, PC), when the Library has more than one.
+    consoles: [string],
     image: image,
     loaded: bool,
     // Nothing to load (no artwork found, or its download failed): a placeholder with the name.
@@ -171,6 +174,10 @@ export struct GenreChip { index: int, label: string, count: string, on: bool, x:
 export struct Fact { key: string, value: string, /* 1 good, 2 warning, 3 bad, 4 none (grey) */ kind: int }
 export struct FactRow { items: [Fact] }
 export struct Shot { image: image, loaded: bool }
+
+// One platform of a game in the Game Hub: how it should play here (kind: the Fact colours), how
+// easy it is to get, whether it's the best pick for this PC and whether it's the one shown.
+export struct VersionData { platform: string, verdict: string, verdict-kind: int, detail: string, best: bool, current: bool }
 
 export struct HubData {
     kicker: string,
@@ -203,6 +210,8 @@ export struct HubData {
     release-label: string,
     release-detail: string,
     release-count: int,
+    // "Play it on": the game on each platform, when it's on more than one.
+    versions: [VersionData],
     shots: [Shot],
     about: [string],
 }
