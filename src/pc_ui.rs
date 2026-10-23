@@ -39,21 +39,11 @@ impl App {
 
     fn pc_detected(&mut self, specs: Specs) {
         self.pc_checking = false;
-        self.pc_verdicts = [specs.verdict(Platform::Ps5), specs.verdict(Platform::Ps4)];
         self.pc = Some(specs);
-        // Which version each Library card shows depends on what plays here, and with it the
-        // order of some sorts: the highlighted game stays highlighted wherever it moves.
-        let game = |app: &App, card: usize| app.filtered.get(card).and_then(|&g| app.groups.releases(g).first().copied());
-        let focused = (self.zone == Z_GRID).then(|| game(self, self.idx as usize)).flatten();
+        // Which version each Library card shows depends on what plays here (the highlighted
+        // game stays highlighted: see `apply_filter`).
         self.apply_filter();
-        if let Some(at) = focused.and_then(|f| (0..self.filtered.len()).find(|&card| game(self, card) == Some(f))) {
-            self.idx = at as i32;
-        }
         if self.view == 1 && !self.boot.active {
-            if self.zone == Z_GRID {
-                self.set_focus(Z_GRID, self.idx);
-                self.ensure_grid_visible();
-            }
             self.push_grid();
         }
         match self.overlay {
@@ -64,13 +54,9 @@ impl App {
         self.pc_notice();
     }
 
-    /// This PC's verdict for a console's games, worked out when the PC was read (`pc_detected`).
+    /// This PC's verdict for a platform's games (worked out once per reading of the PC).
     pub fn pc_verdict(&self, platform: Platform) -> Option<&Verdict> {
-        match platform {
-            Platform::Ps5 => self.pc_verdicts[0].as_ref(),
-            Platform::Ps4 => self.pc_verdicts[1].as_ref(),
-            Platform::Pc => None,
-        }
+        self.pc.as_ref()?.verdict_for(platform)
     }
 
     /// Once per PC: say so when a console's games can't start here, before anyone downloads one.

@@ -47,7 +47,24 @@ impl Plays<'_> {
             Plays::Wine(Some("borked"), _) => "Doesn't run with Wine yet".into(),
             Plays::Wine(Some(tier), _) => format!("Runs with Wine · {}", title_case(tier)),
             Plays::Wine(None, true) => "Runs with Wine (included)".into(),
-            Plays::Wine(None, false) => "Needs Proton or Wine".into(),
+            Plays::Wine(None, false) => match crate::pcgame::windows_runner() {
+                Some((_, runner)) => format!("Runs with {runner}"),
+                None => "Needs Proton or Wine".into(),
+            },
+        }
+    }
+
+    /// The Game Hub's "how it runs" box for a PC game: its label, its value and its colour.
+    pub fn hub_fact(&self) -> (&'static str, String, i32) {
+        match self {
+            Plays::Console(o) => ("ON THIS PC", o.headline().into(), o.kind()),
+            Plays::Native => ("ON LINUX", "Native game".into(), 1),
+            Plays::Wine(Some(tier), _) => ("PROTONDB · RUNS WITH WINE", title_case(tier), protondb_kind(tier)),
+            Plays::Wine(None, true) => ("RUNS WITH", "Wine, included".into(), 0),
+            Plays::Wine(None, false) => match crate::pcgame::windows_runner() {
+                Some((_, runner)) => ("WINDOWS GAME · RUNS WITH", runner.into(), 0),
+                None => ("WINDOWS GAME", "Needs Proton or Wine".into(), 3),
+            },
         }
     }
 
@@ -57,7 +74,9 @@ impl Plays<'_> {
             Plays::Console(o) => o.kind(),
             Plays::Native => 1,
             Plays::Wine(Some(tier), _) => protondb_kind(tier),
-            Plays::Wine(None, _) => 0,
+            Plays::Wine(None, true) => 0,
+            // Nothing to run it with is a game that won't start.
+            Plays::Wine(None, false) => if crate::pcgame::windows_runner().is_some() { 0 } else { 3 },
         }
     }
 }
@@ -92,16 +111,27 @@ fn availability_rank(a: Availability) -> u8 {
 impl App {
     /// How well release `i` should play here.
     pub fn plays(&self, i: usize) -> Plays<'_> {
-        let g = &self.games[i];
-        let t = Target { game: Some(i), local: g.local };
-        if g.g.platform != Platform::Pc {
-            let compat = if g.local.is_some() { self.target_compat(t) } else { self.game_compat(g) };
-            return Plays::Console(Outlook::of(compat, self.pc_verdict(g.g.platform)));
+        self.plays_for(Target { game: Some(i), local: self.games[i].local })
+    }
+
+    /// How well a game should play here: a catalog release, or one installed (catalogued or
+    /// not). The tiles and the Game Hub both say it from this.
+    pub fn plays_for(&self, t: Target) -> Plays<'_> {
+        let platform = self.target_platform(t);
+        if platform != Platform::Pc {
+            // A catalog release reads its entry directly (no copy of its title ID).
+            let compat = match t.game {
+                Some(i) if t.local.is_none() => self.game_compat(&self.games[i]),
+                _ => self.target_compat(t),
+            };
+            return Plays::Console(Outlook::of(compat, self.pc_verdict(platform)));
         }
         if !self.pc_windows(t) {
             return Plays::Native;
         }
-        Plays::Wine(g.g.steam.as_ref().and_then(|s| s.protondb.as_deref()), g.g.wine)
+        let g = t.game.map(|i| &self.games[i].g);
+        let tier = g.and_then(|g| g.steam.as_ref()).and_then(|s| s.protondb.as_deref()).filter(|tier| !tier.is_empty());
+        Plays::Wine(tier, g.is_some_and(|g| g.wine))
     }
 
     /// Which version plays best here, the one you have aside: how well it plays, whether
@@ -175,6 +205,12 @@ impl App {
     pub fn release_year(&self, i: usize) -> Option<i32> {
         let g = &self.games[i];
         crate::game_groups::release_year(&g.g.release).or_else(|| (g.rel_day != 0).then(|| crate::util::civil_from_days(g.rel_day).0))
+    }
+
+    /// The year game `index` came out: its earliest release's, as grouping counts it (a 2020
+    /// upload of Doom 2016 is still Doom 2016).
+    pub fn game_year(&self, index: usize) -> Option<i32> {
+        self.groups.releases(index).iter().filter_map(|&i| self.release_year(i)).min()
     }
 
     /// The platforms game `index` is on, in the usual order.
@@ -253,4 +289,22 @@ impl App {
 fn title_case(s: &str) -> String {
     let mut c = s.chars();
     c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tile_and_the_game_hub_say_the_same() {
+        for plays in [Plays::Native, Plays::Wine(Some("gold"), false), Plays::Wine(Some("silver"), true),
+            Plays::Wine(Some("borked"), false), Plays::Wine(None, true), Plays::Wine(None, false)] {
+            assert_eq!(plays.kind(), plays.hub_fact().2);
+        }
+        assert_eq!(Plays::Wine(Some("gold"), false).hub_fact().1, "Gold");
+        // Colours are what a version is, not its place in the ranking.
+        assert_eq!((Plays::Native.kind(), Plays::Wine(Some("silver"), false).kind(), Plays::Wine(Some("borked"), false).kind()), (1, 2, 3));
+        // An empty tier can't reach a title (none is asked for) and wouldn't break one.
+        assert_eq!(title_case(""), "");
+    }
 }

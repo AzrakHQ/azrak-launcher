@@ -1102,22 +1102,9 @@ impl App {
         // PC games: how it runs on Linux, natively or through Wine (with ProtonDB's rating).
         let pc_game = self.target_platform(t) == crate::platform::Platform::Pc;
         let steam = g.and_then(|g| g.steam.clone());
-        // Wine-packed releases bring their Wine; an installed .exe (catalogued or not) runs
-        // through Proton or Wine.
-        let wine_packed = g.is_some_and(|g| g.wine);
-        let pc_windows = self.pc_windows(t);
-        let pc_runs: Option<(&str, String, i32)> = pc_game.then(|| match (steam.as_ref().and_then(|s| s.protondb.clone()), wine_packed) {
-            (Some(tier), _) if pc_windows => {
-                let kind = crate::versions::protondb_kind(&tier);
-                ("PROTONDB · RUNS WITH WINE", format!("{}{}", tier[..1].to_uppercase(), &tier[1..]), kind)
-            }
-            (None, true) => ("RUNS WITH", "Wine, included".to_string(), 0),
-            _ if pc_windows => match crate::pcgame::windows_runner() {
-                Some((_, runner)) => ("WINDOWS GAME · RUNS WITH", runner.to_string(), 0),
-                None => ("WINDOWS GAME", "Needs Proton or Wine".to_string(), 3),
-            },
-            _ => ("ON LINUX", "Native game".to_string(), 1),
-        });
+        // How it runs, said as on its "Play it on" tile (versions.rs): native, or Wine-packed,
+        // or an installed .exe (catalogued or not) through Proton or Wine.
+        let pc_runs: Option<(&str, String, i32)> = pc_game.then(|| self.plays_for(t).hub_fact());
         // Three overview boxes: how it runs (PC games), how easy it is to get, which version.
         // The size is in the line under Download.
         let availability = g.filter(|_| t.local.is_none()).map(|g| crate::words::Availability::of(g.seeders));

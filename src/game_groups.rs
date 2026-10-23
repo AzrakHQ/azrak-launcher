@@ -94,9 +94,14 @@ impl Groups {
             for (key, id) in keys {
                 let seen = aliases.entry(key).or_default();
                 // Without a year, a name joins its game only when there's one by that name (one
-                // game, however many of its releases were listed by name).
+                // game, however many of its releases were listed by name), counting the game it
+                // already joined by title ID: it can't tie that one to another by its name.
                 let ambiguous = !id && years[index].is_none() && {
                     let mut games: Vec<usize> = seen.iter().map(|&other| root(&mut parent, other)).collect();
+                    let own = root(&mut parent, index);
+                    if own != index {
+                        games.push(own);
+                    }
                     games.sort_unstable();
                     games.dedup();
                     games.len() > 1
@@ -238,6 +243,15 @@ mod tests {
         update.title_id = "CUSA00001".into();
         let games = [first, update, on(Ps4, "Game", "")];
         assert_eq!(groups(&games).members.len(), 1);
+        // An undated release that's one game by its title ID isn't another by its name.
+        let mut doom = on(Ps4, "Doom (2016)", "2016");
+        doom.title_id = "CUSA02092".into();
+        let mut later = on(Ps4, "Doom", "2023");
+        later.title_id = "CUSA13285".into();
+        let mut undated = on(Ps4, "Doom", "");
+        undated.title_id = "CUSA02092".into();
+        let grouped = groups(&[doom, later, undated]);
+        assert!(grouped.releases(2).contains(&0) && !grouped.releases(2).contains(&1));
         // An undated release listed first doesn't tie them together.
         let games = [on(Pc, "Prey", ""), on(Pc, "Prey", "2006"), on(Pc, "Prey", "2017")];
         let grouped = groups(&games);

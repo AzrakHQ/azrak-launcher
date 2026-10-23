@@ -296,8 +296,6 @@ pub struct App {
     held_toasts: Vec<ToastData>,
     /// This PC's processor, memory and graphics (read in the background at start).
     pub pc: Option<crate::pc::Specs>,
-    /// This PC's verdict for PS5 and PS4 games, worked out once when its specs are read.
-    pub pc_verdicts: [Option<crate::pc::Verdict>; 2],
     pub pc_checking: bool,
     pub boot: crate::boot::Boot,
     pub kyty: crate::kyty_ui::KytyUi,
@@ -572,7 +570,6 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         power: Default::default(),
         held_toasts: Vec::new(),
         pc: None,
-        pc_verdicts: [None, None],
         pc_checking: false,
         boot: Default::default(),
         kyty: Default::default(),
@@ -815,6 +812,8 @@ impl App {
         }
         borrow_art(&mut out);
         self.games = out;
+        // The Library's list pointed into the old catalog.
+        self.filtered.clear();
         let years: Vec<Option<i32>> = (0..self.games.len()).map(|i| self.release_year(i)).collect();
         self.groups = crate::game_groups::Groups::with_years(self.games.iter().zip(years).map(|(game, year)| (&game.g, game.name.as_str(), year)));
         borrow_group_art(&mut self.games, &self.groups);
@@ -962,6 +961,13 @@ impl App {
     }
 
     pub fn apply_filter(&mut self) {
+        // The Library's highlighted game (on the grid, or saved under an open card) stays the
+        // one highlighted when the list changes behind it: the PC's specs or the compatibility
+        // list arriving re-pick cards' releases and re-sort them. By release ID, which outlives
+        // a catalog reload.
+        let card_release = |app: &App, card: i32| usize::try_from(card).ok().and_then(|c| app.filtered.get(c)).and_then(|&g| app.games.get(g)).map(|g| g.g.id);
+        let focused = (self.zone == Z_GRID).then(|| card_release(self, self.idx)).flatten();
+        let saved: Vec<Option<i64>> = self.stack.iter().map(|&(_, zone, idx)| (zone == Z_GRID).then(|| card_release(self, idx)).flatten()).collect();
         let query = crate::search::Query::new(&self.query);
         let hits = self.search_hits();
         let genre = self.genre.as_str();
@@ -1011,6 +1017,23 @@ impl App {
         };
         self.filtered = list;
         self.hits = hits;
+        let card_of = |app: &App, release: i64| app.filtered.iter()
+            .position(|&g| app.groups.releases(g).iter().any(|&m| app.games[m].g.id == release));
+        for (k, release) in saved.into_iter().enumerate() {
+            if let Some(at) = release.and_then(|r| card_of(self, r)) {
+                self.stack[k].2 = at as i32;
+            }
+        }
+        if let Some((release, at)) = focused.and_then(|r| card_of(self, r).map(|at| (r, at))) {
+            self.set_focus(Z_GRID, at as i32);
+            if self.view == 1 && !self.boot.active {
+                self.ensure_grid_visible();
+                // Its card shows another release now: its backdrop follows.
+                if self.games[self.filtered[at]].g.id != release {
+                    self.focus_card_changed();
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------ background jobs

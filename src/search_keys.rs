@@ -139,7 +139,7 @@ impl App {
             let games: Vec<(usize, String)> = self.filtered.iter().take(MAX_SUGGESTIONS).map(|&i| (i, self.game_title(i))).collect();
             let details = |i: usize| -> [Option<String>; 3] {
                 let platforms: Vec<&str> = self.game_platforms(i).iter().map(|p| p.label()).collect();
-                [self.release_year(i).map(|y| format!("({y})")), Some(format!("· {}", platforms.join(" · "))),
+                [self.game_year(i).map(|y| format!("({y})")), Some(format!("· {}", platforms.join(" · "))),
                     crate::present::size_label(&self.games[i].g).map(|s| format!("· {s}"))]
             };
             let labels = tell_apart(&games.iter().map(|(i, name)| (name.clone(), details(*i))).collect::<Vec<_>>());
