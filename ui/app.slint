@@ -672,19 +672,6 @@ export component AppWindow inherits Window {
                                     }
                                 }
                                 Badge { x: (10px * S.k); y: (10px * S.k); text: c.badge; size: (14px * S.k); }
-                                // The platforms the game is on, big enough to tell at a glance: each
-                                // has its own colour. One card, every platform (Hades: PS5, PS4, PC).
-                                for p[pi] in c.consoles: Rectangle {
-                                    x: parent.width - self.width - (8px * S.k);
-                                    y: (8px * S.k) + pi * (self.height + (5px * S.k));
-                                    width: (56px * root.library-type-scale);
-                                    height: (28px * root.library-type-scale);
-                                    border-radius: (8px * S.k);
-                                    background: p == "PS4" ? #12306be8 : p == "PC" ? #12452fe8 : #000000d9;
-                                    border-width: 1px;
-                                    border-color: p == "PS4" ? #8fc2ff80 : p == "PC" ? #7ee2b080 : #ffffff59;
-                                    Text { text: p; font-size: (16px * root.library-type-scale); font-weight: 800; letter-spacing: (0.5px * S.k); color: p == "PS4" ? #b8d8ff : p == "PC" ? #a8f0cc : #ffffff; }
-                                }
                                 if c.compat != "": Rectangle {
                                     x: (10px * S.k);
                                     y: parent.height - self.height - (10px * S.k);
@@ -744,9 +731,22 @@ export component AppWindow inherits Window {
                             HorizontalLayout {
                                 height: (26px * root.library-type-scale);
                                 spacing: (6px * S.k);
-                                Text { text: c.meta; font-size: (18px * root.library-type-scale); font-weight: 500; color: Theme.text2; overflow: elide; }
+                                // The size always reads in full; the platforms make room.
+                                Text { text: c.meta; min-width: self.preferred-width; font-size: (18px * root.library-type-scale); font-weight: 500; color: Theme.text2; }
                                 Rectangle { horizontal-stretch: 1; }
-                                if c.releases != "": Text { text: c.releases; font-size: (15px * root.library-type-scale); color: Theme.text3; overflow: elide; }
+                                // The platforms the game is on, each in its colour, off the cover
+                                // (one card, every platform: Hades on PS5, PS4 and PC); the colours
+                                // tell them apart without separators. A one-console Library shows
+                                // the release count instead.
+                                for p in c.consoles: Text {
+                                    text: p;
+                                    font-size: (15px * root.library-type-scale);
+                                    font-weight: 700;
+                                    letter-spacing: (0.3px * S.k);
+                                    color: p == "PS4" ? #8fc2ff : p == "PC" ? #7ee2b0 : #e8ecf6;
+                                    vertical-alignment: center;
+                                }
+                                if c.consoles.length == 0 && c.releases != "": Text { text: c.releases; font-size: (15px * root.library-type-scale); color: Theme.text3; overflow: elide; }
                             }
                             // How easy it is to download; the seeder counts are in the Game Hub's details.
                             HorizontalLayout {
