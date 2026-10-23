@@ -734,17 +734,26 @@ export component AppWindow inherits Window {
                                 // The size always reads in full; the platforms make room.
                                 Text { text: c.meta; min-width: self.preferred-width; font-size: (18px * root.library-type-scale); font-weight: 500; color: Theme.text2; }
                                 Rectangle { horizontal-stretch: 1; }
-                                // The platforms the game is on, each in its colour, off the cover
-                                // (one card, every platform: Hades on PS5, PS4 and PC); the colours
-                                // tell them apart without separators. A one-console Library shows
-                                // the release count instead.
-                                for p in c.consoles: Text {
-                                    text: p;
-                                    font-size: (15px * root.library-type-scale);
-                                    font-weight: 700;
-                                    letter-spacing: (0.3px * S.k);
-                                    color: p == "PS4" ? #8fc2ff : p == "PC" ? #7ee2b0 : #e8ecf6;
-                                    vertical-alignment: center;
+                                // The platforms the game is on, off the cover (one card, every
+                                // platform: Hades on PS5, PS4 and PC): filled tags, each in its
+                                // colour, PS5 white like the console, PS4 PlayStation blue, PC green.
+                                // A one-console Library shows the release count instead.
+                                HorizontalLayout {
+                                    spacing: (4px * S.k);
+                                    for p in c.consoles: Rectangle {
+                                        y: (parent.height - self.height) / 2;
+                                        width: pt.preferred-width + (9px * root.library-type-scale);
+                                        height: (20px * root.library-type-scale);
+                                        border-radius: (5px * root.library-type-scale);
+                                        background: p == "PS4" ? #2563eb : p == "PC" ? #15803d : #f1f3f8;
+                                        pt := Text {
+                                            text: p;
+                                            font-size: (13px * root.library-type-scale);
+                                            font-weight: 800;
+                                            letter-spacing: (0.3px * S.k);
+                                            color: p == "PS5" ? #0b1020 : #ffffff;
+                                        }
+                                    }
                                 }
                                 if c.consoles.length == 0 && c.releases != "": Text { text: c.releases; font-size: (15px * root.library-type-scale); color: Theme.text3; overflow: elide; }
                             }

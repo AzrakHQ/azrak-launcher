@@ -2618,10 +2618,11 @@ impl App {
             let at = if discouraged { a.iter().position(|x| x.id == "download").unwrap_or(a.len()) } else { a.len() };
             a.insert(at, mk("trailer", "Trailer", "film", false));
         }
-        // A PC game's Steam page (requirements, reviews). The forum topic and the PlayStation
-        // Store page said nothing the Game Hub doesn't.
-        if in_hub && self.target_platform(t) == crate::platform::Platform::Pc && info.as_ref().is_some_and(|i| !i.store.is_empty()) {
-            a.push(ActionDef { round: true, ..mk("store", "Steam page", "bag", false) });
+        // Its store page: Steam for PC games, the PlayStation Store for console ones. (The forum
+        // topic said nothing the Game Hub doesn't.)
+        if in_hub && info.as_ref().is_some_and(|i| !i.store.is_empty()) {
+            let label = if self.target_platform(t) == crate::platform::Platform::Pc { "Steam page" } else { "PlayStation Store" };
+            a.push(ActionDef { round: true, ..mk("store", label, "bag", false) });
         }
         if !a.iter().any(|x| x.primary) && !discouraged {
             if let Some(f) = a.first_mut() {
@@ -2664,7 +2665,8 @@ impl App {
             "store" => {
                 if let Some(i) = self.target_info(t).filter(|i| !i.store.is_empty()) {
                     open_url(&i.store);
-                    self.toast("Opened in your browser", "The Steam page is in your browser.", 1);
+                    let page = if self.target_platform(t) == crate::platform::Platform::Pc { "The Steam page" } else { "The PlayStation Store page" };
+                    self.toast("Opened in your browser", &format!("{page} is in your browser."), 1);
                 }
             }
             "folder" => {
@@ -2936,6 +2938,7 @@ impl App {
         let mk = |id: &'static str, label: &str, icon: &'static str| ActionDef { id, label: label.into(), icon, primary: false, danger: false, round: false };
         for a in self.actions_for(t, true) {
             let label = match a.id {
+                "store" if self.target_platform(t) != crate::platform::Platform::Pc => "PlayStation Store page".to_string(),
                 "trailer" => "Watch trailer".to_string(),
                 _ => a.label.clone(),
             };
