@@ -102,13 +102,22 @@ impl App {
         let size = crate::present::size_label(&g.g);
         let free = crate::pc::free_gb(&crate::util::expand_home(&dir));
         let short = matches!((g.g.size_gb, free), (Some(need), Some(free)) if need > free);
-        let mut parts: Vec<String> = size.into_iter().collect();
+        // An older version than the catalog has: said before anything is downloaded.
+        let older = g.newer.map(|n| &self.games[n]).and_then(|newest| Some((g.version.as_ref()?.label(), newest.version.as_ref()?.label(), newest)));
+        let older_note = older.as_ref().map(|(this, newest, release)| {
+            if crate::words::Availability::of(release.g.seeders) == crate::words::Availability::None {
+                format!("Version {this}: {newest} is out, but nobody is sharing it")
+            } else {
+                format!("Older version {this}: {newest} is under Choose another release")
+            }
+        });
+        let mut parts: Vec<String> = older_note.into_iter().chain(size).collect();
         parts.push(format!("goes to {shown}"));
         parts.push(match free {
             Some(free) if short => format!("only {free:.0} GB free there"),
             _ => "then press Install".into(),
         });
-        Some((parts.join(" · "), short))
+        Some((parts.join(" · "), short || older.is_some()))
     }
 
     /// For the download dialog: a warning when this game won't start or may be slow here.

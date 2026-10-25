@@ -1103,7 +1103,15 @@ impl App {
             let members = self.release_order(index);
             h.release_count = members.len() as i32;
             let position = members.iter().position(|i| *i == index).unwrap_or(0) + 1;
-            let newest = if position == members.len() { " (newest)" } else { "" };
+            // Said by version, not by upload order (a newer upload can be an older version).
+            let shown = &self.games[index];
+            let newest = if shown.newer.is_some() {
+                " · older version"
+            } else if members.iter().any(|&m| self.games[m].newer == Some(index)) {
+                " · newest version"
+            } else {
+                ""
+            };
             h.release_label = format!("Release {position} of {}{newest}", members.len()).into();
             let game = &self.games[index].g;
             h.release_detail = [game.version.clone(), game.region.clone(), size_label(game).unwrap_or_default(), game.name.clone()].into_iter()

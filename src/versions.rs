@@ -167,19 +167,19 @@ impl App {
     }
 
     /// What makes one release a better pick than another, best highest: the one you have, one
-    /// you can get, how it plays (`play_rank`); then a picture for its card (no placeholder
-    /// while a release has one), `tie_rank`, the newest version, the most shared.
+    /// you can get (with anyone sharing it), then the newest version of the game on its platform
+    /// (no one downloads an old version by default); then how it plays (`play_rank`), a picture
+    /// for its card (no placeholder while a release has one), `tie_rank`, the most shared.
     pub fn release_rank(&self, i: usize) -> impl Ord + use<> {
         let g = &self.games[i];
-        let installed_version = g.local.is_some_and(|l| {
-            let a = crate::game_groups::version_key(&g.g.version);
-            !a.is_empty() && a == crate::game_groups::version_key(&self.locals[l].l.version)
-        });
+        let installed = self.locals.get(g.local.unwrap_or(usize::MAX)).map(|l| crate::game_groups::parse_version(&l.l.version));
+        let installed_version = matches!((&g.version, installed), (Some(a), Some(Some(b))) if a.compare(&b) == Some(std::cmp::Ordering::Equal));
+        let (score, shared) = self.play_rank(i);
         (
             (installed_version, g.local.is_some(), !g.g.magnet.is_empty()),
-            self.play_rank(i),
+            (shared, g.newer.is_none(), score),
             (self.has_card_art(i), self.tie_rank(i), g.info.as_ref().is_some_and(|info| !info.master.is_empty())),
-            (crate::game_groups::version_key(&g.g.version), g.g.seeders.unwrap_or(0), g.g.id),
+            (g.g.seeders.unwrap_or(0), g.g.id),
         )
     }
 

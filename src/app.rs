@@ -121,6 +121,11 @@ pub struct GameV {
     pub rel_day: i64,
     pub is_new: bool,
     pub local: Option<usize>,
+    /// Its version, if it can be read (game_groups::parse_version).
+    pub version: Option<crate::game_groups::Version>,
+    /// The release with the newest version of the game on the same platform, when that's newer
+    /// than this one's: downloading this would be an old version.
+    pub newer: Option<usize>,
 }
 
 pub struct LocalV {
@@ -799,6 +804,8 @@ impl App {
                 rel_day: rel.map(|(y, m, d)| util::days_from_civil(y, m, d)).unwrap_or(0),
                 is_new: added.is_some_and(|added| (0..14).contains(&(today - added))),
                 local: None,
+                version: crate::game_groups::parse_version(&g.version),
+                newer: None,
                 info,
                 g,
             });
@@ -809,6 +816,7 @@ impl App {
         self.filtered.clear();
         let years: Vec<Option<i32>> = (0..self.games.len()).map(|i| self.release_year(i)).collect();
         self.groups = crate::game_groups::Groups::with_years(self.games.iter().zip(years).map(|(game, year)| (&game.g, game.name.as_str(), year)));
+        mark_newer_versions(&mut self.games, &self.groups.members);
         borrow_group_art(&mut self.games, &self.groups);
         // A release that got its genres from another: its genre filters and search see them.
         for i in share_group_details(&mut self.games, &self.groups.members) {
@@ -1399,7 +1407,14 @@ impl App {
     pub fn release_order(&self, index: usize) -> Vec<usize> {
         let platform = self.games[index].g.platform;
         let mut members: Vec<usize> = self.groups.releases(index).iter().copied().filter(|&i| self.games[i].g.platform == platform).collect();
-        members.sort_by_key(|i| (crate::game_groups::version_key(&self.games[*i].g.version), self.games[*i].g.id));
+        // By version (of the kind most of them have: numbers with numbers, builds with builds),
+        // then by when they were uploaded: a key, so the order is always consistent.
+        let builds = members.iter().filter(|&&i| matches!(self.games[i].version, Some(crate::game_groups::Version::Build(_)))).count();
+        let by_builds = builds * 2 > members.len();
+        members.sort_by_key(|&i| {
+            let v = self.games[i].version.clone().filter(|v| matches!(v, crate::game_groups::Version::Build(_)) == by_builds);
+            (v, self.games[i].g.id)
+        });
         members
     }
 
@@ -3523,6 +3538,34 @@ fn lend_art(games: &mut [GameV], from: usize, to: usize) {
     }
 }
 
+/// Each release with a newer version of its game on the same platform points at the newest
+/// (`GameV::newer`). Versions are compared only with their own kind (numbers with numbers, builds
+/// with builds: the kind most of the game's releases there have); a release whose version
+/// can't be read or compared is never called older.
+pub fn mark_newer_versions(games: &mut [GameV], groups: &[Vec<usize>]) {
+    use crate::game_groups::Version;
+    for members in groups.iter().filter(|m| m.len() > 1) {
+        for platform in crate::versions::PLATFORMS {
+            let here: Vec<usize> = members.iter().copied().filter(|&i| games[i].g.platform == platform).collect();
+            let numbers = here.iter().filter(|&&i| matches!(games[i].version, Some(Version::Numbers(..)))).count();
+            let builds = here.iter().filter(|&&i| matches!(games[i].version, Some(Version::Build(_)))).count();
+            let kind = |v: &Option<Version>| match v {
+                Some(Version::Numbers(..)) => numbers >= builds,
+                Some(Version::Build(_)) => builds > numbers,
+                None => false,
+            };
+            let comparable: Vec<usize> = here.iter().copied().filter(|&i| kind(&games[i].version)).collect();
+            // The newest; the most recent upload among equals.
+            let Some(newest) = comparable.iter().copied().max_by(|&a, &b| games[a].version.cmp(&games[b].version).then(games[a].g.id.cmp(&games[b].g.id))) else { continue };
+            for i in comparable {
+                if games[i].version < games[newest].version {
+                    games[i].newer = Some(newest);
+                }
+            }
+        }
+    }
+}
+
 /// A release's page says what its own details lack from the same game's other releases: its
 /// versions for other platforms, by the same name without edition notes, not a bundle or
 /// another title it's grouped with. Same platform first. Its store page, release date, region
@@ -3672,7 +3715,7 @@ mod art_tests {
     fn releases_without_art_borrow_another_releases_pictures() {
         let game = |name: &str, platform: Platform, cover: &str, info: Option<Info>| GameV {
             g: Game { name: name.into(), platform, cover: cover.into(), ..Default::default() }, info, name: name.into(),
-            buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None,
+            buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None, version: None, newer: None,
         };
         let sony = Info { master: "https://sony/bb.png".into(), short: "About Bloodborne.".into(), ..Default::default() };
         let mut games = vec![
@@ -3695,7 +3738,7 @@ mod art_tests {
     fn a_games_details_are_shared_by_its_versions_only() {
         let game = |name: &str, platform: Platform, info: Option<Info>| GameV {
             g: Game { name: name.into(), platform, ..Default::default() }, info, name: name.into(),
-            buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None,
+            buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None, version: None, newer: None,
         };
         let ps4 = Info { long: "About Ghost.".into(), short: "Ghost.".into(), rating: Some(crate::psn::Rating { score: 4.6, total: 330 }),
             shots: vec!["ps4.jpg".into()], video: "ps4.mp4".into(), poster: "ps4-poster.jpg".into(), store: "https://store/ps4".into(),
@@ -3730,6 +3773,24 @@ mod art_tests {
             game("Hades", Platform::Pc, None),
         ];
         assert_eq!(share_group_details(&mut games, &[vec![0, 1]]), [1]);
+    }
+
+    #[test]
+    fn an_older_version_points_at_the_newest() {
+        let game = |id: i64, platform: Platform, version: &str| GameV {
+            g: Game { id, name: "Far Cry 5".into(), platform, version: version.into(), ..Default::default() }, info: None, name: "Far Cry 5".into(),
+            buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None,
+            version: crate::game_groups::parse_version(version), newer: None,
+        };
+        let mut games = vec![
+            game(1, Platform::Ps4, "1.19"), game(2, Platform::Ps4, "1.12 (dated 01.02.2019)"), game(3, Platform::Ps4, "N/A"),
+            game(4, Platform::Pc, "1.0.6"), game(5, Platform::Pc, "Build 25734961"),
+        ];
+        mark_newer_versions(&mut games, &[vec![0, 1, 2, 3, 4]]);
+        let newer: Vec<Option<usize>> = games.iter().map(|g| g.newer).collect();
+        // 1.12 is older than 1.19 on PS4; no version can't be called older; PC's own versions
+        // aren't comparable with each other (a version and a build) nor with PS4's.
+        assert_eq!(newer, [None, Some(0), None, None, None]);
     }
 
     #[test]
