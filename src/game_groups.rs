@@ -316,6 +316,8 @@ fn read_plain(text: &str) -> (Read, Read) {
         // "CSP 2.2.2"), not the game's.
         // What it needs isn't what it is either ("requires 1.05").
         let tool = |w: &str| matches!(w, "fw" | "firmware" | "backport" | "backported" | "ported" | "csp" | "atr" | "sdk" | "requires" | "needs");
+        // An update it includes or needs isn't what it went to ("includes update 1.03").
+        let within = |w: &str| matches!(w, "includes" | "including" | "included" | "requires" | "needs");
         // "9.00 FW", "5.05 Backport"; not "1.12 FW 5.05", whose firmware comes after the word.
         let word_after = after.split(|c: char| !c.is_alphabetic()).next().unwrap_or("");
         let firmware_after = matches!(word_after, "fw" | "firmware" | "backport")
@@ -328,7 +330,8 @@ fn read_plain(text: &str) -> (Read, Read) {
         });
         let listed_on = in_tool_list && matches!(gap.trim(), "," | "/") && like_firmware && !went;
         in_tool_list = tool(&word) || (word == "to" && tool(&earlier)) || firmware_after || listed_on;
-        if in_tool_list {
+        let needed = within(&word) || within(&earlier) || after.starts_with("required") || after.starts_with("needed");
+        if in_tool_list || needed {
             continue;
         }
         // A revision letter on its own ("1.2a", "1.01C"; not "1.05EUR", "2.1.1i.851" or "1.1.0r_rv22189").
@@ -599,7 +602,7 @@ mod tests {
         assert_eq!(v("5187887 (EGS)"), None);
         // Firmware lists and requirements.
         for text in ["1.12 Backport 5.05, 6.72", "1.12 FW 5.05/6.72", "1.12 + Backport 5.05 / 6.72 / 9.00", "v1.12 + 5.05 Backport",
-            "Ported to 5.05, 1.12", "1.12 (requires 1.05 update)"] {
+            "Ported to 5.05, 1.12", "1.12 (requires 1.05 update)", "1.12 (includes update 1.03)", "v1.12 (patch 1.02 required)"] {
             assert_eq!(cmp(text, "1.12"), Some(Equal), "{text}");
         }
         assert_eq!(cmp("v1,04", "1.04"), Some(Equal));

@@ -2718,7 +2718,7 @@ impl App {
             "trailer" => self.play_trailer(t),
             "download" => self.prepare_download(t),
             "pkg_info" => {
-                let others = t.game.map(|g| self.release_order(g).iter().filter(|i| !self.games[**i].g.is_pkg()).count()).unwrap_or(0);
+                let others = t.game.map(|g| self.platform_releases(g).filter(|&i| !self.games[i].g.is_pkg()).count()).unwrap_or(0);
                 let tip = if others > 0 { "This game has another release that isn't a PKG: switch to it with the release selector." } else { "Look for a release of this game that is a folder, an archive or an exFAT image." };
                 self.toast("This release is a PS5 PKG package", &format!("PS5 games install from extracted releases only, not PKG packages. {tip}"), 0);
             }
@@ -3588,13 +3588,16 @@ struct LineKey {
 
 impl LineKey {
     fn of(g: &GameV) -> LineKey {
-        let region = g.g.region.to_uppercase();
+        let region = g.g.region.to_uppercase().replace("NTSC-J", "JP").replace("NTSC-U", "US");
         let mut regions: Vec<&'static str> = if region.contains("FREE") { Vec::new() } else {
             region.split(|c: char| !c.is_ascii_alphabetic()).filter_map(|w| Some(match w {
                 "US" | "USA" | "UAS" | "AMERICA" => "US",
                 "EU" | "EUR" | "EURO" | "EUROPE" | "PAL" => "EU",
                 "JP" | "JPN" | "JAP" | "JAPAN" => "JP",
                 "AS" | "ASIA" => "AS",
+                "KR" | "KOR" | "KOREA" => "KR",
+                "HK" | "CN" | "CHN" | "CHINA" => "CN",
+                "UK" | "GB" => "UK",
                 "RU" | "RUS" => "RU",
                 "AU" => "AU",
                 _ => return None,
@@ -3606,11 +3609,12 @@ impl LineKey {
 }
 
 /// A catalog name's edition: without notes in brackets, versions or backports ("Barotrauma
-/// 1.0.21.0", "Astroneer + BP 5.05"), and without a repeat of the name or a language beside it
-/// ("Patapon Remastered / EN / v1.01" is Patapon Remastered).
+/// 1.0.21.0", "Game v2", "Astroneer + BP 5.05"; a title's own number stays: "Kingdom Hearts HD
+/// 1.5 ReMIX"), and without a repeat of the name or a language beside it ("Patapon Remastered /
+/// EN / v1.01" is Patapon Remastered).
 fn edition(name: &str) -> String {
     static VERSION: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"(?i)(?:\+\s*)?\b(?:bp|backport)\s*\d+\.\d+|\bv?\.?\d+(?:\.\d+)+\b").unwrap()
+        regex::Regex::new(r"(?i)(?:\+\s*)?\b(?:bp|backport)\s*\d+\.\d+|\bv\.?\d+(?:\.\d+)*\b|\b(?:build|update|patch)\s*#?\d+\b|\b\d+(?:\.\d+){2,}\b|\b\d+\.\d+\s*$").unwrap()
     });
     let name = crate::game_groups::strip_notes(name);
     let mut parts: Vec<String> = Vec::new();
@@ -3884,6 +3888,8 @@ mod art_tests {
         assert_eq!(edition("Star Wars Jedi: Survivor/Star Wars Jedi: Survivor"), edition("Star Wars Jedi: Survivor"));
         assert_ne!(edition("Far Cry 5 / Gold Edition"), edition("Far Cry 5"));
         assert_eq!((edition("Barotrauma 1.0.21.0"), edition("Astroneer + BP 5.05"), edition("Dex")), (edition("Barotrauma 1.7.7.0"), edition("Astroneer"), "dex".into()));
+        assert_eq!((edition("Game v2"), edition("Factorio Build 12345"), edition("Game 1.05")), (edition("Game v3"), edition("Factorio"), edition("Game")));
+        assert_ne!(edition("Kingdom Hearts HD 1.5 ReMIX"), edition("Kingdom Hearts HD 2.5 ReMIX"));
         let regions = |region: &str| {
             let mut g = GameV { g: Game { region: region.into(), ..Default::default() }, info: None, name: String::new(),
                 buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None,
@@ -3893,7 +3899,7 @@ mod art_tests {
         };
         assert_eq!((regions("EUR (Europe)"), regions("PAL"), regions("USA / EUR")), (vec!["EU"], vec!["EU"], vec!["US", "EU"]));
         assert_eq!((regions("Region free USA edition"), regions("USA (Adapted for EUR languages)")), (vec![], vec!["US", "EU"]));
-        assert_eq!(regions("NTSC-J"), Vec::<&str>::new());
+        assert_eq!((regions("NTSC-J"), regions("NTSC-U"), regions("NTSC")), (vec!["JP"], vec!["US"], vec![]));
     }
 
     #[test]
