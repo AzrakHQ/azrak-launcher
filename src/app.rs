@@ -3558,27 +3558,32 @@ pub fn same_game(a: &[String; 2], b: &[String; 2]) -> bool {
     a.iter().any(|key| !key.is_empty() && b.contains(key))
 }
 
-/// What says which version line a release is on, worked out once per group: the same game on
-/// the same platform, both PC games native or both through Wine (a Linux port numbers its own),
-/// a console game's same title ID (each region numbers its own patches), never a PKG (it can't
-/// be installed).
+/// What says which version line a release is on, worked out once per group: the same game and
+/// edition (a Gold Edition or a Director's Cut carries its own content and numbers its own
+/// patches; only bracketed notes don't count) on the same platform, both PC games native or both
+/// through Wine (a Linux port numbers its own), a console game's same region (title ID, else
+/// the region written), never a PKG (it can't be installed).
 struct LineKey {
     names: [String; 2],
     ids: Vec<String>,
+    region: String,
 }
 
 impl LineKey {
     fn of(g: &GameV) -> LineKey {
-        let ids = std::iter::once(&g.g.title_id).chain(&g.g.title_ids).filter(|id| crate::psn::valid_title_id(id))
-            .map(|id| id.to_ascii_uppercase()).collect();
-        LineKey { names: same_game_keys(g), ids }
+        static NOTES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\([^()]*\)|\[[^\]]*\]").unwrap());
+        let edition = |name: &str| norm(&NOTES.replace_all(name, " "));
+        LineKey { names: [edition(&g.name), edition(&g.g.name)], ids: g.g.valid_title_ids(), region: g.g.region.trim().to_uppercase() }
     }
 }
 
 fn one_version_line(a: (&GameV, &LineKey), b: (&GameV, &LineKey)) -> bool {
     let ((a, ka), (b, kb)) = (a, b);
-    let same_region = a.g.platform == crate::platform::Platform::Pc
-        || ka.ids.is_empty() || kb.ids.is_empty() || ka.ids.iter().any(|id| kb.ids.contains(id));
+    let same_region = a.g.platform == crate::platform::Platform::Pc || if !ka.ids.is_empty() && !kb.ids.is_empty() {
+        ka.ids.iter().any(|id| kb.ids.contains(id))
+    } else {
+        ka.region.is_empty() || kb.region.is_empty() || ka.region == kb.region
+    };
     a.g.platform == b.g.platform && a.g.wine == b.g.wine && !a.g.is_pkg() && !b.g.is_pkg()
         && same_region && same_game(&ka.names, &kb.names)
 }
@@ -3599,14 +3604,15 @@ pub fn mark_newer_versions(games: &mut [GameV], groups: &[Vec<usize>]) {
             let i = members[k];
             let mine = games[i].version.as_ref().filter(|_| !games[i].g.is_pkg())?;
             let line: Vec<usize> = (0..members.len()).filter(|&d| one_version_line((&games[members[d]], &keys[d]), (&games[i], &keys[k])))
-                .map(|d| members[d]).filter(|&p| downloadable(p)).collect();
+                .map(|d| members[d]).collect();
             let compare = |p: usize| games[p].version.as_ref().and_then(|v| v.compare(mine));
-            let newer: Vec<usize> = line.iter().copied().filter(|&p| compare(p) == Some(Greater)).collect();
-            let newest = |p: &usize| (games[*p].version.clone(), games[*p].g.id);
+            let newer: Vec<usize> = line.iter().copied().filter(|&p| downloadable(p) && compare(p) == Some(Greater)).collect();
+            let newest = |p: &usize| (games[*p].version.as_ref(), games[*p].g.id);
             let shared = newer.iter().copied().filter(|&p| Availability::of(games[p].g.seeders) != Availability::None).max_by_key(newest);
             let named = shared.or_else(|| newer.iter().copied().max_by_key(newest));
-            // The newest of a line that has older ones too.
-            let top = named.is_none() && downloadable(i) && line.iter().any(|&p| compare(p).is_some_and(|o| o != Equal));
+            // The newest of a line that has older ones too: nothing above it, downloadable or not.
+            let top = downloadable(i) && !line.iter().any(|&p| compare(p) == Some(Greater))
+                && line.iter().any(|&p| compare(p).is_some_and(|o| o != Equal));
             Some((i, named, shared.is_some(), top))
         }).collect();
         for (i, newer, outdated, newest) in marks {
@@ -3894,6 +3900,16 @@ mod art_tests {
         let mut alone = vec![named("Hades", "1.19", Some(5), ""), named("Hades", "1.19", Some(5), "")];
         mark_newer_versions(&mut alone, &[vec![0, 1]]);
         assert!(alone.iter().all(|g| !g.newest));
+        // A Gold Edition (with its DLC) isn't an older Far Cry 5; regions written without title
+        // IDs are apart; a higher version nobody can download keeps "newest" from the one below.
+        let mut games = vec![named("Far Cry 5", "1.19", Some(5), ""), named("Far Cry 5 Gold Edition", "1.12", Some(5), ""),
+            named("Hades", "1.12", Some(5), ""), named("Hades", "1.19", Some(5), ""),
+            named("Doom", "1.05", Some(5), ""), named("Doom", "1.12", Some(5), ""), named("Doom", "1.19", Some(5), "")];
+        (games[2].g.region, games[3].g.region) = ("USA".into(), "JPN".into());
+        games[6].g.magnet.clear();
+        mark_newer_versions(&mut games, &[vec![0, 1], vec![2, 3], vec![4, 5, 6]]);
+        assert_eq!(games.iter().map(|g| (g.newer, g.newest)).collect::<Vec<_>>(),
+            [(None, false), (None, false), (None, false), (None, false), (Some(5), false), (None, false), (None, false)]);
     }
 
     #[test]

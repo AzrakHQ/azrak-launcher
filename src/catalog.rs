@@ -145,6 +145,12 @@ pub struct Game {
 impl Game {
     pub fn detail(&self, key: &str) -> String { text(&self.game_info, key) }
 
+    /// Its valid title IDs, upper-case: the main one and any others it carries.
+    pub fn valid_title_ids(&self) -> Vec<String> {
+        std::iter::once(&self.title_id).chain(&self.title_ids).filter(|id| crate::psn::valid_title_id(id))
+            .map(|id| id.to_ascii_uppercase()).collect()
+    }
+
     /// A PS5 release shipped as a PKG package, which the launcher can't install (PS5 games
     /// install from folders, archives and exFAT images). PS4 PKGs are extracted on install.
     pub fn is_pkg(&self) -> bool {

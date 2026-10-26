@@ -103,20 +103,23 @@ impl App {
         let free = crate::pc::free_gb(&crate::util::expand_home(&dir));
         let short = matches!((g.g.size_gb, free), (Some(need), Some(free)) if need > free);
         // An older version than the catalog has: said before anything is downloaded.
-        let older = g.newer.map(|n| &self.games[n]).and_then(|newest| Some((g.version_shown.clone()?, newest.version_shown.clone()?, newest)));
-        let older_note = older.as_ref().map(|(this, newest, _)| {
-            if !g.outdated {
-                format!("Version {this}: {newest} is out, but nobody is sharing it")
-            } else {
+        let older_note = g.newer.and_then(|n| Some((g.version_shown.as_deref()?, self.games[n].version_shown.as_deref()?)))
+            .map(|(this, newest)| if g.outdated {
                 format!("Older version {this}: {newest} is under Choose another release")
-            }
-        });
-        let mut parts: Vec<String> = older_note.into_iter().chain(size).collect();
+            } else {
+                format!("Version {this}: {newest} is out, but nobody is sharing it")
+            });
+        let mut parts: Vec<String> = size.into_iter().collect();
         parts.push(format!("goes to {shown}"));
         parts.push(match free {
             Some(free) if short => format!("only {free:.0} GB free there"),
             _ => "then press Install".into(),
         });
+        // An older version said first, unless the disk is short of space: that comes first (the
+        // line is cut at the end when it's long).
+        if let Some(note) = older_note {
+            if short { parts.push(note) } else { parts.insert(0, note) }
+        }
         // Amber when there's something to do about it: a newer version someone shares.
         Some((parts.join(" · "), short || g.outdated))
     }

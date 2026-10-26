@@ -86,8 +86,7 @@ impl Groups {
         order.sort_by_key(|&i| years[i].is_none());
         for index in order {
             let (game, display) = games[index];
-            let ids = std::iter::once(&game.title_id).chain(game.title_ids.iter())
-                .filter(|id| crate::psn::valid_title_id(id)).map(|id| (format!("id:{}", id.to_ascii_uppercase()), true));
+            let ids = game.valid_title_ids().into_iter().map(|id| (format!("id:{id}"), true));
             let console = game.platform.label();
             let keys = ids.chain(names(game, display).into_iter().map(|name| (format!("name:{name}"), false)))
                 .map(|(key, id)| (format!("{console}:{key}"), id));
@@ -206,11 +205,11 @@ impl Version {
 
 /// The kind most of `versions` are (numbers on a tie): the one a game's releases are compared by.
 pub fn main_kind<'a>(versions: impl IntoIterator<Item = &'a Version>) -> Option<u8> {
-    let mut counts = [0usize; 3];
+    let mut counts = HashMap::<u8, usize>::new();
     for v in versions {
-        counts[v.kind() as usize] += 1;
+        *counts.entry(v.kind()).or_default() += 1;
     }
-    (0..3u8).filter(|&k| counts[k as usize] > 0).max_by_key(|&k| (counts[k as usize], std::cmp::Reverse(k)))
+    counts.into_iter().max_by_key(|&(k, n)| (n, std::cmp::Reverse(k))).map(|(k, _)| k)
 }
 
 pub fn parse_version(text: &str) -> Option<Version> {
@@ -220,6 +219,17 @@ pub fn parse_version(text: &str) -> Option<Version> {
 /// The version and how the catalog writes it, to show: "1.05", not "1.5" (which reads as newer
 /// than 1.19); "build 25734961".
 pub fn read_version(text: &str) -> Option<(Version, String)> {
+    // The catalog is read again whenever artwork arrives; its few thousand version texts aren't.
+    static SEEN: LazyLock<std::sync::Mutex<HashMap<String, Read>>> = LazyLock::new(Default::default);
+    if let Some(read) = SEEN.lock().unwrap().get(text) {
+        return read.clone();
+    }
+    let read = read_version_text(text);
+    SEEN.lock().unwrap().insert(text.to_string(), read.clone());
+    read
+}
+
+fn read_version_text(text: &str) -> Option<(Version, String)> {
     static BRACKETS: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\(([^()]*)\)|\[([^\]]*)\]").unwrap());
     let inside: Vec<&str> = BRACKETS.captures_iter(text).filter_map(|c| c.get(1).or(c.get(2))).map(|m| m.as_str()).collect();
     let (first, went_to) = read_plain(&BRACKETS.replace_all(text, " "));
@@ -233,8 +243,13 @@ pub fn read_version(text: &str) -> Option<(Version, String)> {
     if let Some(went) = bracketed.iter().rev().find_map(|(_, went)| went.clone()) {
         return Some(went);
     }
+    // An update count with its version in brackets ("Patch 2 (1.02)"): that version, if the
+    // bracket is nothing but one (not what it needs: "requires 9.00"). With nothing outside,
+    // a bracketed number is a tool's ("Wine (4.11)"), no version.
+    static ONLY: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)^\s*v?\d+(?:\.\d+)+[a-z]?\s*$").unwrap());
     match first {
-        Some((Version::Count(_), _)) | None => bracketed.into_iter().find_map(|(v, _)| v.filter(|(v, _)| matches!(v, Version::Numbers(..)))).or(first),
+        Some((Version::Count(_), _)) => inside.iter().zip(bracketed).filter(|(t, _)| ONLY.is_match(t))
+            .find_map(|(_, (v, _))| v.filter(|(v, _)| matches!(v, Version::Numbers(..)))).or(first),
         found => found,
     }
 }
@@ -271,8 +286,10 @@ fn read_plain(text: &str) -> (Read, Read) {
             continue;
         }
         let word = before.trim_end().rsplit(|c: char| !c.is_alphabetic()).next().unwrap_or("").to_lowercase();
-        // Firmware's or a tool's ("FW 9.00", "Backport 5.05", "CSP 2.2.2"), not the game's.
-        if matches!(word.as_str(), "fw" | "firmware" | "backport" | "csp" | "atr" | "sdk") {
+        // Firmware's or a tool's ("FW 9.00", "9.00 FW", "Backport 5.05", "CSP 2.2.2"), not the game's.
+        let tool = |w: &str| matches!(w, "fw" | "firmware" | "backport" | "csp" | "atr" | "sdk");
+        let firmware_after = matches!(after.split(|c: char| !c.is_alphabetic()).next().unwrap_or(""), "fw" | "firmware");
+        if tool(&word) || firmware_after {
             continue;
         }
         let shown = m.as_str();
@@ -282,8 +299,10 @@ fn read_plain(text: &str) -> (Read, Read) {
             numbers.pop();
         }
         let found = (Version::Numbers(numbers, suffix), shown.to_string());
+        // "+ 1.05" after the game's version: the patch it went to ("1.04 + 1.05").
         let went = matches!(word.as_str(), "update" | "patch" | "to")
-            || after.starts_with("update") || after.starts_with("patch") || gap.contains("->") || gap.contains('→');
+            || after.starts_with("update") || after.starts_with("patch") || gap.contains("->") || gap.contains('→')
+            || (first.is_some() && gap.trim() == "+");
         if went {
             went_to = Some(found);
         } else if first.is_none() && !from {
@@ -315,6 +334,11 @@ fn read_plain(text: &str) -> (Read, Read) {
 fn is_date(token: &str) -> bool {
     let token = token.trim_end_matches(|c: char| c.is_ascii_alphabetic());
     let parts: Vec<&str> = token.split('.').collect();
+    // "2026.08.11.1121610": a date with a build after it.
+    if let [a, b, c, _, ..] = parts[..] {
+        return a.len() == 4 && matches!((a.parse::<u32>(), b.parse::<u32>(), c.parse::<u32>()),
+            (Ok(1980..=2100), Ok(1..=12), Ok(1..=31)));
+    }
     let [a, b, c] = parts[..] else { return false };
     let num = |s: &str| s.parse::<u32>().ok();
     let (Some(x), Some(y), Some(z)) = (num(a), num(b), num(c)) else { return false };
@@ -473,6 +497,13 @@ mod tests {
         assert_eq!(cmp("1.05 (2.0 update)", "2.0"), Some(Equal));
         assert_eq!(cmp("Patch 2 (1.02)", "1.02"), Some(Equal));
         assert_eq!(v("Update 12345"), Some(Version::Count(12345)));
+        // Real catalog values: a patch after "+", a tool's version in brackets, firmware after
+        // the number, a date with a build after it.
+        assert_eq!((cmp("1.04 + 1.05", "1.05"), cmp("1.3 + 1.4", "1.4"), cmp("1.00 (for 5.05) + 1.07", "1.07")), (Some(Equal), Some(Equal), Some(Equal)));
+        assert_eq!(v("Wine (4.11) + DXVK (1.2.2)"), None);
+        assert_eq!(v("Update 2 (requires 9.00)"), Some(Version::Count(2)));
+        assert_eq!(cmp("9.00 FW, 1.12", "1.12"), Some(Equal));
+        assert_eq!(v("2026.08.11.1121610"), None);
         for date in ["29.08.24", "08.04.23", "2024.01.18a", "25.03.2026"] {
             assert_eq!(v(date), None, "{date}");
         }
@@ -502,6 +533,3 @@ mod tests {
         assert!(grouped.releases(index).iter().any(|i| file.games[*i].id == 6744684));
     }
 }
-
-
-
