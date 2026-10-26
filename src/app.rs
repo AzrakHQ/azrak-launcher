@@ -3573,7 +3573,9 @@ impl LineKey {
     fn of(g: &GameV) -> LineKey {
         static NOTES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\([^()]*\)|\[[^\]]*\]").unwrap());
         let edition = |name: &str| norm(&NOTES.replace_all(name, " "));
-        LineKey { names: [edition(&g.name), edition(&g.g.name)], ids: g.g.valid_title_ids(), region: g.g.region.trim().to_uppercase() }
+        // The catalog's name says which edition a release is; the store's is often the base
+        // game's for every edition ("Far Cry 5" for the Gold Edition too).
+        LineKey { names: [edition(&g.g.name), String::new()], ids: g.g.valid_title_ids(), region: g.g.region.trim().to_uppercase() }
     }
 }
 
@@ -3902,7 +3904,10 @@ mod art_tests {
         assert!(alone.iter().all(|g| !g.newest));
         // A Gold Edition (with its DLC) isn't an older Far Cry 5; regions written without title
         // IDs are apart; a higher version nobody can download keeps "newest" from the one below.
-        let mut games = vec![named("Far Cry 5", "1.19", Some(5), ""), named("Far Cry 5 Gold Edition", "1.12", Some(5), ""),
+        let mut gold = named("Far Cry 5", "1.12", Some(5), "");
+        // Steam calls the Gold Edition "Far Cry 5" too.
+        gold.g.name = "Far Cry 5: Gold Edition".into();
+        let mut games = vec![named("Far Cry 5", "1.19", Some(5), ""), gold,
             named("Hades", "1.12", Some(5), ""), named("Hades", "1.19", Some(5), ""),
             named("Doom", "1.05", Some(5), ""), named("Doom", "1.12", Some(5), ""), named("Doom", "1.19", Some(5), "")];
         (games[2].g.region, games[3].g.region) = ("USA".into(), "JPN".into());

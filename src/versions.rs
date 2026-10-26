@@ -180,7 +180,8 @@ impl App {
             (installed_version, g.local.is_some(), !g.g.magnet.is_empty()),
             (score, shared, !g.outdated, g.newer.is_none()),
             (self.has_card_art(i), self.tie_rank(i), g.info.as_ref().is_some_and(|info| !info.master.is_empty())),
-            (g.g.seeders.unwrap_or(0), g.g.id),
+            // When all else is equal (two editions of a game), the higher version, as before.
+            (g.version.clone(), g.g.seeders.unwrap_or(0), g.g.id),
         )
     }
 
