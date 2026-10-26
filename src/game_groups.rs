@@ -204,6 +204,14 @@ impl Version {
     /// Newer or older than `other`, if the two can be compared at all ("2.0.0.1" says nothing
     /// next to build 25240193, nor "1.19" next to "Update 8").
     pub fn compare(&self, other: &Version) -> Option<std::cmp::Ordering> {
+        // "1.1.0" and "1.1.0.5934" are likely one version, the second with its build number
+        // ("1.1.0 Build 5934" elsewhere): neither is called the newer.
+        if let (Version::Numbers(a, _), Version::Numbers(b, _)) = (self, other) {
+            let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+            if short.len() < long.len() && long.starts_with(short) && long[short.len()..].iter().any(|&n| n >= 1000) {
+                return None;
+            }
+        }
         (self.kind() == other.kind()).then(|| self.cmp(other))
     }
 }
@@ -224,6 +232,12 @@ pub fn parse_version(text: &str) -> Option<Version> {
 /// The version and how the catalog writes it, to show: "1.05", not "1.5" (which reads as newer
 /// than 1.19); "build 25734961".
 pub fn read_version(text: &str) -> Option<(Version, String)> {
+    // Epic's build IDs aren't Steam's or GOG's, and nothing else says which store's a build is.
+    static EPIC: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:egs|epic)\b").unwrap());
+    read_any(text).filter(|(v, _)| !matches!(v, Version::Build(_)) || !EPIC.is_match(text))
+}
+
+fn read_any(text: &str) -> Option<(Version, String)> {
     let inside: Vec<&str> = BRACKETS.captures_iter(text).filter_map(|c| c.get(1).or(c.get(2))).map(|m| m.as_str()).collect();
     let (first, went_to) = read_plain(&strip_notes(text));
     // What the field says the game went to, outside the brackets or in them ("1.05 (2.0
@@ -267,8 +281,8 @@ fn read_plain(text: &str) -> (Read, Read) {
     // "1.2a" has a revision letter; "1.05EUR" and "1.21HF" don't.
     static DOTTED: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\d+(?:\.\d+)+").unwrap());
     // A build number, not the start of a date ("Build 18.11.22").
-    static BUILD: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:build|assembly)\s*(\d+)(?:[^\d.\-]|$)").unwrap());
-    static BUILD_AFTER: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\s*(?i:build)\s*(\d+)(?:[^\d.\-]|$)").unwrap());
+    // Not a repacker's "assembly 82344": its own count, not the game's.
+    static BUILD: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\bbuild\s*(\d+)(?:[^\d.\-]|$)").unwrap());
     static LONE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)^\s*(update\s*|patch\s*)?(\d+)\s*$").unwrap());
     static COMMA: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\s*(\d+),(\d+)\s*$").unwrap());
     let text = DATED.replace(text, " ");
@@ -321,17 +335,9 @@ fn read_plain(text: &str) -> (Read, Read) {
         let next = &text[m.end()..];
         let letter = next.chars().next().filter(char::is_ascii_alphabetic)
             .filter(|_| !next[1..].starts_with(|c: char| c.is_alphanumeric() || c == '.' || c == '_'));
-        let mut shown = format!("{}{}", m.as_str(), letter.map(String::from).unwrap_or_default());
+        let shown = format!("{}{}", m.as_str(), letter.map(String::from).unwrap_or_default());
         let suffix = letter.map_or(0, |c| c.to_ascii_lowercase() as u8 - b'a' + 1);
         let mut numbers: Vec<u64> = m.as_str().split('.').filter_map(|x| x.parse().ok()).collect();
-        // "1.1 Build 5934" is "1.1.0.5934", below a "1.1.1"; "1.0.3 build 06132013" is dated.
-        if let Some(c) = BUILD_AFTER.captures(next).filter(|c| !is_date_number(&c[1])) {
-            if let Ok(build) = c[1].parse::<u64>() {
-                numbers.resize(numbers.len().max(3), 0);
-                numbers.push(build);
-                shown = format!("{shown} build {build}");
-            }
-        }
         while numbers.len() > 1 && numbers.last() == Some(&0) {
             numbers.pop();
         }
@@ -376,8 +382,9 @@ fn read_plain(text: &str) -> (Read, Read) {
 fn number(n: u64, shown: &str) -> Read {
     match n {
         _ if is_date_number(shown) => None,
-        10_000.. => Some((Version::Build(n), format!("build {n}"))),
         1980..=2100 => None,
+        // "9257": a build, not a version above every "1.19".
+        1000.. => Some((Version::Build(n), format!("build {n}"))),
         _ => Some((Version::Numbers(vec![n], 0), shown.to_string())),
     }
 }
@@ -543,7 +550,7 @@ mod tests {
         // Real catalog values: long versions aren't dates, tools' versions aren't the game's,
         // dates aren't versions, plain numbers are versions.
         assert_eq!(cmp("1.0.6.2055", "1.0.6.2054"), Some(Greater));
-        assert_eq!(cmp("2.2.0.2002", "2.2"), Some(Greater));
+        assert_eq!((cmp("2.2.0.2002", "2.2"), cmp("2.2.1", "2.2")), (None, Some(Greater)), "2.2 with its build number");
         assert_eq!(cmp("1.0.2056.0", "1.0.2056"), Some(Equal));
         assert_eq!(cmp("1.61+DLC+Backport 5.05", "1.61"), Some(Equal));
         assert_eq!(cmp("1.3.2 ATR + CSP 2.2.2", "1.3.2"), Some(Equal));
@@ -586,14 +593,16 @@ mod tests {
         assert_eq!(v("Build 2013-06-15"), None);
         assert_eq!((cmp("2.1.1i.851", "2.1.1"), cmp("1.2a", "1.2"), cmp("1.01C", "1.01")), (Some(Equal), Some(Greater), Some(Greater)));
         assert_eq!(cmp("1.0.3 build 06132013", "1.0.3"), Some(Equal));
-        assert_eq!((cmp("1.0 Build 1053", "1.0.5"), cmp("1.1 build 5934", "1.1.0 build 5934")), (Some(Less), Some(Equal)));
+        assert_eq!((cmp("1.0 Build 1053", "1.0.5"), cmp("1.0.3", "1.0.3 Build 11668867")), (Some(Less), Some(Equal)));
+        assert_eq!((cmp("1.1.0 Build 5934", "1.1.0.5934"), cmp("1.0.6", "1.0.6.1")), (None, Some(Less)));
+        assert_eq!((v("123r6z assembly 82344"), v("9257"), cmp("9999", "10000")), (None, Some(Version::Build(9257)), Some(Less)));
+        assert_eq!(v("5187887 (EGS)"), None);
         // Firmware lists and requirements.
         for text in ["1.12 Backport 5.05, 6.72", "1.12 FW 5.05/6.72", "1.12 + Backport 5.05 / 6.72 / 9.00", "v1.12 + 5.05 Backport",
             "Ported to 5.05, 1.12", "1.12 (requires 1.05 update)"] {
             assert_eq!(cmp(text, "1.12"), Some(Equal), "{text}");
         }
         assert_eq!(cmp("v1,04", "1.04"), Some(Equal));
-        assert_eq!((cmp("1.1.0 Build 5934", "1.1.0.5934"), cmp("1.1.0 build 5935", "1.1.0.5934")), (Some(Equal), Some(Greater)));
         for date in ["29.08.24", "08.04.23", "2024.01.18a", "25.03.2026"] {
             assert_eq!(v(date), None, "{date}");
         }

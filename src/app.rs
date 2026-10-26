@@ -3583,6 +3583,7 @@ struct LineKey {
     /// The regions written, however spelled ("EUR (Europe)" and "PAL" are EU, "USA / EUR" is
     /// US and EU); none for "Region Free" or none written.
     regions: Vec<&'static str>,
+    pkg: bool,
 }
 
 impl LineKey {
@@ -3590,7 +3591,7 @@ impl LineKey {
         let region = g.g.region.to_uppercase();
         let mut regions: Vec<&'static str> = if region.contains("FREE") { Vec::new() } else {
             region.split(|c: char| !c.is_ascii_alphabetic()).filter_map(|w| Some(match w {
-                "US" | "USA" | "UAS" | "NTSC" | "AMERICA" => "US",
+                "US" | "USA" | "UAS" | "AMERICA" => "US",
                 "EU" | "EUR" | "EURO" | "EUROPE" | "PAL" => "EU",
                 "JP" | "JPN" | "JAP" | "JAPAN" => "JP",
                 "AS" | "ASIA" => "AS",
@@ -3600,20 +3601,25 @@ impl LineKey {
             })).collect()
         };
         regions.dedup();
-        LineKey { edition: edition(&g.g.name), ids: g.g.valid_title_ids(), regions }
+        LineKey { edition: edition(&g.g.name), ids: g.g.valid_title_ids(), regions, pkg: g.g.is_pkg() }
     }
 }
 
-/// A catalog name's edition: without notes in brackets, and without a repeat of the name, a
-/// language or a version beside it ("Patapon Remastered / EN / v1.01" is Patapon Remastered).
+/// A catalog name's edition: without notes in brackets, versions or backports ("Barotrauma
+/// 1.0.21.0", "Astroneer + BP 5.05"), and without a repeat of the name or a language beside it
+/// ("Patapon Remastered / EN / v1.01" is Patapon Remastered).
 fn edition(name: &str) -> String {
-    static VERSION: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?i)^v?\.?\s*\d+(\.\d+)+$").unwrap());
+    static VERSION: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)(?:\+\s*)?\b(?:bp|backport)\s*\d+\.\d+|\bv?\.?\d+(?:\.\d+)+\b").unwrap()
+    });
+    let name = crate::game_groups::strip_notes(name);
     let mut parts: Vec<String> = Vec::new();
-    for part in crate::game_groups::strip_notes(name).split('/') {
+    for (n, part) in VERSION.replace_all(&name, " ").split('/').enumerate() {
         let part = part.trim();
         let key = norm(part);
-        let language = part.len() <= 3 && part.chars().all(|c| c.is_ascii_alphabetic());
-        if !key.is_empty() && !language && !VERSION.is_match(part) && !parts.contains(&key) {
+        // "Dex" is a game; "EN" after it is its language.
+        let language = n > 0 && part.len() <= 3 && part.chars().all(|c| c.is_ascii_alphabetic());
+        if !key.is_empty() && !language && !parts.contains(&key) {
             parts.push(key);
         }
     }
@@ -3627,7 +3633,7 @@ fn one_version_line(a: (&GameV, &LineKey), b: (&GameV, &LineKey)) -> bool {
     } else {
         ka.regions.is_empty() || kb.regions.is_empty() || ka.regions.iter().any(|r| kb.regions.contains(r))
     };
-    a.g.platform == b.g.platform && a.g.wine == b.g.wine && !a.g.is_pkg() && !b.g.is_pkg()
+    a.g.platform == b.g.platform && a.g.wine == b.g.wine && !ka.pkg && !kb.pkg
         && same_region && !ka.edition.is_empty() && ka.edition == kb.edition
 }
 
@@ -3645,7 +3651,7 @@ pub fn mark_newer_versions(games: &mut [GameV], groups: &[Vec<usize>]) {
         let downloadable = |p: usize| !games[p].g.magnet.is_empty();
         let marks: Vec<(usize, Option<usize>, bool, bool)> = (0..members.len()).filter_map(|k| {
             let i = members[k];
-            let mine = games[i].version.as_ref().filter(|_| !games[i].g.is_pkg())?;
+            let mine = games[i].version.as_ref().filter(|_| !keys[k].pkg)?;
             let line: Vec<usize> = (0..members.len()).filter(|&d| one_version_line((&games[members[d]], &keys[d]), (&games[i], &keys[k])))
                 .map(|d| members[d]).collect();
             let compare = |p: usize| games[p].version.as_ref().and_then(|v| v.compare(mine));
@@ -3877,6 +3883,7 @@ mod art_tests {
         assert_eq!(edition("Patapon Remastered / EN / v1.01"), edition("Patapon Remastered"));
         assert_eq!(edition("Star Wars Jedi: Survivor/Star Wars Jedi: Survivor"), edition("Star Wars Jedi: Survivor"));
         assert_ne!(edition("Far Cry 5 / Gold Edition"), edition("Far Cry 5"));
+        assert_eq!((edition("Barotrauma 1.0.21.0"), edition("Astroneer + BP 5.05"), edition("Dex")), (edition("Barotrauma 1.7.7.0"), edition("Astroneer"), "dex".into()));
         let regions = |region: &str| {
             let mut g = GameV { g: Game { region: region.into(), ..Default::default() }, info: None, name: String::new(),
                 buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None,
@@ -3886,6 +3893,7 @@ mod art_tests {
         };
         assert_eq!((regions("EUR (Europe)"), regions("PAL"), regions("USA / EUR")), (vec!["EU"], vec!["EU"], vec!["US", "EU"]));
         assert_eq!((regions("Region free USA edition"), regions("USA (Adapted for EUR languages)")), (vec![], vec!["US", "EU"]));
+        assert_eq!(regions("NTSC-J"), Vec::<&str>::new());
     }
 
     #[test]
