@@ -169,19 +169,20 @@ impl App {
     /// What makes one release a better pick than another, best highest: the one you have, one
     /// you can get, how it plays here, whether anyone shares it, then not an older version than
     /// one that can be downloaded (versions of one title play alike, so the newest is offered
-    /// by default), nor older than any; then a picture for its card (no placeholder
+    /// by default); then a picture for its card (no placeholder
     /// while a release has one), `tie_rank`, the most shared.
-    pub fn release_rank(&self, i: usize) -> impl Ord + use<> {
+    pub fn release_rank(&self, i: usize) -> impl Ord + '_ {
         let g = &self.games[i];
         let installed = g.local.and_then(|l| self.locals[l].version.as_ref());
         let installed_version = matches!((&g.version, installed), (Some(a), Some(b)) if a.compare(b) == Some(std::cmp::Ordering::Equal));
         let (score, shared) = self.play_rank(i);
         (
             (installed_version, g.local.is_some(), !g.g.magnet.is_empty()),
-            (score, shared, !g.outdated, g.newer.is_none()),
+            (score, shared, !g.outdated),
             (self.has_card_art(i), self.tie_rank(i), g.info.as_ref().is_some_and(|info| !info.master.is_empty())),
-            // When all else is equal (two editions of a game), the higher version, as before.
-            (g.version.clone(), g.g.seeders.unwrap_or(0), g.g.id),
+            // When all else is equal (two editions, or the newest nobody shares beside an older
+            // one), the higher numbered version, as before.
+            (g.version.as_ref().filter(|v| v.kind() == 0), g.g.seeders.unwrap_or(0), g.g.id),
         )
     }
 

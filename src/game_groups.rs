@@ -219,20 +219,8 @@ pub fn parse_version(text: &str) -> Option<Version> {
 /// The version and how the catalog writes it, to show: "1.05", not "1.5" (which reads as newer
 /// than 1.19); "build 25734961".
 pub fn read_version(text: &str) -> Option<(Version, String)> {
-    // The catalog is read again whenever artwork arrives; its few thousand version texts aren't.
-    static SEEN: LazyLock<std::sync::Mutex<HashMap<String, Read>>> = LazyLock::new(Default::default);
-    if let Some(read) = SEEN.lock().unwrap().get(text) {
-        return read.clone();
-    }
-    let read = read_version_text(text);
-    SEEN.lock().unwrap().insert(text.to_string(), read.clone());
-    read
-}
-
-fn read_version_text(text: &str) -> Option<(Version, String)> {
-    static BRACKETS: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\(([^()]*)\)|\[([^\]]*)\]").unwrap());
     let inside: Vec<&str> = BRACKETS.captures_iter(text).filter_map(|c| c.get(1).or(c.get(2))).map(|m| m.as_str()).collect();
-    let (first, went_to) = read_plain(&BRACKETS.replace_all(text, " "));
+    let (first, went_to) = read_plain(&strip_notes(text));
     // What the field says the game went to, outside the brackets or in them ("1.05 (2.0
     // update)"); else the version written; else one in brackets ("Patch 2 (1.02)") over an
     // update count.
@@ -256,6 +244,14 @@ fn read_version_text(text: &str) -> Option<(Version, String)> {
 
 /// A version read, and how the catalog writes it.
 type Read = Option<(Version, String)>;
+
+/// A note in brackets: "(dated 25.03.2026)", "[RUS / v1.05]".
+static BRACKETS: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\(([^()]*)\)|\[([^\]]*)\]").unwrap());
+
+/// `text` without its notes in brackets.
+pub fn strip_notes(text: &str) -> String {
+    BRACKETS.replace_all(text, " ").into_owned()
+}
 
 /// A version field without its brackets: the first version written, and the last one the
 /// field says the game went to ("1.00 + 1.19 update", "1.04 --> 1.05", "from 1.00 to 1.05").
@@ -303,9 +299,11 @@ fn read_plain(text: &str) -> (Read, Read) {
         let went = matches!(word.as_str(), "update" | "patch" | "to")
             || after.starts_with("update") || after.starts_with("patch") || gap.contains("->") || gap.contains('→')
             || (first.is_some() && gap.trim() == "+");
+        // A plain list ("1.00, 1.04", "2.03 / 2.04"): the highest of it.
+        let listed = matches!(gap.trim(), "," | "/" | "|");
         if went {
             went_to = Some(found);
-        } else if first.is_none() && !from {
+        } else if !from && (first.is_none() || listed && first.as_ref().is_some_and(|f: &(Version, String)| found.0 > f.0)) {
             first = Some(found);
         }
     }
@@ -457,6 +455,10 @@ mod tests {
         assert_eq!(cmp("1.05.000", "1.05"), Some(Equal));
         assert_eq!(cmp("1.2b", "1.2a"), Some(Greater));
         assert_eq!(cmp("1.05 / 1.02", "1.05"), Some(Equal));
+        // A list, in any order, reads as its highest; a word between isn't a list.
+        assert_eq!((cmp("1.00, 1.04", "1.04"), cmp("2.03 / 2.04", "2.04"), cmp("1.600 (dated 01.02.2021), 1.700, 1.904, 1.905", "1.905")),
+            (Some(Equal), Some(Equal), Some(Equal)));
+        assert_eq!(cmp("Anomaly 1.5.1 / Redux 1.1", "1.5.1"), Some(Equal));
         assert_eq!(cmp("1.99.2-s Build 25734961", "1.99.2"), Some(Equal));
         assert_eq!(cmp("Build 25734961", "build 25600000"), Some(Greater));
         // Prefixes, the highest of several versions, dates in other forms.

@@ -799,12 +799,18 @@ impl App {
         let downloaded: HashSet<i64> = self.downloads.snapshot().iter().map(|job| job.topic).collect();
         let games: Vec<Game> = games.into_iter().filter(|g| listed(g, &downloaded)).collect();
         let today = (util::now_secs() / 86400.0) as i64;
+        // The catalog is read again whenever artwork arrives: versions already read carry over.
+        let mut read: HashMap<i64, (String, Option<crate::game_groups::Version>, Option<String>)> = self.games.iter()
+            .map(|g| (g.g.id, (g.g.version.clone(), g.version.clone(), g.version_shown.clone()))).collect();
         let mut out = Vec::with_capacity(games.len());
         for g in games {
             let info = Self::sanitize(self.art_for_game(&g));
             let name = Self::display_name(&g.name, info.as_ref());
             let (buckets, search) = self.genre_tags(&g, info.as_ref(), &name);
-            let (version, version_shown) = crate::game_groups::read_version(&g.version).unzip();
+            let (version, version_shown) = match read.remove(&g.id) {
+                Some((text, version, shown)) if text == g.version => (version, shown),
+                _ => crate::game_groups::read_version(&g.version).unzip(),
+            };
             let rel = util::parse_long_date(&g.release).or_else(|| info.as_ref().and_then(|i| util::parse_iso_date(&i.release)));
             let added = util::parse_iso_date(&g.date).map(|(y, m, d)| util::days_from_civil(y, m, d));
             out.push(GameV {
@@ -1424,7 +1430,8 @@ impl App {
         // By version (of the kind most of the platform's releases have), then by when they were
         // uploaded: one key for every release, so the order is the same whichever is shown.
         let kind = crate::game_groups::main_kind(members.iter().filter_map(|&i| self.games[i].version.as_ref()));
-        members.sort_by_cached_key(|&i| (self.games[i].version.clone().filter(|v| Some(v.kind()) == kind), self.games[i].g.id));
+        let key = |i: usize| (self.games[i].version.as_ref().filter(|v| Some(v.kind()) == kind), self.games[i].g.id);
+        members.sort_by(|&a, &b| key(a).cmp(&key(b)));
         members
     }
 
@@ -3564,18 +3571,16 @@ pub fn same_game(a: &[String; 2], b: &[String; 2]) -> bool {
 /// through Wine (a Linux port numbers its own), a console game's same region (title ID, else
 /// the region written), never a PKG (it can't be installed).
 struct LineKey {
-    names: [String; 2],
+    /// The catalog's name, which says which edition a release is: the store's is often the
+    /// base game's for every edition ("Far Cry 5" for the Gold Edition too).
+    edition: String,
     ids: Vec<String>,
     region: String,
 }
 
 impl LineKey {
     fn of(g: &GameV) -> LineKey {
-        static NOTES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"\([^()]*\)|\[[^\]]*\]").unwrap());
-        let edition = |name: &str| norm(&NOTES.replace_all(name, " "));
-        // The catalog's name says which edition a release is; the store's is often the base
-        // game's for every edition ("Far Cry 5" for the Gold Edition too).
-        LineKey { names: [edition(&g.g.name), String::new()], ids: g.g.valid_title_ids(), region: g.g.region.trim().to_uppercase() }
+        LineKey { edition: norm(&crate::game_groups::strip_notes(&g.g.name)), ids: g.g.valid_title_ids(), region: g.g.region.trim().to_uppercase() }
     }
 }
 
@@ -3587,7 +3592,7 @@ fn one_version_line(a: (&GameV, &LineKey), b: (&GameV, &LineKey)) -> bool {
         ka.region.is_empty() || kb.region.is_empty() || ka.region == kb.region
     };
     a.g.platform == b.g.platform && a.g.wine == b.g.wine && !a.g.is_pkg() && !b.g.is_pkg()
-        && same_region && same_game(&ka.names, &kb.names)
+        && same_region && !ka.edition.is_empty() && ka.edition == kb.edition
 }
 
 /// Each release with a newer version of its game on its version line points at the newest one
