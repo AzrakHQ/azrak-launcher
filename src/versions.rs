@@ -181,8 +181,9 @@ impl App {
             (score, shared, !g.outdated),
             (self.has_card_art(i), self.tie_rank(i), g.info.as_ref().is_some_and(|info| !info.master.is_empty())),
             // When all else is equal (two editions, or the newest nobody shares beside an older
-            // one), the higher version, as before: numbered ones first, builds and update counts
-            // by their own numbers.
+            // one), the higher version, as before: numbered ones first; builds and update counts
+            // can't be weighed against each other, so between those it's an arbitrary but steady
+            // order.
             (g.version.as_ref().map(|v| (v.is_numbers(), v)), g.g.seeders.unwrap_or(0), g.g.id),
         )
     }

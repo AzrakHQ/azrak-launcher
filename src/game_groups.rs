@@ -279,6 +279,9 @@ fn read_plain(text: &str) -> (Read, Read) {
     let from = text.trim_start().to_lowercase().starts_with("from ");
     let (mut first, mut went_to) = (None, None);
     let mut last_end = 0;
+    // After firmware's number, the rest of its list is firmware too ("Backport 5.05, 6.72");
+    // not "Ported to 5.05, 1.12".
+    let mut in_tool_list = false;
     for m in DOTTED.find_iter(&text) {
         let (before, after) = (&text[..m.start()], text[m.end()..].trim_start().to_lowercase());
         let gap = &text[last_end..m.start()];
@@ -297,9 +300,21 @@ fn read_plain(text: &str) -> (Read, Read) {
         let (earlier, _) = last_word(rest);
         // Firmware's or a tool's ("FW 9.00", "9.00 FW", "Backport 5.05", "backported to 5.05",
         // "CSP 2.2.2"), not the game's.
-        let tool = |w: &str| matches!(w, "fw" | "firmware" | "backport" | "backported" | "csp" | "atr" | "sdk");
-        let firmware_after = matches!(after.split(|c: char| !c.is_alphabetic()).next().unwrap_or(""), "fw" | "firmware");
-        if tool(&word) || (word == "to" && tool(&earlier)) || firmware_after {
+        // What it needs isn't what it is either ("requires 1.05").
+        let tool = |w: &str| matches!(w, "fw" | "firmware" | "backport" | "backported" | "ported" | "csp" | "atr" | "sdk" | "requires" | "needs");
+        // "9.00 FW", "5.05 Backport"; not "1.12 FW 5.05", whose firmware comes after the word.
+        let word_after = after.split(|c: char| !c.is_alphabetic()).next().unwrap_or("");
+        let firmware_after = matches!(word_after, "fw" | "firmware" | "backport")
+            && !after[word_after.len()..].trim_start().starts_with(|c: char| c.is_ascii_digit());
+        let went = matches!(word.as_str(), "update" | "patch" | "to")
+            || after.starts_with("update") || after.starts_with("patch") || gap.contains("->") || gap.contains('→');
+        // A list goes on with numbers like firmware's ("6.72"), not like a game's ("1.12").
+        let like_firmware = m.as_str().split_once('.').is_some_and(|(major, minor)| {
+            major.parse::<u64>().is_ok_and(|n| (4..=20).contains(&n)) && minor.len() == 2
+        });
+        let listed_on = in_tool_list && matches!(gap.trim(), "," | "/") && like_firmware && !went;
+        in_tool_list = tool(&word) || (word == "to" && tool(&earlier)) || firmware_after || listed_on;
+        if in_tool_list {
             continue;
         }
         // A revision letter on its own ("1.2a", "1.01C"; not "1.05EUR", "2.1.1i.851" or "1.1.0r_rv22189").
@@ -309,9 +324,10 @@ fn read_plain(text: &str) -> (Read, Read) {
         let mut shown = format!("{}{}", m.as_str(), letter.map(String::from).unwrap_or_default());
         let suffix = letter.map_or(0, |c| c.to_ascii_lowercase() as u8 - b'a' + 1);
         let mut numbers: Vec<u64> = m.as_str().split('.').filter_map(|x| x.parse().ok()).collect();
-        // "1.1.0 Build 5934" is "1.1.0.5934"; "1.0.3 build 06132013" is dated.
+        // "1.1 Build 5934" is "1.1.0.5934", below a "1.1.1"; "1.0.3 build 06132013" is dated.
         if let Some(c) = BUILD_AFTER.captures(next).filter(|c| !is_date_number(&c[1])) {
             if let Ok(build) = c[1].parse::<u64>() {
+                numbers.resize(numbers.len().max(3), 0);
                 numbers.push(build);
                 shown = format!("{shown} build {build}");
             }
@@ -320,8 +336,6 @@ fn read_plain(text: &str) -> (Read, Read) {
             numbers.pop();
         }
         let found = (Version::Numbers(numbers, suffix), shown);
-        let went = matches!(word.as_str(), "update" | "patch" | "to")
-            || after.starts_with("update") || after.starts_with("patch") || gap.contains("->") || gap.contains('→');
         // A plain list ("1.00, 1.04", "2.03 / 2.04", "1.04 + 1.05", Factorio's "2.1.20 + 2.0.77 +
         // 1.1.110"): the highest of it.
         let listed = matches!(gap.trim(), "," | "/" | "|" | "+");
@@ -572,6 +586,12 @@ mod tests {
         assert_eq!(v("Build 2013-06-15"), None);
         assert_eq!((cmp("2.1.1i.851", "2.1.1"), cmp("1.2a", "1.2"), cmp("1.01C", "1.01")), (Some(Equal), Some(Greater), Some(Greater)));
         assert_eq!(cmp("1.0.3 build 06132013", "1.0.3"), Some(Equal));
+        assert_eq!((cmp("1.0 Build 1053", "1.0.5"), cmp("1.1 build 5934", "1.1.0 build 5934")), (Some(Less), Some(Equal)));
+        // Firmware lists and requirements.
+        for text in ["1.12 Backport 5.05, 6.72", "1.12 FW 5.05/6.72", "1.12 + Backport 5.05 / 6.72 / 9.00", "v1.12 + 5.05 Backport",
+            "Ported to 5.05, 1.12", "1.12 (requires 1.05 update)"] {
+            assert_eq!(cmp(text, "1.12"), Some(Equal), "{text}");
+        }
         assert_eq!(cmp("v1,04", "1.04"), Some(Equal));
         assert_eq!((cmp("1.1.0 Build 5934", "1.1.0.5934"), cmp("1.1.0 build 5935", "1.1.0.5934")), (Some(Equal), Some(Greater)));
         for date in ["29.08.24", "08.04.23", "2024.01.18a", "25.03.2026"] {
