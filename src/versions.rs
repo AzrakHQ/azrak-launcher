@@ -182,7 +182,7 @@ impl App {
             (self.has_card_art(i), self.tie_rank(i), g.info.as_ref().is_some_and(|info| !info.master.is_empty())),
             // When all else is equal (two editions, or the newest nobody shares beside an older
             // one), the higher numbered version, as before.
-            (g.version.as_ref().filter(|v| v.kind() == 0), g.g.seeders.unwrap_or(0), g.g.id),
+            (g.version.as_ref().filter(|v| v.is_numbers()), g.g.seeders.unwrap_or(0), g.g.id),
         )
     }
 
@@ -271,7 +271,7 @@ impl App {
     /// (the platform shown highlighted), the other releases, the details.
     pub fn hub_step(&mut self, d: i32) {
         let current = self.hub.and_then(|t| t.game);
-        let releases = current.is_some_and(|i| self.release_order(i).len() > 1);
+        let releases = current.is_some_and(|i| self.release_count(i) > 1);
         let rows: Vec<i32> = [Some(Z_HUB), (self.hub_version_count() > 0).then_some(Z_VERSIONS), releases.then_some(Z_RELEASES), Some(Z_HUB_DETAILS)]
             .into_iter().flatten().collect();
         let Some(at) = rows.iter().position(|z| *z == self.zone) else { return };

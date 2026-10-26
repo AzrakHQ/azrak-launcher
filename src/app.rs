@@ -1422,6 +1422,13 @@ impl App {
             .then(|| crate::compat::Outlook::of(self.target_compat(t), self.pc_verdict(platform)))
     }
 
+    /// How many releases of the game there are for release `index`'s platform (`release_order`'s
+    /// length, without sorting them).
+    pub fn release_count(&self, index: usize) -> usize {
+        let platform = self.games[index].g.platform;
+        self.groups.releases(index).iter().filter(|&&i| self.games[i].g.platform == platform).count()
+    }
+
     /// A game's releases for the same platform, oldest version first, so "Version 3 of 3" is
     /// the newest one. (Other platforms are the Game Hub's "Play it on" row.)
     pub fn release_order(&self, index: usize) -> Vec<usize> {
@@ -3557,11 +3564,11 @@ fn lend_art(games: &mut [GameV], from: usize, to: usize) {
 
 /// What says two releases on a card are the same game, not a bundle or another title sharing
 /// it: their names without edition notes (store name and site name; any one in common).
-pub fn same_game_keys(g: &GameV) -> [String; 2] {
+fn same_game_keys(g: &GameV) -> [String; 2] {
     [crate::game_groups::art_key(&g.name), crate::game_groups::art_key(&g.g.name)]
 }
 
-pub fn same_game(a: &[String; 2], b: &[String; 2]) -> bool {
+fn same_game(a: &[String; 2], b: &[String; 2]) -> bool {
     a.iter().any(|key| !key.is_empty() && b.contains(key))
 }
 

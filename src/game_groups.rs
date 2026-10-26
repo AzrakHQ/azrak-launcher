@@ -187,6 +187,11 @@ pub enum Version {
 }
 
 impl Version {
+    /// A numbered version ("1.19"), not a build or an update count.
+    pub fn is_numbers(&self) -> bool {
+        matches!(self, Version::Numbers(..))
+    }
+
     /// Which kind it is: only versions of one kind compare.
     pub fn kind(&self) -> u8 {
         match self {
@@ -295,12 +300,11 @@ fn read_plain(text: &str) -> (Read, Read) {
             numbers.pop();
         }
         let found = (Version::Numbers(numbers, suffix), shown.to_string());
-        // "+ 1.05" after the game's version: the patch it went to ("1.04 + 1.05").
         let went = matches!(word.as_str(), "update" | "patch" | "to")
-            || after.starts_with("update") || after.starts_with("patch") || gap.contains("->") || gap.contains('→')
-            || (first.is_some() && gap.trim() == "+");
-        // A plain list ("1.00, 1.04", "2.03 / 2.04"): the highest of it.
-        let listed = matches!(gap.trim(), "," | "/" | "|");
+            || after.starts_with("update") || after.starts_with("patch") || gap.contains("->") || gap.contains('→');
+        // A plain list ("1.00, 1.04", "2.03 / 2.04", "1.04 + 1.05", Factorio's "2.1.20 + 2.0.77 +
+        // 1.1.110"): the highest of it.
+        let listed = matches!(gap.trim(), "," | "/" | "|" | "+");
         if went {
             went_to = Some(found);
         } else if !from && (first.is_none() || listed && first.as_ref().is_some_and(|f: &(Version, String)| found.0 > f.0)) {
@@ -310,6 +314,14 @@ fn read_plain(text: &str) -> (Read, Read) {
     if first.is_some() || went_to.is_some() || from {
         return (first, went_to);
     }
+    // A number first is the game's version ("v554439 assembly 66995", "26186 assembly 81633"),
+    // ahead of the build or assembly number of a repack after it.
+    static LEADING: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\s*(\d+)\s+(?i:build|assembly)\b").unwrap());
+    if let Some(c) = LEADING.captures(&text) {
+        if let Ok(n) = c[1].parse::<u64>() {
+            return (number(n, &c[1]), None);
+        }
+    }
     if let Some(c) = BUILD.captures(&text) {
         let Ok(build) = c[1].parse::<u64>() else { return (None, None) };
         return (Some((Version::Build(build), format!("build {build}"))), None);
@@ -317,15 +329,35 @@ fn read_plain(text: &str) -> (Read, Read) {
     let Some(c) = LONE.captures(&text) else { return (None, None) };
     let Ok(n) = c[2].parse::<u64>() else { return (None, None) };
     let shown = c[2].to_string();
-    let read = match (n, c.get(1)) {
+    let read = match c.get(1) {
         // "Update 8": a count of updates, however big.
-        (_, Some(word)) => Some((Version::Count(n), format!("{}{shown}", word.as_str()))),
-        // A big number is a build (Steam's); a year is no version; else a version ("v14", "1").
-        (10_000.., None) => Some((Version::Build(n), format!("build {n}"))),
-        (1980..=2100, None) => None,
-        (_, None) => Some((Version::Numbers(vec![n], 0), shown)),
+        Some(word) => Some((Version::Count(n), format!("{}{shown}", word.as_str()))),
+        None => number(n, &shown),
     };
     (read, None)
+}
+
+/// A number on its own: a big one is a build (Steam's), unless it's a date ("20250808",
+/// "06072012"); a year is no version; else a version ("v14", "1").
+fn number(n: u64, shown: &str) -> Read {
+    match n {
+        _ if is_date_number(shown) => None,
+        10_000.. => Some((Version::Build(n), format!("build {n}"))),
+        1980..=2100 => None,
+        _ => Some((Version::Numbers(vec![n], 0), shown.to_string())),
+    }
+}
+
+/// An eight-digit date: yyyymmdd, ddmmyyyy or mmddyyyy.
+fn is_date_number(digits: &str) -> bool {
+    if digits.len() != 8 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    let part = |a: usize, b: usize| digits[a..b].parse::<u32>().unwrap_or(0);
+    let year = |y: u32| (1980..=2100).contains(&y);
+    let (day, month) = (|d: u32| (1..=31).contains(&d), |m: u32| (1..=12).contains(&m));
+    (year(part(0, 4)) && month(part(4, 6)) && day(part(6, 8)))
+        || (year(part(4, 8)) && ((day(part(0, 2)) && month(part(2, 4))) || (month(part(0, 2)) && day(part(2, 4)))))
 }
 
 /// A date written like a version: "29.08.24", "25.03.2026", "2024.01.18a".
@@ -506,6 +538,15 @@ mod tests {
         assert_eq!(v("Update 2 (requires 9.00)"), Some(Version::Count(2)));
         assert_eq!(cmp("9.00 FW, 1.12", "1.12"), Some(Equal));
         assert_eq!(v("2026.08.11.1121610"), None);
+        // Real catalog values: a "+" list reads as its highest; a leading number is the game's,
+        // not the repack's assembly; eight-digit dates aren't builds.
+        assert_eq!(cmp("2.1.20 + 2.0.77 + 1.1.110 + 0.14.23", "2.1.20"), Some(Equal));
+        assert_eq!(cmp("v554439 assembly 66995 (29.08.2023)", "554439"), Some(Equal));
+        assert_eq!(cmp("26186 assembly 81633", "25688"), Some(Greater));
+        for date in ["20250808", "06072012", "12072011"] {
+            assert_eq!(v(date), None, "{date}");
+        }
+        assert_eq!(v("17332798"), Some(Version::Build(17332798)));
         for date in ["29.08.24", "08.04.23", "2024.01.18a", "25.03.2026"] {
             assert_eq!(v(date), None, "{date}");
         }
@@ -535,3 +576,4 @@ mod tests {
         assert!(grouped.releases(index).iter().any(|i| file.games[*i].id == 6744684));
     }
 }
+

@@ -847,7 +847,7 @@ impl App {
             // Size is always visible. Version/region details belong to the selected Hub release.
             // A one-console Library says how many releases (as the Game Hub numbers them); a mixed
             // one shows the platforms there instead.
-            let releases = if self.mixed_consoles { 0 } else { self.release_order(gi).len() };
+            let releases = if self.mixed_consoles { 0 } else { self.release_count(gi) };
             let meta = size_label(&g.g).unwrap_or_else(|| "Size unknown".into());
             cards.push(CardData {
                 index: k as i32,
