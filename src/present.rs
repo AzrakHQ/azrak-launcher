@@ -1107,7 +1107,9 @@ impl App {
             let shown = &self.games[index];
             let newest = if shown.newer.is_some() {
                 " · older version"
-            } else if members.iter().any(|&m| self.games[m].newer.is_some_and(|n| self.games[n].version == shown.version)) {
+            } else if members.iter().any(|&m| self.games[m].newer.is_some_and(|n| self.games[n].version == shown.version
+                && crate::app::one_version_line(&self.games[n], shown)
+                && crate::app::same_game(&crate::app::same_game_keys(&self.games[n]), &crate::app::same_game_keys(shown)))) {
                 " · newest version"
             } else {
                 ""

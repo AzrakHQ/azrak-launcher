@@ -217,18 +217,16 @@ pub fn parse_version(text: &str) -> Option<Version> {
     read_version(text).map(|(version, _)| version)
 }
 
-/// The version as the catalog writes it, to show: "1.05", not "1.5" (which reads as newer
+/// The version and how the catalog writes it, to show: "1.05", not "1.5" (which reads as newer
 /// than 1.19); "build 25734961".
-pub fn version_text(text: &str) -> Option<String> {
-    read_version(text).map(|(_, shown)| shown)
-}
-
-fn read_version(text: &str) -> Option<(Version, String)> {
+pub fn read_version(text: &str) -> Option<(Version, String)> {
     static NOTES: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\([^()]*\)|\[[^\]]*\]|(?i)\bdated\b.*$").unwrap());
     // "v1.05", "v.1.05", "ver.1.05", "version 1.05": the number.
     static PREFIX: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:version|ver|v)\.?\s*(\d)").unwrap());
-    static DOTTED: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\d+(?:\.\d+)+[a-z]?").unwrap());
-    static BUILD: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:build|assembly)\s*(\d+)").unwrap());
+    // "1.2a" has a revision letter; "1.05EUR" and "1.21HF" don't.
+    static DOTTED: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\d+(?:\.\d+)+(?:[a-z]\b)?").unwrap());
+    // A build number, not the start of a date ("Build 18.11.22").
+    static BUILD: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:build|assembly)\s*(\d+)(?:[^\d.]|$)").unwrap());
     static LONE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)^\s*(update\s*|patch\s*)?(\d+)\s*$").unwrap());
     static COMMA: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\s*(\d+),(\d+)\s*$").unwrap());
     let text = NOTES.replace_all(text, " ");
@@ -244,7 +242,7 @@ fn read_version(text: &str) -> Option<(Version, String)> {
     // 5.05", "CSP 2.2.2"), nor a date.
     let mut best: Option<(Version, String)> = None;
     let mut last_end = 0;
-    for (n, m) in DOTTED.find_iter(&text).enumerate() {
+    for m in DOTTED.find_iter(&text) {
         let (before, after) = (&text[..m.start()], text[m.end()..].trim_start().to_lowercase());
         let gap = &text[last_end..m.start()];
         last_end = m.end();
@@ -256,8 +254,12 @@ fn read_version(text: &str) -> Option<(Version, String)> {
             continue;
         }
         let word = before.trim_end().rsplit(|c: char| !c.is_alphabetic()).next().unwrap_or("").to_lowercase();
+        // Firmware's or a tool's ("FW 9.00", "Backport 5.05", "CSP 2.2.2"), not the game's.
+        if matches!(word.as_str(), "fw" | "firmware" | "backport" | "csp" | "atr" | "sdk") {
+            continue;
+        }
         // The first version written ("GOG v1.05", "Alpha 10.4"), then only ones the game went to.
-        let the_game = best.is_none() && n == first_number(&text, n)
+        let the_game = best.is_none()
             || matches!(word.as_str(), "update" | "patch" | "to")
             || after.starts_with("update") || after.starts_with("patch")
             || gap.contains("->") || gap.contains('→');
@@ -293,15 +295,6 @@ fn read_version(text: &str) -> Option<(Version, String)> {
         (_, Some(word)) => Some((Version::Count(n), format!("{}{shown}", word.as_str()))),
         (_, None) => Some((Version::Numbers(vec![n], 0), shown)),
     }
-}
-
-/// The index of the first dotted number in `text` that's a version (not part of a longer token,
-/// not a date), or `n` when none comes before it.
-fn first_number(text: &str, n: usize) -> usize {
-    static DOTTED: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\d+(?:\.\d+)+[a-z]?").unwrap());
-    DOTTED.find_iter(text).enumerate()
-        .find(|(_, m)| !text[..m.start()].ends_with(|c: char| c.is_alphanumeric() || c == '.' || c == '_') && !is_date(m.as_str()))
-        .map_or(n, |(i, _)| i)
 }
 
 /// A date written like a version: "29.08.24", "25.03.2026", "2024.01.18a", "2024-01-02".
@@ -414,6 +407,7 @@ mod tests {
     #[test]
     fn versions_are_read_without_dates_or_notes() {
         use std::cmp::Ordering::*;
+        let version_text = |s: &str| read_version(s).map(|(_, shown)| shown);
         let v = |s: &str| parse_version(s);
         let cmp = |a: &str, b: &str| v(a).zip(v(b)).and_then(|(a, b)| a.compare(&b));
         // The same version written three ways, and a date that's no version.
@@ -454,6 +448,10 @@ mod tests {
         assert_eq!(cmp("Alpha 10.4.219", "10.4.219"), Some(Equal));
         assert_eq!(cmp("GOG v1.05", "01.05"), Some(Equal));
         assert_eq!(cmp("Steam 1.05 + Backport 5.05", "1.05"), Some(Equal));
+        assert_eq!(cmp("FW 9.00, 1.12 update", "1.12"), Some(Equal));
+        assert_eq!(cmp("Backport 5.05 + 1.05 update", "1.05"), Some(Equal));
+        assert_eq!((cmp("1.05EUR", "1.05"), cmp("1.21HF", "1.21"), cmp("1.0.2hotfix", "1.0.2")), (Some(Equal), Some(Equal), Some(Equal)));
+        assert_eq!(v("Build 18.11.22"), None);
         for date in ["29.08.24", "08.04.23", "2024.01.18a", "25.03.2026"] {
             assert_eq!(v(date), None, "{date}");
         }

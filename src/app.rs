@@ -801,6 +801,7 @@ impl App {
             let info = Self::sanitize(self.art_for_game(&g));
             let name = Self::display_name(&g.name, info.as_ref());
             let (buckets, search) = self.genre_tags(&g, info.as_ref(), &name);
+            let (version, version_shown) = crate::game_groups::read_version(&g.version).unzip();
             let rel = util::parse_long_date(&g.release).or_else(|| info.as_ref().and_then(|i| util::parse_iso_date(&i.release)));
             let added = util::parse_iso_date(&g.date).map(|(y, m, d)| util::days_from_civil(y, m, d));
             out.push(GameV {
@@ -810,8 +811,8 @@ impl App {
                 rel_day: rel.map(|(y, m, d)| util::days_from_civil(y, m, d)).unwrap_or(0),
                 is_new: added.is_some_and(|added| (0..14).contains(&(today - added))),
                 local: None,
-                version: crate::game_groups::parse_version(&g.version),
-                version_shown: crate::game_groups::version_text(&g.version),
+                version,
+                version_shown,
                 newer: None,
                 outdated: false,
                 info,
@@ -3554,10 +3555,16 @@ pub fn same_game(a: &[String; 2], b: &[String; 2]) -> bool {
 }
 
 /// Two releases whose versions follow one line: the same game on the same platform, both PC
-/// games native or both through Wine (a Linux port numbers its own), neither a PKG (it can't
-/// be installed).
-fn one_version_line(a: &GameV, b: &GameV) -> bool {
-    a.g.platform == b.g.platform && a.g.wine == b.g.wine && !a.g.is_pkg() && !b.g.is_pkg()
+/// games native or both through Wine (a Linux port numbers its own), a console game's same
+/// title ID (each region's numbers its own patches), neither a PKG (it can't be installed).
+pub fn one_version_line(a: &GameV, b: &GameV) -> bool {
+    let ids = |g: &GameV| std::iter::once(&g.g.title_id).chain(&g.g.title_ids).filter(|id| crate::psn::valid_title_id(id))
+        .map(|id| id.to_ascii_uppercase()).collect::<Vec<_>>();
+    let same_region = a.g.platform == crate::platform::Platform::Pc || {
+        let (x, y) = (ids(a), ids(b));
+        x.is_empty() || y.is_empty() || x.iter().any(|id| y.contains(id))
+    };
+    a.g.platform == b.g.platform && a.g.wine == b.g.wine && !a.g.is_pkg() && !b.g.is_pkg() && same_region
 }
 
 /// The releases of `members` on release `i`'s version line (itself included). `keys` are
@@ -3806,7 +3813,7 @@ mod art_tests {
             g: Game { id, name: "Far Cry 5".into(), platform, version: version.into(), magnet: "magnet:?xt=test".into(), ..Default::default() },
             info: None, name: "Far Cry 5".into(),
             buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None,
-            version: crate::game_groups::parse_version(version), version_shown: crate::game_groups::version_text(version), newer: None, outdated: false,
+            version: crate::game_groups::parse_version(version), version_shown: crate::game_groups::read_version(version).map(|(_, s)| s), newer: None, outdated: false,
         };
         let mut games = vec![
             game(1, Platform::Ps4, "1.19"), game(2, Platform::Ps4, "1.12 (dated 01.02.2019)"), game(3, Platform::Ps4, "N/A"),
@@ -3855,6 +3862,12 @@ mod art_tests {
         games[1].g.magnet.clear();
         mark_newer_versions(&mut games, &[vec![0, 1, 2, 3, 4]]);
         assert_eq!(games.iter().map(|g| g.newer).collect::<Vec<_>>(), [None, None, Some(3), None, Some(0)]);
+        // A console game's regions number their own patches: USA 1.12 isn't older than JP 1.19,
+        // but another USA upload of 1.15 is newer.
+        let mut games = vec![named("Hades", "1.12", Some(5), ""), named("Hades", "1.19", Some(5), ""), named("Hades", "1.15", Some(5), "")];
+        (games[0].g.title_id, games[1].g.title_id, games[2].g.title_id) = ("CUSA00001".into(), "CUSA10001".into(), "CUSA00001".into());
+        mark_newer_versions(&mut games, &[vec![0, 1, 2]]);
+        assert_eq!(games.iter().map(|g| g.newer).collect::<Vec<_>>(), [Some(2), None, None]);
     }
 
     #[test]
