@@ -169,7 +169,7 @@ impl App {
     /// What makes one release a better pick than another, best highest: the one you have, one
     /// you can get, how it plays here, whether anyone shares it, then not an older version than
     /// one that can be downloaded (versions of one title play alike, so the newest is offered
-    /// by default) and a version that can be read; then a picture for its card (no placeholder
+    /// by default); then a picture for its card (no placeholder
     /// while a release has one), `tie_rank`, the most shared.
     pub fn release_rank(&self, i: usize) -> impl Ord + use<> {
         let g = &self.games[i];
@@ -178,7 +178,7 @@ impl App {
         let (score, shared) = self.play_rank(i);
         (
             (installed_version, g.local.is_some(), !g.g.magnet.is_empty()),
-            (score, shared, !g.outdated, g.version.is_some()),
+            (score, shared, !g.outdated),
             (self.has_card_art(i), self.tie_rank(i), g.info.as_ref().is_some_and(|info| !info.master.is_empty())),
             (g.g.seeders.unwrap_or(0), g.g.id),
         )

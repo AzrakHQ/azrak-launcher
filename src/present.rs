@@ -1107,7 +1107,7 @@ impl App {
             let shown = &self.games[index];
             let newest = if shown.newer.is_some() {
                 " · older version"
-            } else if members.iter().any(|&m| self.games[m].newer == Some(index)) {
+            } else if members.iter().any(|&m| self.games[m].newer.is_some_and(|n| self.games[n].version == shown.version)) {
                 " · newest version"
             } else {
                 ""

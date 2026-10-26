@@ -256,8 +256,9 @@ fn read_version(text: &str) -> Option<(Version, String)> {
             continue;
         }
         let word = before.trim_end().rsplit(|c: char| !c.is_alphabetic()).next().unwrap_or("").to_lowercase();
-        let the_game = n == 0 && best.is_none() && word.is_empty()
-            || matches!(word.as_str(), "update" | "patch" | "to" | "version" | "alpha" | "beta")
+        // The first version written ("GOG v1.05", "Alpha 10.4"), then only ones the game went to.
+        let the_game = best.is_none() && n == first_number(&text, n)
+            || matches!(word.as_str(), "update" | "patch" | "to")
             || after.starts_with("update") || after.starts_with("patch")
             || gap.contains("->") || gap.contains('→');
         if !the_game {
@@ -292,6 +293,15 @@ fn read_version(text: &str) -> Option<(Version, String)> {
         (_, Some(word)) => Some((Version::Count(n), format!("{}{shown}", word.as_str()))),
         (_, None) => Some((Version::Numbers(vec![n], 0), shown)),
     }
+}
+
+/// The index of the first dotted number in `text` that's a version (not part of a longer token,
+/// not a date), or `n` when none comes before it.
+fn first_number(text: &str, n: usize) -> usize {
+    static DOTTED: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\d+(?:\.\d+)+[a-z]?").unwrap());
+    DOTTED.find_iter(text).enumerate()
+        .find(|(_, m)| !text[..m.start()].ends_with(|c: char| c.is_alphanumeric() || c == '.' || c == '_') && !is_date(m.as_str()))
+        .map_or(n, |(i, _)| i)
 }
 
 /// A date written like a version: "29.08.24", "25.03.2026", "2024.01.18a", "2024-01-02".
@@ -442,6 +452,8 @@ mod tests {
         assert_eq!(cmp("v1 (2016-07-27)", "1"), Some(Equal));
         assert_eq!(cmp("1,04", "1.04"), Some(Equal));
         assert_eq!(cmp("Alpha 10.4.219", "10.4.219"), Some(Equal));
+        assert_eq!(cmp("GOG v1.05", "01.05"), Some(Equal));
+        assert_eq!(cmp("Steam 1.05 + Backport 5.05", "1.05"), Some(Equal));
         for date in ["29.08.24", "08.04.23", "2024.01.18a", "25.03.2026"] {
             assert_eq!(v(date), None, "{date}");
         }
