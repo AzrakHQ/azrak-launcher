@@ -265,15 +265,16 @@ fn read_plain(text: &str) -> (Read, Read) {
     // "v1.05", "v.1.05", "ver.1.05", "version 1.05": the number.
     static PREFIX: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:version|ver|v)\.?\s*(\d)").unwrap());
     // "1.2a" has a revision letter; "1.05EUR" and "1.21HF" don't.
-    static DOTTED: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\d+(?:\.\d+)+(?:[a-z]\b)?").unwrap());
+    static DOTTED: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\d+(?:\.\d+)+").unwrap());
     // A build number, not the start of a date ("Build 18.11.22").
-    static BUILD: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:build|assembly)\s*(\d+)(?:[^\d.]|$)").unwrap());
+    static BUILD: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:build|assembly)\s*(\d+)(?:[^\d.\-]|$)").unwrap());
+    static BUILD_AFTER: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\s*(?i:build)\s*(\d+)(?:[^\d.\-]|$)").unwrap());
     static LONE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)^\s*(update\s*|patch\s*)?(\d+)\s*$").unwrap());
     static COMMA: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\s*(\d+),(\d+)\s*$").unwrap());
     let text = DATED.replace(text, " ");
-    // "1,01": a decimal comma.
-    let text = COMMA.replace(&text, "$1.$2");
     let text = PREFIX.replace_all(&text, " $1");
+    // "1,01", "v1,04": a decimal comma.
+    let text = COMMA.replace(&text, "$1.$2");
     // "from 1.00" says what a release updates, not what it is ("from 1.00 to 1.05" is 1.05).
     let from = text.trim_start().to_lowercase().starts_with("from ");
     let (mut first, mut went_to) = (None, None);
@@ -286,20 +287,39 @@ fn read_plain(text: &str) -> (Read, Read) {
         if before.ends_with(|c: char| c.is_alphanumeric() || c == '.' || c == '_') || is_date(m.as_str()) {
             continue;
         }
-        let word = before.trim_end().rsplit(|c: char| !c.is_alphabetic()).next().unwrap_or("").to_lowercase();
-        // Firmware's or a tool's ("FW 9.00", "9.00 FW", "Backport 5.05", "CSP 2.2.2"), not the game's.
-        let tool = |w: &str| matches!(w, "fw" | "firmware" | "backport" | "csp" | "atr" | "sdk");
+        // The word right before, and the one before that ("backported to").
+        fn last_word(text: &str) -> (String, &str) {
+            let text = text.trim_end();
+            let start = text.trim_end_matches(char::is_alphabetic).len();
+            (text[start..].to_lowercase(), &text[..start])
+        }
+        let (word, rest) = last_word(before);
+        let (earlier, _) = last_word(rest);
+        // Firmware's or a tool's ("FW 9.00", "9.00 FW", "Backport 5.05", "backported to 5.05",
+        // "CSP 2.2.2"), not the game's.
+        let tool = |w: &str| matches!(w, "fw" | "firmware" | "backport" | "backported" | "csp" | "atr" | "sdk");
         let firmware_after = matches!(after.split(|c: char| !c.is_alphabetic()).next().unwrap_or(""), "fw" | "firmware");
-        if tool(&word) || firmware_after {
+        if tool(&word) || (word == "to" && tool(&earlier)) || firmware_after {
             continue;
         }
-        let shown = m.as_str();
-        let suffix = shown.chars().last().filter(char::is_ascii_alphabetic).map_or(0, |c| c.to_ascii_lowercase() as u8 - b'a' + 1);
-        let mut numbers: Vec<u64> = shown.trim_end_matches(|c: char| c.is_ascii_alphabetic()).split('.').filter_map(|x| x.parse().ok()).collect();
+        // A revision letter on its own ("1.2a", "1.01C"; not "1.05EUR", "2.1.1i.851" or "1.1.0r_rv22189").
+        let next = &text[m.end()..];
+        let letter = next.chars().next().filter(char::is_ascii_alphabetic)
+            .filter(|_| !next[1..].starts_with(|c: char| c.is_alphanumeric() || c == '.' || c == '_'));
+        let mut shown = format!("{}{}", m.as_str(), letter.map(String::from).unwrap_or_default());
+        let suffix = letter.map_or(0, |c| c.to_ascii_lowercase() as u8 - b'a' + 1);
+        let mut numbers: Vec<u64> = m.as_str().split('.').filter_map(|x| x.parse().ok()).collect();
+        // "1.1.0 Build 5934" is "1.1.0.5934"; "1.0.3 build 06132013" is dated.
+        if let Some(c) = BUILD_AFTER.captures(next).filter(|c| !is_date_number(&c[1])) {
+            if let Ok(build) = c[1].parse::<u64>() {
+                numbers.push(build);
+                shown = format!("{shown} build {build}");
+            }
+        }
         while numbers.len() > 1 && numbers.last() == Some(&0) {
             numbers.pop();
         }
-        let found = (Version::Numbers(numbers, suffix), shown.to_string());
+        let found = (Version::Numbers(numbers, suffix), shown);
         let went = matches!(word.as_str(), "update" | "patch" | "to")
             || after.starts_with("update") || after.starts_with("patch") || gap.contains("->") || gap.contains('→');
         // A plain list ("1.00, 1.04", "2.03 / 2.04", "1.04 + 1.05", Factorio's "2.1.20 + 2.0.77 +
@@ -547,6 +567,13 @@ mod tests {
             assert_eq!(v(date), None, "{date}");
         }
         assert_eq!(v("17332798"), Some(Version::Build(17332798)));
+        // A backport's firmware, a date after "Build", a region letter, a prefixed decimal comma.
+        assert_eq!(cmp("1.12 (backported to 5.05)", "1.12"), Some(Equal));
+        assert_eq!(v("Build 2013-06-15"), None);
+        assert_eq!((cmp("2.1.1i.851", "2.1.1"), cmp("1.2a", "1.2"), cmp("1.01C", "1.01")), (Some(Equal), Some(Greater), Some(Greater)));
+        assert_eq!(cmp("1.0.3 build 06132013", "1.0.3"), Some(Equal));
+        assert_eq!(cmp("v1,04", "1.04"), Some(Equal));
+        assert_eq!((cmp("1.1.0 Build 5934", "1.1.0.5934"), cmp("1.1.0 build 5935", "1.1.0.5934")), (Some(Equal), Some(Greater)));
         for date in ["29.08.24", "08.04.23", "2024.01.18a", "25.03.2026"] {
             assert_eq!(v(date), None, "{date}");
         }

@@ -799,18 +799,12 @@ impl App {
         let downloaded: HashSet<i64> = self.downloads.snapshot().iter().map(|job| job.topic).collect();
         let games: Vec<Game> = games.into_iter().filter(|g| listed(g, &downloaded)).collect();
         let today = (util::now_secs() / 86400.0) as i64;
-        // The catalog is read again whenever artwork arrives: versions already read carry over.
-        let mut read: HashMap<i64, (String, Option<crate::game_groups::Version>, Option<String>)> = self.games.iter()
-            .map(|g| (g.g.id, (g.g.version.clone(), g.version.clone(), g.version_shown.clone()))).collect();
         let mut out = Vec::with_capacity(games.len());
         for g in games {
             let info = Self::sanitize(self.art_for_game(&g));
             let name = Self::display_name(&g.name, info.as_ref());
             let (buckets, search) = self.genre_tags(&g, info.as_ref(), &name);
-            let (version, version_shown) = match read.remove(&g.id) {
-                Some((text, version, shown)) if text == g.version => (version, shown),
-                _ => crate::game_groups::read_version(&g.version).unzip(),
-            };
+            let (version, version_shown) = crate::game_groups::read_version(&g.version).unzip();
             let rel = util::parse_long_date(&g.release).or_else(|| info.as_ref().and_then(|i| util::parse_iso_date(&i.release)));
             let added = util::parse_iso_date(&g.date).map(|(y, m, d)| util::days_from_civil(y, m, d));
             out.push(GameV {
@@ -1425,15 +1419,19 @@ impl App {
     /// How many releases of the game there are for release `index`'s platform (`release_order`'s
     /// length, without sorting them).
     pub fn release_count(&self, index: usize) -> usize {
+        self.platform_releases(index).count()
+    }
+
+    /// The game's releases for release `index`'s platform.
+    fn platform_releases(&self, index: usize) -> impl Iterator<Item = usize> + '_ {
         let platform = self.games[index].g.platform;
-        self.groups.releases(index).iter().filter(|&&i| self.games[i].g.platform == platform).count()
+        self.groups.releases(index).iter().copied().filter(move |&i| self.games[i].g.platform == platform)
     }
 
     /// A game's releases for the same platform, oldest version first, so "Version 3 of 3" is
     /// the newest one. (Other platforms are the Game Hub's "Play it on" row.)
     pub fn release_order(&self, index: usize) -> Vec<usize> {
-        let platform = self.games[index].g.platform;
-        let mut members: Vec<usize> = self.groups.releases(index).iter().copied().filter(|&i| self.games[i].g.platform == platform).collect();
+        let mut members: Vec<usize> = self.platform_releases(index).collect();
         // By version (of the kind most of the platform's releases have), then by when they were
         // uploaded: one key for every release, so the order is the same whichever is shown.
         let kind = crate::game_groups::main_kind(members.iter().filter_map(|&i| self.games[i].version.as_ref()));
@@ -3582,12 +3580,17 @@ struct LineKey {
     /// base game's for every edition ("Far Cry 5" for the Gold Edition too).
     edition: String,
     ids: Vec<String>,
-    region: String,
+    /// The regions written ("EUR/RUS" is EUR and RUS); none for "Region Free" or none written.
+    regions: Vec<String>,
 }
 
 impl LineKey {
     fn of(g: &GameV) -> LineKey {
-        LineKey { edition: norm(&crate::game_groups::strip_notes(&g.g.name)), ids: g.g.valid_title_ids(), region: g.g.region.trim().to_uppercase() }
+        let region = g.g.region.to_uppercase();
+        let regions = if region.contains("FREE") { Vec::new() } else {
+            region.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| w.len() >= 2 && *w != "REGION").map(String::from).collect()
+        };
+        LineKey { edition: norm(&crate::game_groups::strip_notes(&g.g.name)), ids: g.g.valid_title_ids(), regions }
     }
 }
 
@@ -3596,7 +3599,7 @@ fn one_version_line(a: (&GameV, &LineKey), b: (&GameV, &LineKey)) -> bool {
     let same_region = a.g.platform == crate::platform::Platform::Pc || if !ka.ids.is_empty() && !kb.ids.is_empty() {
         ka.ids.iter().any(|id| kb.ids.contains(id))
     } else {
-        ka.region.is_empty() || kb.region.is_empty() || ka.region == kb.region
+        ka.regions.is_empty() || kb.regions.is_empty() || ka.regions.iter().any(|r| kb.regions.contains(r))
     };
     a.g.platform == b.g.platform && a.g.wine == b.g.wine && !a.g.is_pkg() && !b.g.is_pkg()
         && same_region && !ka.edition.is_empty() && ka.edition == kb.edition
