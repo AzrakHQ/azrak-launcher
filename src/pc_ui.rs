@@ -118,7 +118,8 @@ impl App {
             Some(free) if short => format!("only {free:.0} GB free there"),
             _ => "then press Install".into(),
         });
-        Some((parts.join(" · "), short || older.is_some()))
+        // Amber when there's something to do about it: a newer version someone shares.
+        Some((parts.join(" · "), short || g.outdated))
     }
 
     /// For the download dialog: a warning when this game won't start or may be slow here.
