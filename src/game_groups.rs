@@ -220,7 +220,32 @@ pub fn parse_version(text: &str) -> Option<Version> {
 /// The version and how the catalog writes it, to show: "1.05", not "1.5" (which reads as newer
 /// than 1.19); "build 25734961".
 pub fn read_version(text: &str) -> Option<(Version, String)> {
-    static NOTES: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\([^()]*\)|\[[^\]]*\]|(?i)\bdated\b.*$").unwrap());
+    static BRACKETS: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\(([^()]*)\)|\[([^\]]*)\]").unwrap());
+    let inside: Vec<&str> = BRACKETS.captures_iter(text).filter_map(|c| c.get(1).or(c.get(2))).map(|m| m.as_str()).collect();
+    let (first, went_to) = read_plain(&BRACKETS.replace_all(text, " "));
+    // What the field says the game went to, outside the brackets or in them ("1.05 (2.0
+    // update)"); else the version written; else one in brackets ("Patch 2 (1.02)") over an
+    // update count.
+    if went_to.is_some() {
+        return went_to;
+    }
+    let bracketed: Vec<(Read, Read)> = inside.iter().map(|t| read_plain(t)).collect();
+    if let Some(went) = bracketed.iter().rev().find_map(|(_, went)| went.clone()) {
+        return Some(went);
+    }
+    match first {
+        Some((Version::Count(_), _)) | None => bracketed.into_iter().find_map(|(v, _)| v.filter(|(v, _)| matches!(v, Version::Numbers(..)))).or(first),
+        found => found,
+    }
+}
+
+/// A version read, and how the catalog writes it.
+type Read = Option<(Version, String)>;
+
+/// A version field without its brackets: the first version written, and the last one the
+/// field says the game went to ("1.00 + 1.19 update", "1.04 --> 1.05", "from 1.00 to 1.05").
+fn read_plain(text: &str) -> (Read, Read) {
+    static DATED: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\bdated\b.*$").unwrap());
     // "v1.05", "v.1.05", "ver.1.05", "version 1.05": the number.
     static PREFIX: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:version|ver|v)\.?\s*(\d)").unwrap());
     // "1.2a" has a revision letter; "1.05EUR" and "1.21HF" don't.
@@ -229,41 +254,25 @@ pub fn read_version(text: &str) -> Option<(Version, String)> {
     static BUILD: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:build|assembly)\s*(\d+)(?:[^\d.]|$)").unwrap());
     static LONE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)^\s*(update\s*|patch\s*)?(\d+)\s*$").unwrap());
     static COMMA: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\s*(\d+),(\d+)\s*$").unwrap());
-    let text = NOTES.replace_all(text, " ");
+    let text = DATED.replace(text, " ");
     // "1,01": a decimal comma.
     let text = COMMA.replace(&text, "$1.$2");
     let text = PREFIX.replace_all(&text, " $1");
-    // "from 1.00" says what a release updates, not what it is.
-    if text.trim_start().to_lowercase().starts_with("from ") {
-        return None;
-    }
-    // The game's version: the first number written, or a later one that the field says the game
-    // went to ("1.00 + 1.19 update", "1.04 --> 1.05"); not a tool's or firmware's ("Backport
-    // 5.05", "CSP 2.2.2"), nor a date.
-    let mut best: Option<(Version, String)> = None;
+    // "from 1.00" says what a release updates, not what it is ("from 1.00 to 1.05" is 1.05).
+    let from = text.trim_start().to_lowercase().starts_with("from ");
+    let (mut first, mut went_to) = (None, None);
     let mut last_end = 0;
     for m in DOTTED.find_iter(&text) {
         let (before, after) = (&text[..m.start()], text[m.end()..].trim_start().to_lowercase());
         let gap = &text[last_end..m.start()];
         last_end = m.end();
-        // Part of a longer token ("1.0.6.2055" is one version; "x86_64" no version).
-        if before.ends_with(|c: char| c.is_alphanumeric() || c == '.' || c == '_') {
-            continue;
-        }
-        if is_date(m.as_str()) {
+        // Part of a longer token ("1.0.6.2055" is one version; "x86_64" no version), or a date.
+        if before.ends_with(|c: char| c.is_alphanumeric() || c == '.' || c == '_') || is_date(m.as_str()) {
             continue;
         }
         let word = before.trim_end().rsplit(|c: char| !c.is_alphabetic()).next().unwrap_or("").to_lowercase();
         // Firmware's or a tool's ("FW 9.00", "Backport 5.05", "CSP 2.2.2"), not the game's.
         if matches!(word.as_str(), "fw" | "firmware" | "backport" | "csp" | "atr" | "sdk") {
-            continue;
-        }
-        // The first version written ("GOG v1.05", "Alpha 10.4"), then only ones the game went to.
-        let the_game = best.is_none()
-            || matches!(word.as_str(), "update" | "patch" | "to")
-            || after.starts_with("update") || after.starts_with("patch")
-            || gap.contains("->") || gap.contains('→');
-        if !the_game {
             continue;
         }
         let shown = m.as_str();
@@ -273,34 +282,39 @@ pub fn read_version(text: &str) -> Option<(Version, String)> {
             numbers.pop();
         }
         let found = (Version::Numbers(numbers, suffix), shown.to_string());
-        if best.as_ref().is_none_or(|b| found.0 > b.0) {
-            best = Some(found);
+        let went = matches!(word.as_str(), "update" | "patch" | "to")
+            || after.starts_with("update") || after.starts_with("patch") || gap.contains("->") || gap.contains('→');
+        if went {
+            went_to = Some(found);
+        } else if first.is_none() && !from {
+            first = Some(found);
         }
     }
-    if best.is_some() {
-        return best;
+    if first.is_some() || went_to.is_some() || from {
+        return (first, went_to);
     }
     if let Some(c) = BUILD.captures(&text) {
-        let build: u64 = c[1].parse().ok()?;
-        return Some((Version::Build(build), format!("build {build}")));
+        let Ok(build) = c[1].parse::<u64>() else { return (None, None) };
+        return (Some((Version::Build(build), format!("build {build}"))), None);
     }
-    let c = LONE.captures(&text)?;
-    let n: u64 = c[2].parse().ok()?;
+    let Some(c) = LONE.captures(&text) else { return (None, None) };
+    let Ok(n) = c[2].parse::<u64>() else { return (None, None) };
     let shown = c[2].to_string();
-    match (n, c.get(1)) {
-        // A big number is a build (Steam's); a year is no version.
-        (10_000.., _) => Some((Version::Build(n), format!("build {n}"))),
-        (1980..=2100, None) => None,
-        // "Update 8": a count of updates; "v14", "1": a version.
+    let read = match (n, c.get(1)) {
+        // "Update 8": a count of updates, however big.
         (_, Some(word)) => Some((Version::Count(n), format!("{}{shown}", word.as_str()))),
+        // A big number is a build (Steam's); a year is no version; else a version ("v14", "1").
+        (10_000.., None) => Some((Version::Build(n), format!("build {n}"))),
+        (1980..=2100, None) => None,
         (_, None) => Some((Version::Numbers(vec![n], 0), shown)),
-    }
+    };
+    (read, None)
 }
 
-/// A date written like a version: "29.08.24", "25.03.2026", "2024.01.18a", "2024-01-02".
+/// A date written like a version: "29.08.24", "25.03.2026", "2024.01.18a".
 fn is_date(token: &str) -> bool {
     let token = token.trim_end_matches(|c: char| c.is_ascii_alphabetic());
-    let parts: Vec<&str> = token.split(['.', '-', '/']).collect();
+    let parts: Vec<&str> = token.split('.').collect();
     let [a, b, c] = parts[..] else { return false };
     let num = |s: &str| s.parse::<u32>().ok();
     let (Some(x), Some(y), Some(z)) = (num(a), num(b), num(c)) else { return false };
@@ -452,6 +466,13 @@ mod tests {
         assert_eq!(cmp("Backport 5.05 + 1.05 update", "1.05"), Some(Equal));
         assert_eq!((cmp("1.05EUR", "1.05"), cmp("1.21HF", "1.21"), cmp("1.0.2hotfix", "1.0.2")), (Some(Equal), Some(Equal), Some(Equal)));
         assert_eq!(v("Build 18.11.22"), None);
+        // What the field says the game went to wins; in brackets too, or as a fallback.
+        assert_eq!(cmp("from 1.00 to 1.05", "1.05"), Some(Equal));
+        assert_eq!(cmp("1.10 -> 1.05", "1.05"), Some(Equal));
+        assert_eq!(cmp("v2.0 + 1.05 update", "1.05"), Some(Equal));
+        assert_eq!(cmp("1.05 (2.0 update)", "2.0"), Some(Equal));
+        assert_eq!(cmp("Patch 2 (1.02)", "1.02"), Some(Equal));
+        assert_eq!(v("Update 12345"), Some(Version::Count(12345)));
         for date in ["29.08.24", "08.04.23", "2024.01.18a", "25.03.2026"] {
             assert_eq!(v(date), None, "{date}");
         }
@@ -481,5 +502,6 @@ mod tests {
         assert!(grouped.releases(index).iter().any(|i| file.games[*i].id == 6744684));
     }
 }
+
 
 

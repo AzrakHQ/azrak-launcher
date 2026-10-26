@@ -104,8 +104,8 @@ impl App {
         let short = matches!((g.g.size_gb, free), (Some(need), Some(free)) if need > free);
         // An older version than the catalog has: said before anything is downloaded.
         let older = g.newer.map(|n| &self.games[n]).and_then(|newest| Some((g.version_shown.clone()?, newest.version_shown.clone()?, newest)));
-        let older_note = older.as_ref().map(|(this, newest, release)| {
-            if crate::words::Availability::of(release.g.seeders) == crate::words::Availability::None {
+        let older_note = older.as_ref().map(|(this, newest, _)| {
+            if !g.outdated {
                 format!("Version {this}: {newest} is out, but nobody is sharing it")
             } else {
                 format!("Older version {this}: {newest} is under Choose another release")

@@ -1099,7 +1099,7 @@ impl App {
         // The game on other platforms: "Play it on" PS5 / PS4 / PC (versions.rs).
         h.versions = model(self.version_tiles(t));
         if let Some(index) = t.game {
-            // "Version 3 of 3 (newest)": releases numbered oldest first; no topic numbers.
+            // "Release 3 of 3 · newest version": releases numbered oldest first; no topic numbers.
             let members = self.release_order(index);
             h.release_count = members.len() as i32;
             let position = members.iter().position(|i| *i == index).unwrap_or(0) + 1;
@@ -1107,9 +1107,7 @@ impl App {
             let shown = &self.games[index];
             let newest = if shown.newer.is_some() {
                 " · older version"
-            } else if members.iter().any(|&m| self.games[m].newer.is_some_and(|n| self.games[n].version == shown.version
-                && crate::app::one_version_line(&self.games[n], shown)
-                && crate::app::same_game(&crate::app::same_game_keys(&self.games[n]), &crate::app::same_game_keys(shown)))) {
+            } else if shown.newest {
                 " · newest version"
             } else {
                 ""

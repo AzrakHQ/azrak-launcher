@@ -130,6 +130,9 @@ pub struct GameV {
     /// A newer version of the game on the same platform can be downloaded (someone shares it):
     /// this one isn't offered first.
     pub outdated: bool,
+    /// It's the newest version of its line, with older ones beside it, and can be downloaded:
+    /// the release picker says "newest version".
+    pub newest: bool,
 }
 
 pub struct LocalV {
@@ -815,6 +818,7 @@ impl App {
                 version_shown,
                 newer: None,
                 outdated: false,
+                newest: false,
                 info,
                 g,
             });
@@ -3554,47 +3558,59 @@ pub fn same_game(a: &[String; 2], b: &[String; 2]) -> bool {
     a.iter().any(|key| !key.is_empty() && b.contains(key))
 }
 
-/// Two releases whose versions follow one line: the same game on the same platform, both PC
-/// games native or both through Wine (a Linux port numbers its own), a console game's same
-/// title ID (each region's numbers its own patches), neither a PKG (it can't be installed).
-pub fn one_version_line(a: &GameV, b: &GameV) -> bool {
-    let ids = |g: &GameV| std::iter::once(&g.g.title_id).chain(&g.g.title_ids).filter(|id| crate::psn::valid_title_id(id))
-        .map(|id| id.to_ascii_uppercase()).collect::<Vec<_>>();
-    let same_region = a.g.platform == crate::platform::Platform::Pc || {
-        let (x, y) = (ids(a), ids(b));
-        x.is_empty() || y.is_empty() || x.iter().any(|id| y.contains(id))
-    };
-    a.g.platform == b.g.platform && a.g.wine == b.g.wine && !a.g.is_pkg() && !b.g.is_pkg() && same_region
+/// What says which version line a release is on, worked out once per group: the same game on
+/// the same platform, both PC games native or both through Wine (a Linux port numbers its own),
+/// a console game's same title ID (each region numbers its own patches), never a PKG (it can't
+/// be installed).
+struct LineKey {
+    names: [String; 2],
+    ids: Vec<String>,
 }
 
-/// The releases of `members` on release `i`'s version line (itself included). `keys` are
-/// `same_game_keys` of `members`.
-fn version_line(games: &[GameV], members: &[usize], keys: &[[String; 2]], i: usize) -> Vec<usize> {
-    let Some(k) = members.iter().position(|&m| m == i) else { return Vec::new() };
-    (0..members.len()).filter(|&d| one_version_line(&games[members[d]], &games[i]) && same_game(&keys[d], &keys[k])).map(|d| members[d]).collect()
+impl LineKey {
+    fn of(g: &GameV) -> LineKey {
+        let ids = std::iter::once(&g.g.title_id).chain(&g.g.title_ids).filter(|id| crate::psn::valid_title_id(id))
+            .map(|id| id.to_ascii_uppercase()).collect();
+        LineKey { names: same_game_keys(g), ids }
+    }
+}
+
+fn one_version_line(a: (&GameV, &LineKey), b: (&GameV, &LineKey)) -> bool {
+    let ((a, ka), (b, kb)) = (a, b);
+    let same_region = a.g.platform == crate::platform::Platform::Pc
+        || ka.ids.is_empty() || kb.ids.is_empty() || ka.ids.iter().any(|id| kb.ids.contains(id));
+    a.g.platform == b.g.platform && a.g.wine == b.g.wine && !a.g.is_pkg() && !b.g.is_pkg()
+        && same_region && same_game(&ka.names, &kb.names)
 }
 
 /// Each release with a newer version of its game on its version line points at the newest one
 /// someone shares, else the newest (`GameV::newer`), and is `outdated` when a newer one can be
-/// downloaded. Versions are compared only with their own kind (numbers with numbers, builds
-/// with builds, update counts with counts); a release whose version can't be read, or whose
-/// newer ones can't be downloaded at all, is never called older.
+/// downloaded; the newest that can be downloaded is `newest`. Versions are compared only with
+/// their own kind (numbers with numbers, builds with builds, update counts with counts); a
+/// release whose version can't be read, or whose newer ones can't be downloaded at all, is
+/// never called older.
 pub fn mark_newer_versions(games: &mut [GameV], groups: &[Vec<usize>]) {
     use crate::words::Availability;
+    use std::cmp::Ordering::{Equal, Greater};
     for members in groups.iter().filter(|m| m.len() > 1) {
-        let keys: Vec<[String; 2]> = members.iter().map(|&m| same_game_keys(&games[m])).collect();
-        let marks: Vec<(usize, usize, bool)> = members.iter().filter_map(|&i| {
+        let keys: Vec<LineKey> = members.iter().map(|&m| LineKey::of(&games[m])).collect();
+        let downloadable = |p: usize| !games[p].g.magnet.is_empty();
+        let marks: Vec<(usize, Option<usize>, bool, bool)> = (0..members.len()).filter_map(|k| {
+            let i = members[k];
             let mine = games[i].version.as_ref().filter(|_| !games[i].g.is_pkg())?;
-            let newer: Vec<usize> = version_line(games, members, &keys, i).into_iter()
-                .filter(|&p| !games[p].g.magnet.is_empty())
-                .filter(|&p| games[p].version.as_ref().and_then(|v| v.compare(mine)) == Some(std::cmp::Ordering::Greater)).collect();
+            let line: Vec<usize> = (0..members.len()).filter(|&d| one_version_line((&games[members[d]], &keys[d]), (&games[i], &keys[k])))
+                .map(|d| members[d]).filter(|&p| downloadable(p)).collect();
+            let compare = |p: usize| games[p].version.as_ref().and_then(|v| v.compare(mine));
+            let newer: Vec<usize> = line.iter().copied().filter(|&p| compare(p) == Some(Greater)).collect();
             let newest = |p: &usize| (games[*p].version.clone(), games[*p].g.id);
             let shared = newer.iter().copied().filter(|&p| Availability::of(games[p].g.seeders) != Availability::None).max_by_key(newest);
-            let named = shared.or_else(|| newer.iter().copied().max_by_key(newest))?;
-            Some((i, named, shared.is_some()))
+            let named = shared.or_else(|| newer.iter().copied().max_by_key(newest));
+            // The newest of a line that has older ones too.
+            let top = named.is_none() && downloadable(i) && line.iter().any(|&p| compare(p).is_some_and(|o| o != Equal));
+            Some((i, named, shared.is_some(), top))
         }).collect();
-        for (i, newer, outdated) in marks {
-            (games[i].newer, games[i].outdated) = (Some(newer), outdated);
+        for (i, newer, outdated, newest) in marks {
+            (games[i].newer, games[i].outdated, games[i].newest) = (newer, outdated, newest);
         }
     }
 }
@@ -3747,7 +3763,7 @@ mod art_tests {
     fn releases_without_art_borrow_another_releases_pictures() {
         let game = |name: &str, platform: Platform, cover: &str, info: Option<Info>| GameV {
             g: Game { name: name.into(), platform, cover: cover.into(), ..Default::default() }, info, name: name.into(),
-            buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None, version: None, version_shown: None, newer: None, outdated: false,
+            buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None, version: None, version_shown: None, newer: None, outdated: false, newest: false,
         };
         let sony = Info { master: "https://sony/bb.png".into(), short: "About Bloodborne.".into(), ..Default::default() };
         let mut games = vec![
@@ -3770,7 +3786,7 @@ mod art_tests {
     fn a_games_details_are_shared_by_its_versions_only() {
         let game = |name: &str, platform: Platform, info: Option<Info>| GameV {
             g: Game { name: name.into(), platform, ..Default::default() }, info, name: name.into(),
-            buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None, version: None, version_shown: None, newer: None, outdated: false,
+            buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None, version: None, version_shown: None, newer: None, outdated: false, newest: false,
         };
         let ps4 = Info { long: "About Ghost.".into(), short: "Ghost.".into(), rating: Some(crate::psn::Rating { score: 4.6, total: 330 }),
             shots: vec!["ps4.jpg".into()], video: "ps4.mp4".into(), poster: "ps4-poster.jpg".into(), store: "https://store/ps4".into(),
@@ -3813,7 +3829,7 @@ mod art_tests {
             g: Game { id, name: "Far Cry 5".into(), platform, version: version.into(), magnet: "magnet:?xt=test".into(), ..Default::default() },
             info: None, name: "Far Cry 5".into(),
             buckets: vec![], search: Default::default(), rel_day: 0, is_new: false, local: None,
-            version: crate::game_groups::parse_version(version), version_shown: crate::game_groups::read_version(version).map(|(_, s)| s), newer: None, outdated: false,
+            version: crate::game_groups::parse_version(version), version_shown: crate::game_groups::read_version(version).map(|(_, s)| s), newer: None, outdated: false, newest: false,
         };
         let mut games = vec![
             game(1, Platform::Ps4, "1.19"), game(2, Platform::Ps4, "1.12 (dated 01.02.2019)"), game(3, Platform::Ps4, "N/A"),
@@ -3868,6 +3884,16 @@ mod art_tests {
         (games[0].g.title_id, games[1].g.title_id, games[2].g.title_id) = ("CUSA00001".into(), "CUSA10001".into(), "CUSA00001".into());
         mark_newer_versions(&mut games, &[vec![0, 1, 2]]);
         assert_eq!(games.iter().map(|g| g.newer).collect::<Vec<_>>(), [Some(2), None, None]);
+        // The newest of a line is said to be so: twins both, a copy with nothing to download it
+        // from not, nor a release with nothing older beside it.
+        let mut games = vec![named("Hades", "1.12", Some(5), ""), named("Hades", "1.19", Some(5), ""),
+            named("Hades", "1.19", Some(5), ""), named("Hades", "1.19", Some(5), "")];
+        games[3].g.magnet.clear();
+        mark_newer_versions(&mut games, &[vec![0, 1, 2, 3]]);
+        assert_eq!(games.iter().map(|g| g.newest).collect::<Vec<_>>(), [false, true, true, false]);
+        let mut alone = vec![named("Hades", "1.19", Some(5), ""), named("Hades", "1.19", Some(5), "")];
+        mark_newer_versions(&mut alone, &[vec![0, 1]]);
+        assert!(alone.iter().all(|g| !g.newest));
     }
 
     #[test]
