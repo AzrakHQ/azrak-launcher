@@ -167,9 +167,10 @@ impl App {
     }
 
     /// What makes one release a better pick than another, best highest: the one you have, one
-    /// you can get (with anyone sharing it), then the newest version of the game on its platform
-    /// (no one downloads an old version by default); then how it plays (`play_rank`), a picture
-    /// for its card (no placeholder while a release has one), `tie_rank`, the most shared.
+    /// you can get (with anyone sharing it), how it plays here, then not an older version than
+    /// one that can be downloaded (versions of one title play alike, so the newest is offered
+    /// by default) and a version that can be read; then a picture for its card (no placeholder
+    /// while a release has one), `tie_rank`, the most shared.
     pub fn release_rank(&self, i: usize) -> impl Ord + use<> {
         let g = &self.games[i];
         let installed = self.locals.get(g.local.unwrap_or(usize::MAX)).map(|l| crate::game_groups::parse_version(&l.l.version));
@@ -177,7 +178,7 @@ impl App {
         let (score, shared) = self.play_rank(i);
         (
             (installed_version, g.local.is_some(), !g.g.magnet.is_empty()),
-            (shared, g.newer.is_none(), score),
+            (shared, score, !g.outdated, g.version.is_some()),
             (self.has_card_art(i), self.tie_rank(i), g.info.as_ref().is_some_and(|info| !info.master.is_empty())),
             (g.g.seeders.unwrap_or(0), g.g.id),
         )

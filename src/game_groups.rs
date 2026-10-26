@@ -177,68 +177,94 @@ impl Groups {
 }
 
 /// A release's version, read so two can be compared: its numbers ("v01.200", "1.19",
-/// "01.000.031"; "1.2b" after "1.2a"), or else a build number ("Build 25734961"). Dates and notes
-/// ("(dated 25.03.2026)", "N/A", "No patches released") aren't versions.
+/// "01.000.031"; "1.2b" after "1.2a"), a build number ("Build 25734961") or a count of updates
+/// ("Update 8"). Dates and notes ("(dated 25.03.2026)", "N/A", "No patches released") aren't
+/// versions.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Version {
     Numbers(Vec<u64>, u8),
     Build(u64),
+    Count(u64),
 }
 
 impl Version {
-    /// Newer or older than `other`, if the two can be compared at all (numbers with numbers,
-    /// builds with builds: "2.0.0.1" says nothing next to build 25240193).
-    pub fn compare(&self, other: &Version) -> Option<std::cmp::Ordering> {
-        match (self, other) {
-            (Version::Numbers(..), Version::Numbers(..)) | (Version::Build(_), Version::Build(_)) => Some(self.cmp(other)),
-            _ => None,
+    /// Which kind it is: only versions of one kind compare.
+    pub fn kind(&self) -> u8 {
+        match self {
+            Version::Numbers(..) => 0,
+            Version::Build(_) => 1,
+            Version::Count(_) => 2,
         }
     }
 
-    /// As people write it: "1.19", "1.2b", "build 25734961".
-    pub fn label(&self) -> String {
-        match self {
-            Version::Numbers(n, s) => {
-                let mut text = n.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(".");
-                if n.len() == 1 && *s == 0 {
-                    text.push_str(".0");
-                }
-                if *s > 0 {
-                    text.push((b'a' + s - 1) as char);
-                }
-                text
-            }
-            Version::Build(b) => format!("build {b}"),
-        }
+    /// Newer or older than `other`, if the two can be compared at all ("2.0.0.1" says nothing
+    /// next to build 25240193, nor "1.19" next to "Update 8").
+    pub fn compare(&self, other: &Version) -> Option<std::cmp::Ordering> {
+        (self.kind() == other.kind()).then(|| self.cmp(other))
     }
 }
 
+/// The kind most of `versions` are (numbers on a tie): the one a game's releases are compared by.
+pub fn main_kind<'a>(versions: impl IntoIterator<Item = &'a Version>) -> Option<u8> {
+    let mut counts = [0usize; 3];
+    for v in versions {
+        counts[v.kind() as usize] += 1;
+    }
+    (0..3u8).filter(|&k| counts[k as usize] > 0).max_by_key(|&k| (counts[k as usize], std::cmp::Reverse(k)))
+}
+
 pub fn parse_version(text: &str) -> Option<Version> {
+    read_version(text).map(|(version, _)| version)
+}
+
+/// The version as the catalog writes it, to show: "1.05", not "1.5" (which reads as newer
+/// than 1.19); "build 25734961".
+pub fn version_text(text: &str) -> Option<String> {
+    read_version(text).map(|(_, shown)| shown)
+}
+
+fn read_version(text: &str) -> Option<(Version, String)> {
     static NOTES: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\([^()]*\)|\[[^\]]*\]").unwrap());
-    static DATE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"\b(?:19|20)\d{2}-\d{1,2}-\d{1,2}\b|\b\d{1,2}[./-]\d{1,2}[./-](?:19|20)\d{2}\b").unwrap());
-    static DOTTED: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)(?:^|[^\w.])v?(\d+(?:\.\d+)+)([a-z])?").unwrap());
+    // Dates, with a four-digit year (a version like 1.0.10 isn't one), and "dated ..." to the end.
+    static DATE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(
+        r"(?i)\bdated\b.*$|\b(?:19|20)\d{2}[./-]\d{1,2}[./-]\d{1,2}\b|\b\d{1,2}[./-]\d{1,2}[./-](?:19|20)\d{2}\b").unwrap());
+    // "v1.05", "v.1.05", "ver.1.05", "version 1.05": the number.
+    static PREFIX: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:version|ver|v)\.?\s*(\d)").unwrap());
+    static DOTTED: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)(?:^|[^\w.])(\d+(?:\.\d+)+)([a-z])?").unwrap());
     static BUILD: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)\b(?:build|assembly)\s*(\d+)").unwrap());
-    static LONE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)^\s*(?:v|update\s*|patch\s*)?(\d+)\s*$").unwrap());
+    static LONE: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?i)^\s*(update\s*|patch\s*)?(\d+)\s*$").unwrap());
     let text = NOTES.replace_all(text, " ");
     let text = DATE.replace_all(&text, " ");
+    let text = PREFIX.replace_all(&text, " $1");
     // "from 1.00" says what a release updates, not what it is.
     if text.trim_start().to_lowercase().starts_with("from ") {
         return None;
     }
-    if let Some(c) = DOTTED.captures(&text) {
+    // The highest version written: "1.00 + 1.19 update" carries 1.19; "1.05 from 1.00" is 1.05.
+    let dotted = DOTTED.captures_iter(&text).map(|c| {
         let mut numbers: Vec<u64> = c[1].split('.').filter_map(|x| x.parse().ok()).collect();
         while numbers.len() > 1 && numbers.last() == Some(&0) {
             numbers.pop();
         }
         let suffix = c.get(2).map_or(0, |m| m.as_str().to_ascii_lowercase().as_bytes()[0] - b'a' + 1);
-        return Some(Version::Numbers(numbers, suffix));
+        let shown = format!("{}{}", &c[1], c.get(2).map_or("", |m| m.as_str()));
+        (Version::Numbers(numbers, suffix), shown)
+    }).max_by(|a, b| a.0.cmp(&b.0));
+    if dotted.is_some() {
+        return dotted;
     }
     if let Some(c) = BUILD.captures(&text) {
-        return c[1].parse().ok().map(Version::Build);
+        let build: u64 = c[1].parse().ok()?;
+        return Some((Version::Build(build), format!("build {build}")));
     }
-    let n: u64 = LONE.captures(&text)?[1].parse().ok()?;
-    // A lone big number is a build (Steam's); a small one a version ("Update 8").
-    Some(if n >= 10_000 { Version::Build(n) } else { Version::Numbers(vec![n], 0) })
+    let c = LONE.captures(&text)?;
+    let n: u64 = c[2].parse().ok()?;
+    match n {
+        // A big number is a build (Steam's); a year is no version; else a count of updates.
+        10_000.. => Some((Version::Build(n), format!("build {n}"))),
+        1980..=2100 if c.get(1).is_none() => None,
+        _ => Some((Version::Count(n), format!("{}{n}", c.get(1).map_or("", |m| m.as_str())))),
+    }
 }
 
 #[cfg(test)]
@@ -350,14 +376,25 @@ mod tests {
         assert_eq!(cmp("1.05 / 1.02", "1.05"), Some(Equal));
         assert_eq!(cmp("1.99.2-s Build 25734961", "1.99.2"), Some(Equal));
         assert_eq!(cmp("Build 25734961", "build 25600000"), Some(Greater));
+        // Prefixes, the highest of several versions, dates in other forms.
+        assert_eq!(cmp("v.1.05", "ver.1.05"), Some(Equal));
+        assert_eq!(cmp("version 1.05", "1.05"), Some(Equal));
+        assert_eq!(cmp("1.00 + 1.19 update", "1.19"), Some(Equal));
+        assert_eq!(cmp("1.05 from 1.00", "1.05"), Some(Equal));
+        assert_eq!(cmp("1.5 dated 18.11.22", "1.5"), Some(Equal));
+        // Counts of updates compare only with counts; a build next to a version: nothing to say.
         assert_eq!(cmp("Update 8", "Update 10"), Some(Less));
-        // A build next to a version: nothing to say.
+        assert_eq!(cmp("Update 8", "1.19"), None);
         assert_eq!(cmp("25240193 (29.09.2026)", "2.0.0.1 (build 18.11.22)"), None);
-        for nothing in ["", "N/A", "n/a", "Release", "N/A (2024-01-02)", "from 1.00.0", "12-05-2024"] {
+        for nothing in ["", "N/A", "n/a", "Release", "N/A (2024-01-02)", "from 1.00.0", "12-05-2024", "2024.01.02", "2019"] {
             assert_eq!(v(nothing), None, "{nothing}");
         }
-        assert_eq!(v("vN.N (No patches released)".replace('N', "1").as_str()).map(|v| v.label()), Some("1.1".into()));
-        assert_eq!((v("1.20").unwrap().label(), v("2").unwrap().label(), v("Build 5")), ("1.20".into(), "2.0".into(), Some(Version::Build(5))));
+        // Shown as written: 1.05 isn't 1.5.
+        assert_eq!((version_text("v1.05"), version_text("Build 5"), version_text("Update 8")),
+            (Some("1.05".into()), Some("build 5".into()), Some("Update 8".into())));
+        // The kind most of them are; numbers on a tie.
+        let all = [v("1.0").unwrap(), v("Build 20000").unwrap(), v("Build 30000").unwrap(), v("2.0").unwrap()];
+        assert_eq!((main_kind(&all), main_kind(&all[1..3])), (Some(0), Some(1)));
     }
     #[test]
     fn shared_artwork_names_group_cards_and_empty_names_do_not() {

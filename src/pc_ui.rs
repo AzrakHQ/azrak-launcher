@@ -103,7 +103,8 @@ impl App {
         let free = crate::pc::free_gb(&crate::util::expand_home(&dir));
         let short = matches!((g.g.size_gb, free), (Some(need), Some(free)) if need > free);
         // An older version than the catalog has: said before anything is downloaded.
-        let older = g.newer.map(|n| &self.games[n]).and_then(|newest| Some((g.version.as_ref()?.label(), newest.version.as_ref()?.label(), newest)));
+        let text = crate::game_groups::version_text;
+        let older = g.newer.map(|n| &self.games[n]).and_then(|newest| Some((text(&g.g.version)?, text(&newest.g.version)?, newest)));
         let older_note = older.as_ref().map(|(this, newest, release)| {
             if crate::words::Availability::of(release.g.seeders) == crate::words::Availability::None {
                 format!("Version {this}: {newest} is out, but nobody is sharing it")
