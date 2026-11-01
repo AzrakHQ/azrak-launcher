@@ -404,7 +404,7 @@ impl App {
             let first = n == 0 || rows[n - 1].1.group != d.group;
             let mut actions: Vec<ActionData> = d.actions.iter().enumerate().map(|(k, (id, label, icon))| ActionData {
                 // Delete is an icon beside the others until it's focused (it's never the main thing to do).
-                id: (*id).into(), label: (*label).into(), icon: (*icon).into(), primary: k == 0, danger: false, round: *id == "delete" && k >= 2,
+                id: (*id).into(), label: (*label).into(), icon: (*icon).into(), primary: k == 0, danger: *id == "delete", round: *id == "delete" && k >= 2,
             }).collect();
             actions.push(ActionData { id: "folder".into(), label: "Open folder".into(), icon: "folder".into(), primary: false, danger: false, round: true });
             data.push(crate::DownloadData {
