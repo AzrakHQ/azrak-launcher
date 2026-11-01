@@ -211,6 +211,9 @@ pub struct App {
     pub dl_speeds: HashMap<String, std::collections::VecDeque<f32>>,
     /// The art the Downloads page asked for, so it's redrawn when that arrives.
     pub dl_keys: HashSet<String>,
+    /// The Delete dialog: which download, its choices (ids), the one with focus.
+    pub dl_delete: Option<(String, Vec<&'static str>)>,
+    pub dl_delete_sel: usize,
     /// Blurred copies of art for the glass drawn over it (present::frosted), by image key.
     pub frost: HashMap<String, slint::Image>,
     pub live: Vec<Session>,
@@ -524,6 +527,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         dl_speeds: HashMap::new(),
         dl_keys: HashSet::new(),
         frost: HashMap::new(),
+        dl_delete: None,
+        dl_delete_sel: 0,
         live: Vec::new(),
         images: images::Store::new(pool, 200),
         monitors,
@@ -771,6 +776,7 @@ fn wire_callbacks(ui: &AppWindow) {
     ui.on_trailer_action(|action| with_app(move |app| app.trailer_action(&action)));
     ui.on_download_close(|| with_app(|app| app.back()));
     ui.on_download_select(|i| with_app(move |app| app.select_download(i as usize, true)));
+    ui.on_download_delete_choose(|i| with_app(move |app| app.delete_choose(i)));
     ui.on_download_filter_clicked(|i| with_app(move |app| app.filter_downloads(i as usize)));
     ui.on_setup_toggle(|i| with_app(move |app| app.setup_toggle(i)));
     ui.on_setup_go(|| with_app(|app| app.setup_go()));

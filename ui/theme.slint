@@ -150,6 +150,8 @@ export struct DownloadData {
     group: int, group-first: bool, group-label: string,
 }
 export struct DlTab { label: string, count: string, warn: bool }
+// A choice on the Delete dialog; danger: it deletes files.
+export struct DlChoice { label: string, detail: string, danger: bool }
 // A file on the Download & install panel.
 export struct SetupFile { dir: string, name: string, size: string, on: bool, blocked: bool }
 

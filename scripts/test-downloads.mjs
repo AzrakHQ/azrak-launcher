@@ -165,9 +165,14 @@ try {
   await key('ctrl+d', 'Right', 'Right', 'Up', 'Right', 'Return'); // Paused -> Cancel (keeps files).
   const cancelled = await shot('cancelled');
   assert.match(cancelled, /Cancelled/);
-  await key('Return'); // The same button is now Remove: history goes, never payload.
-  const removed = await shot('history-removed');
-  assert.doesNotMatch(removed, /Generated progress snapshot/);
+  await key('Return'); // The same button is now Delete…, which asks what to delete.
+  const asked = await shot('delete-dialog');
+  assert.match(asked, /Delete the download/);
+  assert.match(asked, /Remove from Downloads only/);
+  await key('Up', 'Return'); // Cancel -> Remove from Downloads only: history goes, never payload.
+  const removed = await shot('history-removed', 1);
+  assert.match(removed, /every file is kept/); // The toast (it names the game, so no doesNotMatch).
+  assert.match(removed, /All\s*2/);
   assert.deepEqual(JSON.parse(await readFile(manifest)).jobs.map(job => job.key), [hash2, catalogHash]);
   assert.equal(digest(await readFile(payload)), before);
   await assert.rejects(access(installRoot), 'Completion alone must never create an installation destination');

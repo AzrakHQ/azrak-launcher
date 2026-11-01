@@ -1,4 +1,4 @@
-import { S, Theme, Icons, DownloadData, DlTab, SetupFile, ActionData } from "theme.slint";
+import { S, Theme, Icons, DownloadData, DlTab, DlChoice, SetupFile, ActionData } from "theme.slint";
 import { ScrollView } from "std-widgets.slint";
 import { BackButton, Btn, FocusRing } from "widgets.slint";
 
@@ -91,6 +91,13 @@ export component DownloadsPage inherits Rectangle {
     // The selected download's art, blurred, for the glass over it.
     in property <image> glass;
     in property <bool> has-glass;
+    // Delete: what to delete, the choice with focus.
+    in property <bool> delete-open;
+    in property <string> delete-title;
+    in property <[DlChoice]> delete-choices;
+    in property <int> delete-sel;
+    callback delete-choose(int);
+    callback delete-close();
     callback action(string, string);
     callback select(int);
     callback filter-clicked(int);
@@ -315,6 +322,37 @@ export component DownloadsPage inherits Rectangle {
                     spacing: (4px * S.k); padding-left: (2px * S.k);
                     Text { text: t.title; font-size: (18px * S.k); font-weight: 600; color: Theme.text; overflow: elide; }
                     Text { text: t.line; font-size: (15px * S.k); color: t.kind == 0 ? Theme.hint : root.kind-color(t.kind); overflow: elide; }
+                }
+            }
+        }
+    }
+
+    // Delete: what to delete, never without this question.
+    if root.delete-open: Rectangle {
+        background: #03050cd9;
+        TouchArea { clicked => { root.delete-close(); } }
+        Rectangle {
+            width: min(root.width - (160px * S.k), (780px * S.k)); height: box.preferred-height;
+            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+            border-radius: (24px * S.k); background: #0e1424; border-width: 1px; border-color: #ffffff24;
+            drop-shadow-blur: (60px * S.k); drop-shadow-color: #00000099;
+            TouchArea { }
+            box := VerticalLayout {
+                padding: (40px * S.k); spacing: (8px * S.k);
+                Text { text: "Delete " + root.delete-title + "?"; font-size: (32px * S.t); font-weight: 600; color: Theme.text; wrap: word-wrap; }
+                Text { text: "Deleted files can't be brought back. Downloading again is always possible."; font-size: (18px * S.t); color: Theme.text2; wrap: word-wrap; }
+                Rectangle { height: (16px * S.k); }
+                for c[i] in root.delete-choices: Rectangle {
+                    height: choice.preferred-height;
+                    border-radius: (14px * S.k);
+                    background: root.delete-sel == i ? (c.danger ? #ff5a6a2e : #ffffff17) : pick.has-hover ? #ffffff0d : transparent;
+                    border-width: root.delete-sel == i ? (3px * S.k) : 0; border-color: c.danger ? Theme.danger : Theme.ring;
+                    choice := VerticalLayout {
+                        padding: (16px * S.k); padding-left: (20px * S.k); spacing: (4px * S.k);
+                        Text { text: c.label; font-size: (21px * S.t); font-weight: 600; color: c.danger ? #ff8f9c : Theme.text; }
+                        if c.detail != "": Text { text: c.detail; font-size: (16px * S.t); color: Theme.hint; wrap: word-wrap; }
+                    }
+                    pick := TouchArea { mouse-cursor: pointer; clicked => { root.delete-choose(i); } }
                 }
             }
         }

@@ -158,6 +158,34 @@ impl Manager {
         Ok(())
     }
 
+    /// Delete a game this installer installed: the folder it published (links inside it are
+    /// removed, never followed) and its record. A folder that's already gone is just forgotten.
+    pub fn uninstall(&self, key: &str) -> Result<PathBuf> {
+        let mut jobs = self.core.jobs.lock().unwrap();
+        let job = jobs.iter().find(|j| j.key == key && j.state == State::Installed).context("This game wasn't installed by Azrak")?;
+        let path = job.path.clone().context("Its install folder wasn't recorded")?;
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        ensure!(path.is_absolute() && path.components().count() >= 3 && Some(&path) != home.as_ref()
+            && path.components().all(|c| matches!(c, Component::RootDir | Component::Normal(_))),
+            "Refusing to delete {}", path.display());
+        match fs::symlink_metadata(&path) {
+            Ok(meta) => {
+                ensure!(meta.is_dir() && !meta.file_type().is_symlink(), "{} isn't the installed game's folder", path.display());
+                let parent = Dir::absolute(path.parent().context("No parent folder")?, false)?;
+                let leaf = path.file_name().context("No folder name")?.as_bytes();
+                remove_contents(&parent.child(leaf, false)?, 0)?;
+                let name = component(leaf)?;
+                let r = unsafe { libc::unlinkat(parent.0.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) };
+                ensure!(r == 0, "Delete {}: {}", path.display(), std::io::Error::last_os_error());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+        jobs.retain(|j| j.key != key);
+        self.core.save(&jobs)?;
+        Ok(path)
+    }
+
     pub fn cancel(&self, key: &str) -> Result<()> {
         let worker = self.worker.lock().unwrap();
         let jobs = self.core.jobs.lock().unwrap();
@@ -1399,6 +1427,44 @@ fn save_records(store: &Path, jobs: &[Record]) -> Result<()> {
     let result = result();
     if result.is_err() { if let Ok(name) = component(name.as_bytes()) { unsafe { libc::unlinkat(dir.0.as_raw_fd(), name.as_ptr(), 0); } } }
     result
+}
+
+#[cfg(test)]
+mod uninstall_tests {
+    use super::*;
+
+    #[test]
+    fn uninstall_deletes_the_game_folder_but_never_follows_links_out_of_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let game = temp.path().join("library").join("PPSA00001");
+        fs::create_dir_all(game.join("sce_sys")).unwrap();
+        fs::write(game.join("eboot.bin"), b"not a program").unwrap();
+        let outside = temp.path().join("precious.txt");
+        fs::write(&outside, b"keep me").unwrap();
+        std::os::unix::fs::symlink(&outside, game.join("sce_sys").join("link")).unwrap();
+        std::os::unix::fs::symlink(temp.path(), game.join("dir-link")).unwrap();
+        let store = temp.path().join("installs");
+        save_records(&store, &[Record { key: "k".repeat(40), topic: 1, name: "Game".into(), state: State::Installed, done: 1, total: 1,
+            error: String::new(), path: Some(game.clone()), title_id: "PPSA00001".into() }]).unwrap();
+        let manager = Manager::at(store.clone());
+        assert!(manager.uninstall("other").is_err());
+        assert_eq!(manager.uninstall(&"k".repeat(40)).unwrap(), game);
+        assert!(!game.exists());
+        assert_eq!(fs::read(&outside).unwrap(), b"keep me");
+        assert!(temp.path().join("library").is_dir());
+        assert!(Manager::at(store).snapshot().is_empty(), "the record is gone");
+    }
+
+    #[test]
+    fn uninstall_refuses_a_record_that_points_somewhere_it_shouldnt() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = temp.path().join("installs");
+        for path in [PathBuf::from("/"), PathBuf::from("/home"), temp.path().join("a/../b")] {
+            save_records(&store, &[Record { key: "k".repeat(40), topic: 1, name: "Game".into(), state: State::Installed, done: 1, total: 1,
+                error: String::new(), path: Some(path.clone()), title_id: String::new() }]).unwrap();
+            assert!(Manager::at(store.clone()).uninstall(&"k".repeat(40)).is_err(), "{}", path.display());
+        }
+    }
 }
 
 #[cfg(test)]

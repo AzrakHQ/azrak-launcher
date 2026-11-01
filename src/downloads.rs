@@ -114,7 +114,7 @@ impl Default for Policy {
     }
 }
 
-enum Command { Prepare(Job), Begin { key: String, base: PathBuf, selected: Vec<usize>, install_to: Option<PathBuf> }, Discard(String), Start(String), Pause(String), Cancel(String), Remove(String), StopSeed(String), Seed(String), SetSeedAfterDownload(bool), SetVpn(Option<String>), Shutdown }
+enum Command { Prepare(Job), Begin { key: String, base: PathBuf, selected: Vec<usize>, install_to: Option<PathBuf> }, Discard(String), Start(String), Pause(String), Cancel(String), Remove(String), Delete(String), NoInstall(String), StopSeed(String), Seed(String), SetSeedAfterDownload(bool), SetVpn(Option<String>), Shutdown }
 
 const VPN_WAIT: &str = "Waiting for your VPN: downloads only run through it (Settings → Downloads)";
 const FILES_CHANGED: &str = "The downloaded files were moved, changed or deleted, so this download can't seed. Remove it, or download it again.";
@@ -183,6 +183,13 @@ impl Manager {
 
     /// Forget a download that never started (the player closed the Download & install panel):
     /// stop looking it up and remove it, with its still-empty folder.
+    /// Stop it installing by itself (its game is being deleted). Takes effect at once, so the
+    /// install queue can't pick it up again in between; the worker saves it.
+    pub fn no_install(&self, key: &str) -> Result<()> {
+        if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key) { job.install_to = None; }
+        self.tx.try_send(Command::NoInstall(key.into())).context("Download worker is busy or unavailable")
+    }
+
     pub fn discard(&self, key: &str) -> Result<()> {
         self.tx.try_send(Command::Discard(key.into())).context("Download worker is busy or unavailable")
     }
@@ -197,6 +204,7 @@ impl Manager {
             "pause" if matches!(job.state, State::Checking | State::Downloading) => Command::Pause(key.into()),
             "cancel" if !matches!(job.state, State::Complete | State::Cancelled) => Command::Cancel(key.into()),
             "remove" if !job.state.active() => Command::Remove(key.into()),
+            "delete" if !job.state.active() => Command::Delete(key.into()),
             "stop_seed" if job.state == State::Complete && (job.seeding || job.verifying) => Command::StopSeed(key.into()),
             "share" if job.state == State::Complete && !job.seeding && !job.verifying => Command::Seed(key.into()),
             _ => return Ok(()),
@@ -842,6 +850,26 @@ impl Worker {
         Ok(())
     }
 
+    /// Delete a download's files (its own folder, checked by the marker inside it), then forget it.
+    async fn delete(&mut self, key: &str) -> Result<()> {
+        let Some(job) = self.job(key).filter(|job| !job.state.active()) else { return Ok(()); };
+        self.by_hand.remove(key);
+        self.stop_job(key, job.state).await?;
+        match std::fs::symlink_metadata(&job.folder) {
+            Ok(meta) => {
+                ensure!(meta.is_dir() && !meta.file_type().is_symlink() && meta.uid() == unsafe { libc::geteuid() }
+                    && job.folder.file_name().is_some_and(|name| name == format!("torrent-{key}").as_str())
+                    && std::fs::read_to_string(job.folder.join(MARKER)).ok().as_deref() == Some(key),
+                    "Refusing to delete {}: it isn't this download's own folder", job.folder.display());
+                // remove_dir_all removes links, never what they point to.
+                std::fs::remove_dir_all(&job.folder).with_context(|| format!("Delete {}", job.folder.display()))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        self.remove(key).await
+    }
+
     async fn remove(&mut self, key: &str) -> Result<()> {
         let Some(job) = self.job(key).filter(|job| !job.state.active()) else { return Ok(()); };
         // Stop/delete the engine handle BEFORE removing history. Never delete payload.
@@ -920,6 +948,12 @@ impl Worker {
                             Some((key.clone(), self.stop_job(&key, State::Cancelled).await))
                         },
                         Some(Command::Remove(key)) => Some((key.clone(), self.remove(&key).await)),
+                        Some(Command::Delete(key)) => Some((key.clone(), self.delete(&key).await)),
+                        Some(Command::NoInstall(key)) => {
+                            self.update(&key, |job| job.install_to = None);
+                            self.persist();
+                            None
+                        },
                         Some(Command::Seed(key)) => {
                             self.by_hand.insert(key.clone());
                             let result = self.seed(&key).await;
@@ -1777,6 +1811,40 @@ mod tests {
         manager.action(&key, "share").unwrap();
         rt.block_on(wait_job(&manager, &key, |job| job.seeding));
         manager.shutdown();
+    }
+
+    #[test]
+    fn delete_removes_only_the_downloads_own_folder() {
+        let rt = runtime();
+        let temp = tempfile::tempdir().unwrap();
+        let (seeder, torrent, _, _) = rt.block_on(seeder(temp.path()));
+        let mut manager = Manager::new(temp.path().join("state"), local_policy(&seeder));
+        let key = manager.prepare(6, "Deleted", &torrent.as_magnet().to_string(), temp.path().join("dl"), crate::platform::Platform::Ps5).unwrap();
+        rt.block_on(wait_job(&manager, &key, |job| job.state == State::Ready));
+        manager.action(&key, "start").unwrap();
+        let done = rt.block_on(wait_job(&manager, &key, |job| job.state == State::Complete));
+        let outside = temp.path().join("precious.txt");
+        std::fs::write(&outside, b"keep me").unwrap();
+        std::os::unix::fs::symlink(&outside, done.folder.join("link")).unwrap();
+        manager.action(&key, "delete").unwrap();
+        rt.block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while !manager.snapshot().is_empty() { tokio::time::sleep(Duration::from_millis(25)).await; }
+            }).await.expect("deleted");
+        });
+        assert!(!done.folder.exists());
+        assert_eq!(std::fs::read(&outside).unwrap(), b"keep me");
+        manager.shutdown();
+
+        // A folder that isn't the download's own (its marker says otherwise) is refused.
+        let mut job = job(temp.path(), &"f".repeat(40));
+        job.state = State::Complete;
+        std::fs::create_dir_all(&job.folder).unwrap();
+        std::fs::write(job.folder.join(MARKER), "someone else").unwrap();
+        std::fs::write(job.folder.join("theirs.bin"), b"x").unwrap();
+        let mut worker = Worker::new(temp.path().join("store3"), Arc::new(Mutex::new(vec![job.clone()])), Policy { local_only: true, ..Default::default() });
+        assert!(rt.block_on(worker.delete(&job.key)).is_err());
+        assert!(job.folder.join("theirs.bin").exists());
     }
 
     #[test]

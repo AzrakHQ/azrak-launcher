@@ -128,7 +128,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             d.note = job.error.clone();
             d.stats = vec![(format!("{} of {}", size_label(job.done), size), "Downloaded, and kept".into())];
             d.line = "Stopped".into();
-            d.actions = vec![("retry", "Retry", "retry"), ("remove", "Remove", "trash")];
+            d.actions = vec![("retry", "Retry", "retry"), ("delete", "Delete…", "trash")];
         }
         State::Cancelled => {
             (d.group, d.kind, d.bar) = (1, 1, 1);
@@ -136,15 +136,15 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             d.status = "Cancelled · what's downloaded is kept".into();
             d.dl_label = "Cancelled".into();
             d.line = "Cancelled".into();
-            d.actions = vec![("retry", "Download again", "retry"), ("remove", "Remove", "trash")];
+            d.actions = vec![("retry", "Download again", "retry"), ("delete", "Delete…", "trash")];
         }
         State::Complete => {
             d.dl = 1.0;
             d.dl_label = "Downloaded".into();
             let sharing = job.seeding || job.verifying;
-            // Sharing goes on and off; Remove (from this list, files kept) sits beside it.
+            // Sharing goes on and off; Delete (which asks what to delete) sits beside it.
             let share = if sharing { ("stop_seed", "Stop sharing", "unshare") } else { ("share", "Share again", "share") };
-            let remove = ("remove", "Remove from Downloads", "trash");
+            let remove = ("delete", "Delete…", "trash");
             match install.map(|r| r.state) {
                 Some(state) if state.active() => {
                     let record = install.unwrap();
@@ -286,6 +286,7 @@ impl App {
                 return;
             }
             "vpn" => { self.open_settings(); return; }
+            "delete" => return self.open_delete(key),
             "choose" => {
                 if let Some(game) = self.games.iter().position(|game| game.g.id == job.topic) {
                     let local = self.games[game].local;
@@ -402,8 +403,8 @@ impl App {
             }).unwrap_or((0.0, 0.0));
             let first = n == 0 || rows[n - 1].1.group != d.group;
             let mut actions: Vec<ActionData> = d.actions.iter().enumerate().map(|(k, (id, label, icon))| ActionData {
-                // Remove from Downloads is an icon until it's focused (it's never the main thing to do).
-                id: (*id).into(), label: (*label).into(), icon: (*icon).into(), primary: k == 0, danger: false, round: *label == "Remove from Downloads",
+                // Delete is an icon beside the others until it's focused (it's never the main thing to do).
+                id: (*id).into(), label: (*label).into(), icon: (*icon).into(), primary: k == 0, danger: false, round: *id == "delete" && k >= 2,
             }).collect();
             actions.push(ActionData { id: "folder".into(), label: "Open folder".into(), icon: "folder".into(), primary: false, danger: false, round: true });
             data.push(crate::DownloadData {
@@ -451,6 +452,10 @@ impl App {
         ui.set_download_down(mbps(down).into());
         ui.set_download_up(mbps(up).into());
         let (vpn_text, vpn_kind) = match vpn { None => ("", 0), Some(Some(_)) => ("VPN on", 1), Some(None) => ("Waiting for your VPN", 2) };
+        ui.set_download_delete_open(self.dl_delete.is_some());
+        ui.set_download_delete_title(self.dl_delete.as_ref().and_then(|(key, _)| jobs.iter().find(|job| &job.key == key)).map(|job| job.name.clone()).unwrap_or_default().into());
+        ui.set_download_delete_choices(ModelRc::new(VecModel::from(self.delete_choices())));
+        ui.set_download_delete_sel(self.dl_delete_sel as i32);
         ui.set_download_has_glass(glass.is_some());
         ui.set_download_glass(glass.unwrap_or_default());
         ui.set_download_has_any(!jobs.is_empty());
@@ -482,7 +487,99 @@ impl App {
         self.push_downloads();
     }
 
+    /// Delete asks what to delete: only what this download has.
+    fn open_delete(&mut self, key: &str) {
+        let Some(job) = self.downloads.snapshot().into_iter().find(|job| job.key == key) else { return };
+        let installed = self.installer.snapshot().into_iter().any(|r| r.key == key && r.state == Install::Installed);
+        let files = job.folder.is_dir();
+        let mut ids = vec![];
+        if installed && files { ids.push("both"); }
+        if installed { ids.push("game"); }
+        if files { ids.push("download"); }
+        ids.extend(["forget", "cancel"]);
+        self.dl_delete_sel = ids.len() - 1;
+        self.dl_delete = Some((key.into(), ids));
+        audio::play(Sound::Select);
+        self.push_downloads();
+    }
+
+    fn delete_choices(&self) -> Vec<crate::DlChoice> {
+        let Some((key, ids)) = &self.dl_delete else { return vec![] };
+        let job = self.downloads.snapshot().into_iter().find(|job| &job.key == key);
+        let install = self.installer.snapshot().into_iter().find(|r| &r.key == key);
+        let dl = job.as_ref().map_or(0, |job| job.done.max(if job.state == State::Complete { job.total } else { 0 }));
+        let game = install.as_ref().map_or(0, |r| r.total);
+        let sharing = job.as_ref().is_some_and(|job| job.seeding || job.verifying);
+        ids.iter().map(|id| {
+            let (label, detail, danger) = match *id {
+                "both" => ("Delete the game and its download".to_string(), format!("Frees {}. It leaves the Library and this list.", size_label(dl + game)), true),
+                "game" => ("Delete the installed game".into(), format!("Frees {}. The download stays{}, and Install puts the game back.",
+                    size_label(game), if sharing { " and keeps sharing" } else { "" }), true),
+                "download" => ("Delete the download".into(), if install.as_ref().is_some_and(|r| r.state == Install::Installed) {
+                    format!("Frees {}. The game stays installed; sharing it stops.", size_label(dl)) } else { format!("Frees {}.", size_label(dl)) }, true),
+                "forget" => ("Remove from Downloads only".into(), "Keeps every file. It just leaves this list.".into(), false),
+                _ => ("Cancel".into(), String::new(), false),
+            };
+            crate::DlChoice { label: label.into(), detail: detail.into(), danger }
+        }).collect()
+    }
+
+    /// A choice on the Delete dialog (-1: closed without one).
+    pub fn delete_choose(&mut self, index: i32) {
+        let Some((key, ids)) = self.dl_delete.take() else { return };
+        let choice = usize::try_from(index).ok().and_then(|i| ids.get(i).copied()).unwrap_or("cancel");
+        let name = self.downloads.snapshot().into_iter().find(|job| job.key == key).map(|job| job.name).unwrap_or_default();
+        if matches!(choice, "both" | "game") {
+            // Never under a running game.
+            let path = self.installer.snapshot().into_iter().find(|r| r.key == key).and_then(|r| r.path);
+            let running = path.as_ref().and_then(|p| self.locals.iter().position(|l| &l.l.path == p)).is_some_and(|l| self.session_for_local(l).is_some());
+            if running {
+                self.toast("Quit the game first", &format!("{name} is running."), 2);
+                return self.push_downloads();
+            }
+            // First, so the install queue never reinstalls it while (or after) it's deleted.
+            let _ = self.downloads.no_install(&key);
+            match self.installer.uninstall(&key) {
+                Ok(_) => {
+                    self.install_states.remove(&key);
+                    self.rescan_library();
+                }
+                Err(error) => {
+                    self.toast("Couldn't delete the game", &format!("{error:#}"), 2);
+                    return self.push_downloads();
+                }
+            }
+        }
+        let result = match choice {
+            "both" | "download" => self.downloads.action(&key, "delete"),
+            "forget" => self.downloads.action(&key, "remove"),
+            _ => { audio::play(Sound::Back); return self.push_downloads(); }
+        };
+        match result {
+            Ok(()) => {
+                audio::play(Sound::Select);
+                let what = match choice { "both" => "The game and its download are deleted", "game" => "The game is deleted; its download stays",
+                    "download" => "The download is deleted", _ => "Removed from Downloads; every file is kept" };
+                self.toast(&name, what, 1);
+            }
+            Err(error) => self.toast("Couldn't delete it", &format!("{error:#}"), 2),
+        }
+        self.dl_btn = -1;
+        self.push_downloads();
+    }
+
     pub fn act_downloads(&mut self, action: Act) {
+        if let Some((_, ids)) = &self.dl_delete {
+            let n = ids.len();
+            match action {
+                Act::Up if self.dl_delete_sel > 0 => { self.dl_delete_sel -= 1; audio::play(Sound::Move); }
+                Act::Down if self.dl_delete_sel + 1 < n => { self.dl_delete_sel += 1; audio::play(Sound::Move); }
+                Act::Confirm => return self.delete_choose(self.dl_delete_sel as i32),
+                Act::Back => return self.delete_choose(-1),
+                _ => return,
+            }
+            return self.push_downloads();
+        }
         if self.ui().get_download_consent() {
             if action == Act::Back {
                 self.install_pending = None;

@@ -180,13 +180,18 @@ Use this feature only for content you are authorized to obtain and share.
   you and Ready to play.
 
 **Pause / Resume** preserve and recheck partial pieces. **Cancel** stops the job
-and keeps files. **Remove** clears inactive history and cached metadata, never
-the payload. **Open folder** opens the saved destination.
+and keeps files. **Open folder** opens the saved destination. **Delete…** always asks what
+to delete, offering only what the download has: the game and its download, the installed
+game (the download stays and keeps sharing, and won't install itself again), the download
+(the game stays installed), or **Remove from Downloads only**, which clears its history and
+cached metadata and keeps every file. A download's folder is deleted only if its ownership
+marker names it; an installed game only from the folder the installer recorded for it, never
+while it runs. Links inside either are removed, never followed.
 
 **Completed downloads seed by default.** While the launcher remains open, their
 original files are shared with peers. Downloads shows **Complete · sharing**, upload
 speed and connected peers; **Install / Play** remains available. Use **Stop sharing**
-for one transfer until the next launch, or disable **Settings → Keep sharing
+for one transfer (**Share again** turns it back on, even with the setting off), or disable **Settings → Keep sharing
 finished downloads** to stop all seeds; only that saved setting turns seeding off for good.
 While it is on, completed downloads seed again whenever the launcher opens, and turning
 it back on seeds them all again. Each is first added **paused** so the engine checks its

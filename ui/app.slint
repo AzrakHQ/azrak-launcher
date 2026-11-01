@@ -1,4 +1,4 @@
-import { S, Theme, Icons, Zone, DownloadData, DlTab, SetupFile, BootStep, OsiDisk, WjKey, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, ToastData, MenuItem, RunningData } from "theme.slint";
+import { S, Theme, Icons, Zone, DownloadData, DlTab, DlChoice, SetupFile, BootStep, OsiDisk, WjKey, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, ToastData, MenuItem, RunningData } from "theme.slint";
 import { FocusRing, Chip, Btn, Kicker, Badge, Switch, KeyCap, KeyboardKey, BackButton, Shimmer, Cover } from "widgets.slint";
 import { DownloadsPage, DownloadConsent, DownloadPanel } from "downloads.slint";
 import { LibraryFilter, LibrarySortPicker } from "library.slint";
@@ -253,6 +253,10 @@ export component AppWindow inherits Window {
     in property <bool> download-has-any;
     in property <string> download-empty-title;
     in property <image> download-glass;
+    in property <bool> download-delete-open;
+    in property <string> download-delete-title;
+    in property <[DlChoice]> download-delete-choices;
+    in property <int> download-delete-sel;
     in property <bool> download-has-glass;
     in property <image> setup-glass;
     in property <bool> setup-has-glass;
@@ -443,6 +447,7 @@ export component AppWindow inherits Window {
     callback trailer-action(string);                // toggle, close, controls, seek:<0..1>
     callback download-close();
     callback download-select(int);
+    callback download-delete-choose(int);
     callback download-filter-clicked(int);
     callback setup-toggle(int);
     callback setup-go();
@@ -1754,6 +1759,10 @@ export component AppWindow inherits Window {
             down: root.download-down; up: root.download-up; vpn: root.download-vpn; vpn-kind: root.download-vpn-kind;
             has-any: root.download-has-any; empty-title: root.download-empty-title;
             glass: root.download-glass; has-glass: root.download-has-glass;
+            delete-open: root.download-delete-open; delete-title: root.download-delete-title;
+            delete-choices: root.download-delete-choices; delete-sel: root.download-delete-sel;
+            delete-choose(i) => { root.download-delete-choose(i); }
+            delete-close => { root.download-delete-choose(-1); }
             action(key, action) => { root.download-action(key, action); }
             select(i) => { root.download-select(i); }
             filter-clicked(i) => { root.download-filter-clicked(i); }
