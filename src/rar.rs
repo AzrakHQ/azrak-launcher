@@ -1,5 +1,5 @@
 //! RAR archives, read by RARLAB's own decoder (unrar, built in). libarchive refuses RAR5 packed
-//! with a dictionary over 64 MiB, and can't find the RAR inside a YAD Simple Installer `.run`.
+//! with a dictionary over 64 MiB, and can't find a RAR inside a YAD Simple Installer.
 //! Only names, sizes and file contents come out of it: unrar "tests" each file and hands its bytes
 //! to a callback, so it never creates, names or writes a file itself.
 
@@ -90,21 +90,14 @@ const HOST_UNIX: c_uint = 3;
 const FSREDIR_UNIXSYMLINK: c_uint = 1;
 const MAX_NAME: usize = 1024;
 
-/// Where the RAR starts in `file`: 0 for a RAR, past the script for a YAD Simple Installer
-/// (`.run`: a shell script, its helper programs and picture, then the RAR as its last `arcsz`
-/// bytes). None for anything else.
-pub fn offset(file: &File) -> Result<Option<u64>> {
-    let len = file.metadata()?.len();
-    let mut head = vec![0u8; len.min(64 * 1024) as usize];
-    file.read_exact_at(&mut head, 0)?;
-    if head.starts_with(SIGNATURE) { return Ok(Some(0)); }
-    if !head.starts_with(b"#!") || !head.windows(20).any(|w| w == b"YAD Simple Installer") { return Ok(None); }
-    static ARCSZ: std::sync::LazyLock<regex::bytes::Regex> = std::sync::LazyLock::new(|| regex::bytes::Regex::new(r"(?m)^arcsz=(\d{1,15})$").unwrap());
-    let Some(size) = ARCSZ.captures(&head).and_then(|c| std::str::from_utf8(&c[1]).ok()?.parse::<u64>().ok()) else { return Ok(None) };
-    let Some(start) = len.checked_sub(size).filter(|_| size >= SIGNATURE.len() as u64) else { return Ok(None) };
+/// Whether a RAR starts at `at` in `file`.
+pub fn starts_at(file: &File, at: u64) -> Result<bool> {
     let mut magic = [0u8; SIGNATURE.len()];
-    file.read_exact_at(&mut magic, start)?;
-    Ok((magic == SIGNATURE).then_some(start))
+    match file.read_exact_at(&mut magic, at) {
+        Ok(()) => Ok(magic == SIGNATURE),
+        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// What an archive entry is. Paths are as stored: the installer checks them.

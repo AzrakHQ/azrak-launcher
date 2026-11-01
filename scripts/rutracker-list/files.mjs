@@ -133,5 +133,6 @@ async function main(args) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  main(process.argv.slice(2)).catch(error => { console.error(error.message); process.exitCode = 1; });
+  // An attached browser's connection would keep the process alive.
+  main(process.argv.slice(2)).then(() => process.exit(0), error => { console.error(error.message); process.exit(1); });
 }

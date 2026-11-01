@@ -439,7 +439,7 @@ fn volume_of(path: &str) -> Result<Option<(String, u32)>> {
         (format!("rar:{}", c[1].to_ascii_lowercase()), c[2].parse::<u32>()? + 2)
     } else if lower.ends_with(".rar") {
         (format!("rar:{}", lower.trim_end_matches(".rar")), 1)
-    } else if [".zip", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar.zst"].iter().any(|ext| lower.ends_with(ext)) {
+    } else if [".zip", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".tar.zst", ".tzst"].iter().any(|ext| lower.ends_with(ext)) {
         (format!("single:{lower}"), 1)
     } else { return Ok(None); }))
 }
@@ -468,6 +468,7 @@ struct Api {
     _lib: libloading::Library,
     new: unsafe extern "C" fn() -> Handle, formats: Unary, filters: Unary,
     open: unsafe extern "C" fn(Handle, *const *const libc::c_char, usize) -> libc::c_int,
+    open_fd: unsafe extern "C" fn(Handle, libc::c_int, usize) -> libc::c_int,
     next: unsafe extern "C" fn(Handle, *mut Handle) -> libc::c_int,
     data: unsafe extern "C" fn(Handle, *mut libc::c_void, usize) -> isize,
     skip: Unary, free: Unary, error: Text, pathname: Text, hardlink: Text, symlink: Text,
@@ -487,6 +488,7 @@ impl Api {
             macro_rules! sym { ($name:literal) => { *lib.get(concat!($name, "\0").as_bytes()).context(concat!("Missing libarchive symbol ", $name))? }; }
             Ok(Self { new: sym!("archive_read_new"), formats: sym!("archive_read_support_format_all"),
                 filters: sym!("archive_read_support_filter_all"), open: sym!("archive_read_open_filenames"),
+                open_fd: sym!("archive_read_open_fd"),
                 next: sym!("archive_read_next_header"), data: sym!("archive_read_data"),
                 skip: sym!("archive_read_data_skip"), free: sym!("archive_read_free"),
                 error: sym!("archive_error_string"), pathname: sym!("archive_entry_pathname"),
@@ -510,7 +512,7 @@ impl Api {
 /// How an archive is read: a RAR (and the one inside a YAD Simple Installer) by RARLAB's own
 /// decoder, which reads every RAR; everything else by libarchive.
 enum Reader {
-    Libarchive { api: &'static Api, handle: Handle, buf: Vec<u8>, _names: Vec<CString> },
+    Libarchive { api: &'static Api, handle: Handle, buf: Vec<u8>, _names: Vec<CString>, _payload: Option<File> },
     Rar(crate::rar::Archive),
 }
 impl Drop for Reader {
@@ -534,7 +536,9 @@ struct Archive { reader: Reader, files: Vec<File>, links: bool }
 impl Archive {
     fn open(source: &Source, volumes: &[String]) -> Result<Self> {
         let files: Vec<File> = volumes.iter().map(|p| source.file(p)).collect::<Result<_>>()?;
-        if let Some(start) = crate::rar::offset(&files[0])? {
+        let installer = ysi_payload(&files[0])?;
+        if crate::rar::starts_at(&files[0], installer.map_or(0, |(start, _)| start))? {
+            let start = installer.map_or(0, |(start, _)| start);
             ensure!(start <= crate::rar::MAX_SFX, "The archive inside {} starts {} KiB in; only the first {} KiB can be searched",
                 volumes[0], start / 1024, crate::rar::MAX_SFX / 1024);
             // Named through the pinned torrent folder: unrar finds each next volume beside the first.
@@ -546,15 +550,44 @@ impl Archive {
         let names: Vec<CString> = files.iter().map(|f| CString::new(format!("/proc/self/fd/{}", f.as_raw_fd())).unwrap()).collect();
         let mut pointers: Vec<_> = names.iter().map(|n| n.as_ptr()).collect();
         pointers.push(std::ptr::null());
+        // A compressed tar inside an installer is read from where it starts, through a
+        // descriptor of its own placed there: libarchive finds a compressed stream only at the
+        // start. A zip or 7z it finds behind the script by itself.
+        let payload = match installer {
+            Some((start, Payload::Stream)) => {
+                use std::io::{Seek, SeekFrom};
+                let mut file = File::open(&*names[0].to_string_lossy())?;
+                ensure!(Stamp::of(&file.metadata()?) == Stamp::of(&files[0].metadata()?), "Installer changed while opening it");
+                file.seek(SeekFrom::Start(start))?;
+                Some(file)
+            }
+            _ => None,
+        };
         let handle = unsafe { (api.new)() };
         ensure!(!handle.is_null(), "libarchive allocation failed");
-        let archive = Self { reader: Reader::Libarchive { api, handle, buf: vec![0u8; 256 * 1024], _names: names }, files, links: false };
+        let fd = payload.as_ref().map(|f| f.as_raw_fd());
+        let archive = Self { reader: Reader::Libarchive { api, handle, buf: vec![0u8; 256 * 1024], _names: names, _payload: payload }, files, links: false };
         libarchive_status(api, handle, unsafe { (api.formats)(handle) }, "Enable archive formats")?;
         libarchive_status(api, handle, unsafe { (api.filters)(handle) }, "Enable archive filters")?;
-        libarchive_status(api, handle, unsafe { (api.open)(handle, pointers.as_ptr(), 64 * 1024) }, "Open archive (unsupported format, missing volume, or password protection)")?;
+        let opened = match fd {
+            Some(fd) => unsafe { (api.open_fd)(handle, fd, 64 * 1024) },
+            None => unsafe { (api.open)(handle, pointers.as_ptr(), 64 * 1024) },
+        };
+        libarchive_status(api, handle, opened, "Open archive (unsupported format, missing volume, or password protection)")?;
         Ok(archive)
     }
     fn header(&mut self) -> Result<Option<Entry>> {
+        loop {
+            let Some(raw) = self.raw()? else { return Ok(None) };
+            // The archive's own root ("./" in tarballs made with `tar -C dir .`) isn't an entry.
+            if matches!(raw.kind, RawKind::Directory) && raw.path.split(['/', '\\']).all(|p| p.is_empty() || p == ".") {
+                self.skip()?;
+                continue;
+            }
+            return self.entry(raw).map(Some);
+        }
+    }
+    fn raw(&mut self) -> Result<Option<Raw>> {
         let raw = match &mut self.reader {
             Reader::Rar(rar) => {
                 let Some(h) = rar.next()? else { return Ok(None) };
@@ -592,6 +625,9 @@ impl Archive {
                 Raw { path, kind, size: size.map(|s| s as u64), exec: (api.perm)(entry) & 0o111 != 0 }
             },
         };
+        Ok(Some(raw))
+    }
+    fn entry(&self, raw: Raw) -> Result<Entry> {
         let path = normal_path(&raw.path)?;
         // PC games ship library symlinks (libfoo.so -> libfoo.so.1); only ones that stay inside
         // the game are kept. Console games have none.
@@ -600,7 +636,7 @@ impl Archive {
                 ensure!(self.links, "Archive symlinks are forbidden");
                 let target = target.with_context(|| format!("Symlink without a target: {path}"))?;
                 inside_link(&path, &target)?;
-                return Ok(Some(Entry { path, directory: false, size: 0, link: Some(target), exec: false }));
+                return Ok(Entry { path, directory: false, size: 0, link: Some(target), exec: false });
             }
             RawKind::Refused(why) => bail!("{why}"),
             RawKind::File => false,
@@ -609,7 +645,7 @@ impl Archive {
         ensure!(directory || raw.size.is_some(), "Archive has unknown uncompressed size; cannot safely install");
         let size = raw.size.unwrap_or(0);
         ensure!(!directory || size == 0, "Invalid declared archive size");
-        Ok(Some(Entry { path, directory, size, link: None, exec: !directory && raw.exec }))
+        Ok(Entry { path, directory, size, link: None, exec: !directory && raw.exec })
     }
     /// Pass the current entry's bytes to `sink`, in order.
     fn read(&mut self, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
@@ -998,9 +1034,11 @@ fn pc_archives(source: &Source, plan: &Plan) -> Result<Vec<PcArchive>> {
     let folder = |path: &str| path.rsplit_once('/').map_or("", |(dir, _)| dir).to_string();
     let mut installers = HashSet::new();
     for e in &top {
-        let lower = e.path.to_ascii_lowercase();
-        if !lower.ends_with(".sh") && !lower.ends_with(".run") { continue; }
-        if (lower.ends_with(".sh") && gog_installer(source, &e.path)?) || crate::rar::offset(&source.file(&e.path)?)?.is_some() {
+        // A YAD Simple Installer may have any name (`.run`, `.sh`, `hades_v1.38177_wine_repack`).
+        let file = source.file(&e.path)?;
+        let mut magic = [0u8; 2];
+        if std::os::unix::fs::FileExt::read_exact_at(&file, &mut magic, 0).is_err() || &magic != b"#!" { continue; }
+        if (e.path.to_ascii_lowercase().ends_with(".sh") && gog_installer(source, &e.path)?) || ysi_payload(&file)?.is_some() {
             installers.insert(e.path.clone());
         }
     }
@@ -1039,6 +1077,33 @@ fn pc_archives(source: &Source, plan: &Plan) -> Result<Vec<PcArchive>> {
         }
     }
     Ok(archives)
+}
+
+/// What a YAD Simple Installer carries: a RAR, a zip or 7z (libarchive finds those behind the
+/// script), or a compressed tar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Payload { Rar, Seekable, Stream }
+
+/// A YAD Simple Installer (a `.run` or `.sh`: a shell script, its helper programs and picture,
+/// then the game's archive as its last `arcsz` bytes, compressed however its maker chose): where
+/// that archive starts and what it is. None for anything else.
+fn ysi_payload(file: &File) -> Result<Option<(u64, Payload)>> {
+    use std::os::unix::fs::FileExt;
+    let len = file.metadata()?.len();
+    let mut head = vec![0u8; len.min(64 * 1024) as usize];
+    file.read_exact_at(&mut head, 0)?;
+    if !head.starts_with(b"#!") || !head.windows(20).any(|w| w == b"YAD Simple Installer") { return Ok(None); }
+    static ARCSZ: std::sync::LazyLock<regex::bytes::Regex> = std::sync::LazyLock::new(|| regex::bytes::Regex::new(r"(?m)^arcsz=(\d{1,15})$").unwrap());
+    let Some(size) = ARCSZ.captures(&head).and_then(|c| std::str::from_utf8(&c[1]).ok()?.parse::<u64>().ok()) else { return Ok(None) };
+    let Some(start) = len.checked_sub(size).filter(|_| size >= 8) else { return Ok(None) };
+    let mut magic = [0u8; 262];
+    file.read_exact_at(&mut magic[..size.min(262) as usize], start)?;
+    let kind = if magic.starts_with(b"Rar!\x1a\x07") { Payload::Rar }
+        else if magic.starts_with(b"PK\x03\x04") || magic.starts_with(b"7z\xbc\xaf\x27\x1c") { Payload::Seekable }
+        else if [&b"\x1f\x8b"[..], b"\xfd7zXZ\x00", b"\x28\xb5\x2f\xfd", b"BZh", b"\x04\x22\x4d\x18"].iter().any(|m| magic.starts_with(m))
+            || &magic[257..262] == b"ustar" { Payload::Stream }
+        else { return Ok(None) };
+    Ok(Some((start, kind)))
 }
 
 /// A GOG Linux installer: a shell script followed by a zip (its end-of-directory record is in the
@@ -1871,6 +1936,28 @@ mod tests {
         fs::write(req.source.join("some_game_v1.0.run"), &fake).unwrap();
         let source = Source::inspect(&req, &AtomicBool::new(false)).unwrap();
         assert!(pc_archives(&source, &source.plan).unwrap().is_empty());
+    }
+
+    #[test]
+    fn pc_ysi_installer_with_a_compressed_tar_is_unpacked() {
+        // LinuxRulez's releases: an older YAD Simple Installer `.sh` carrying a tar.xz (here gzip).
+        let (_t, mut req) = fixture();
+        pc(&mut req, "Caesar");
+        let script = b"#!/bin/bash\ncd \"$(dirname \"$0\")/game\" && ./dosbox\n";
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        // Its own root first, as `tar -C dir .` writes it (hitman249's Wine packs do).
+        gz.write_all(&tar(&[("./", b"", b'5', ""), ("Caesar/start", script, b'0', ""), ("Caesar/game/dosbox", &elf_program(), b'0', ""),
+            ("Caesar/game/support/libSDL.so.1", b"", b'2', "libSDL.so.1.2")])).unwrap();
+        let installer = ysi(&gz.finish().unwrap());
+        // Named like the Wine repacks that carry one: no `.sh` to go by.
+        fs::write(req.source.join("caesar_v1.0_wine_repack"), &installer).unwrap();
+        let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
+        let m = manifest(&p);
+        assert_eq!((m.launch.as_str(), m.kind), ("start", crate::pcgame::Kind::Script));
+        assert_eq!(fs::read(p.join("start")).unwrap(), script);
+        assert!(executable(&p.join("game/dosbox")));
+        assert!(!Path::new("/tmp/azrak-ysi-script-ran").exists());
+        clean(&req);
     }
 
     /// A real release: RELEASE=/path/to/file-or-folder [RELEASE_NAME=Balatro] cargo test -- --ignored

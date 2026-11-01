@@ -22,7 +22,7 @@ pub fn unsupported(platform: Platform, files: &[(String, u64)]) -> Option<String
     }
 }
 
-const ARCHIVES: [&str; 9] = [".rar", ".zip", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz", ".tar.zst"];
+const ARCHIVES: [&str; 12] = [".rar", ".zip", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz", ".tar.zst", ".tzst"];
 /// Programs by their usual Linux names.
 const PROGRAMS: [&str; 7] = [".x86_64", ".x86", ".x64", ".bin", ".amd64", ".i386", ".i686"];
 /// Files without an extension that are never the game's program.
@@ -35,7 +35,10 @@ fn pc(names: &[(String, String, usize)]) -> Option<String> {
     for (path, name, depth) in names {
         // Archives at the top (or in a folder at the top) are unpacked; what's inside isn't known.
         if *depth <= 1 && archive(name) { return None; }
-        let stem_only = !name.contains('.');
+        if package(name).is_some() { continue; }
+        // "hades_v1.38177_wine_repack" has no extension either: a version's dot isn't one.
+        let stem_only = name.rsplit_once('.').is_none_or(|(_, ext)| ext.is_empty() || ext.len() > 5
+            || !ext.bytes().all(|b| b.is_ascii_alphanumeric()) || ext.bytes().all(|b| b.is_ascii_digit()));
         let starts = name.ends_with(".sh") || name.ends_with(".run") || name.ends_with(".appimage")
             || ["start", "play", "run", "launch"].contains(&name.as_str())
             || PROGRAMS.iter().any(|ext| name.ends_with(ext))
@@ -66,6 +69,8 @@ fn package(name: &str) -> Option<&'static str> {
     else if name.ends_with(".flatpak") || name.ends_with(".flatpakref") { Some("a Flatpak bundle") }
     else if name.ends_with(".snap") { Some("a Snap package") }
     else if name.contains(".pkg.tar") { Some("an Arch Linux package") }
+    else if name.ends_with(".cxarchive") { Some("a CrossOver bottle (.cxarchive)") }
+    else if name.ends_with(".polapp") { Some("a PlayOnLinux package (.polApp)") }
     else { None }
 }
 
@@ -98,6 +103,8 @@ mod tests {
         assert_eq!(pc(&["Some Game/SomeGame", "Some Game/README"]), None, "a program without an extension");
         assert_eq!(pc(&["Game/Game.exe", "Game/setup.exe"]), None);
         assert_eq!(pc(&["Game/bin/game.x86_64"]), None);
+        assert_eq!(pc(&["hades_v1.38177_wine_repack", "OST/01. No Escape.mp3"]), None, "a YAD Simple Installer without .sh");
+        assert_eq!(pc(&["Deus_Ex.txz"]), None);
     }
 
     #[test]
@@ -107,10 +114,36 @@ mod tests {
         assert!(pc(&["game-1.0-1-x86_64.pkg.tar.zst"]).unwrap().contains("Arch Linux"), "an archive by name, a package really");
         assert!(pc(&["Game/game.iso", "Game/README"]).unwrap().contains("disc image"));
         assert!(pc(&["Game/game.jar", "Game/LICENSE"]).unwrap().contains("Java"));
+        assert!(pc(&["StarCraft2.cxarchive"]).unwrap().contains("CrossOver"));
+        assert!(pc(&["MR.polApp"]).unwrap().contains("PlayOnLinux"));
         assert!(pc(&["Game/setup.exe", "Game/setup-1.bin"]).is_none(), "a .bin may be the program");
         assert!(pc(&["Game/setup_game_1.0.exe"]).unwrap().contains("Windows installer"));
         assert!(pc(&["Game/data/level1.dat", "Game/lib/libSDL2.so"]).unwrap().contains("nothing"));
         assert!(pc(&["Game/lib/helper"]).is_some(), "a tool in a library folder");
+    }
+
+    /// What the rules make of a collected catalog: SURVEY=dist/rutracker/linux-topics.json.ru-backup.json
+    /// cargo test -- --ignored survey --nocapture
+    #[test]
+    #[ignore]
+    fn survey() {
+        let Ok(path) = std::env::var("SURVEY") else { return };
+        let catalog: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let (mut listed, mut hidden, mut unknown) = (0, std::collections::BTreeMap::<String, Vec<String>>::new(), 0);
+        for topic in catalog["topics"].as_array().unwrap() {
+            let Some(list) = topic["files"]["list"].as_array().filter(|_| topic["files"]["truncated"] != true) else { unknown += 1; continue };
+            let files: Vec<(String, u64)> = list.iter().map(|e| (e[0].as_str().unwrap().to_string(), e[1].as_u64().unwrap())).collect();
+            match unsupported(Platform::Pc, &files) {
+                None => listed += 1,
+                Some(why) => hidden.entry(why).or_default().push(format!("{} {}: {:?}", topic["id"], topic["title"],
+                    files.iter().take(4).map(|f| f.0.as_str()).collect::<Vec<_>>())),
+            }
+        }
+        eprintln!("{listed} installable, {} not, {unknown} without a list", hidden.values().map(Vec::len).sum::<usize>());
+        for (why, topics) in &hidden {
+            eprintln!("{} × {why}", topics.len());
+            for t in topics.iter().take(12) { eprintln!("    {t}"); }
+        }
     }
 
     #[test]
