@@ -114,7 +114,7 @@ impl Default for Policy {
     }
 }
 
-enum Command { Prepare(Job), Begin { key: String, base: PathBuf, selected: Vec<usize>, install_to: Option<PathBuf> }, Discard(String), Start(String), Pause(String), Cancel(String), Remove(String), StopSeed(String), SetSeedAfterDownload(bool), SetVpn(Option<String>), Shutdown }
+enum Command { Prepare(Job), Begin { key: String, base: PathBuf, selected: Vec<usize>, install_to: Option<PathBuf> }, Discard(String), Start(String), Pause(String), Cancel(String), Remove(String), StopSeed(String), Seed(String), SetSeedAfterDownload(bool), SetVpn(Option<String>), Shutdown }
 
 const VPN_WAIT: &str = "Waiting for your VPN: downloads only run through it (Settings → Downloads)";
 const FILES_CHANGED: &str = "The downloaded files were moved, changed or deleted, so this download can't seed. Remove it, or download it again.";
@@ -198,6 +198,7 @@ impl Manager {
             "cancel" if !matches!(job.state, State::Complete | State::Cancelled) => Command::Cancel(key.into()),
             "remove" if !job.state.active() => Command::Remove(key.into()),
             "stop_seed" if job.state == State::Complete && (job.seeding || job.verifying) => Command::StopSeed(key.into()),
+            "share" if job.state == State::Complete && !job.seeding && !job.verifying => Command::Seed(key.into()),
             _ => return Ok(()),
         };
         self.tx.try_send(command).context("Download worker is busy or unavailable")
@@ -480,13 +481,15 @@ struct Worker {
     tasks: JoinSet<Result<Resolved>>,
     /// Completed downloads added paused while their files are checked, before seeding again.
     reseeding: std::collections::HashSet<String>,
+    /// Completed downloads the player chose to share again, setting or not (until Stop sharing).
+    by_hand: std::collections::HashSet<String>,
     /// The VPN interface the current session is bound to.
     bound: Option<String>,
 }
 
 impl Worker {
     fn new(store: PathBuf, jobs: Arc<Mutex<Vec<Job>>>, policy: Policy) -> Self {
-        Self { store, jobs, policy, session: None, handles: HashMap::new(), peers: HashMap::new(), resolving: HashMap::new(), task_keys: HashMap::new(), tasks: JoinSet::new(), reseeding: Default::default(), bound: None }
+        Self { store, jobs, policy, session: None, handles: HashMap::new(), peers: HashMap::new(), resolving: HashMap::new(), task_keys: HashMap::new(), tasks: JoinSet::new(), reseeding: Default::default(), by_hand: Default::default(), bound: None }
     }
     fn job(&self, key: &str) -> Option<Job> { self.jobs.lock().unwrap().iter().find(|job| job.key == key).cloned() }
     fn update(&self, key: &str, f: impl FnOnce(&mut Job)) {
@@ -723,7 +726,12 @@ impl Worker {
         }
     }
 
+    /// Whether a completed download may share: the setting, or the player asked for this one.
+    fn may_seed(&self, key: &str) -> bool { self.policy.seed_after_download || self.by_hand.contains(key) }
+
     async fn set_seed_after_download(&mut self, enabled: bool) -> Result<()> {
+        // Turning the setting off stops every seed, the ones shared by hand too.
+        if !enabled { self.by_hand.clear(); }
         self.policy.seed_after_download = enabled;
         if enabled {
             self.seed_all().await;
@@ -758,7 +766,7 @@ impl Worker {
     /// engine paused first, so a download whose files changed stops instead of downloading.
     async fn seed(&mut self, key: &str) -> Result<()> {
         let Some(job) = self.job(key) else { return Ok(()) };
-        if job.state != State::Complete || self.handles.contains_key(key) || !self.policy.seed_after_download { return Ok(()); }
+        if job.state != State::Complete || self.handles.contains_key(key) || !self.may_seed(key) { return Ok(()); }
         if self.vpn_route().is_err() { self.wait_for_vpn(key); return Ok(()); }
         use std::io::Read;
         let mut bytes = Vec::new();
@@ -789,7 +797,7 @@ impl Worker {
         let stats = handle.stats();
         match stats.state {
             TorrentStatsState::Initializing { .. } => {}
-            TorrentStatsState::Paused if stats.finished && self.policy.seed_after_download => {
+            TorrentStatsState::Paused if stats.finished && self.may_seed(key) => {
                 self.reseeding.remove(key);
                 self.update(key, |job| job.verifying = false);
                 let unpaused = match self.session().await { Ok(session) => session.unpause(handle).await, Err(error) => Err(error) };
@@ -855,7 +863,7 @@ impl Worker {
             let stats = handle.stats();
             let was_complete = self.job(&key).is_some_and(|job| job.state == State::Complete);
             let complete = stats.finished || was_complete;
-            let seeding = stats.finished && self.policy.seed_after_download && matches!(stats.state, TorrentStatsState::Live);
+            let seeding = stats.finished && self.may_seed(&key) && matches!(stats.state, TorrentStatsState::Live);
             let state = if complete { State::Complete } else { match stats.state {
                 TorrentStatsState::Initializing { .. } => State::Checking,
                 TorrentStatsState::Live => State::Downloading,
@@ -912,7 +920,13 @@ impl Worker {
                             Some((key.clone(), self.stop_job(&key, State::Cancelled).await))
                         },
                         Some(Command::Remove(key)) => Some((key.clone(), self.remove(&key).await)),
+                        Some(Command::Seed(key)) => {
+                            self.by_hand.insert(key.clone());
+                            let result = self.seed(&key).await;
+                            Some((key, result))
+                        },
                         Some(Command::StopSeed(key)) => {
+                            self.by_hand.remove(&key);
                             let result = if self.job(&key).is_some_and(|job| job.state == State::Complete) {
                                 self.stop_job(&key, State::Complete).await
                             } else { Ok(()) };
@@ -1741,6 +1755,27 @@ mod tests {
         let extra = std::fs::read(done.folder.join(&other)).unwrap_or_default();
         assert!(extra.iter().all(|&b| b == 0), "the file left out wasn't downloaded");
         assert!(!temp.path().join("default").join(format!("torrent-{key}")).exists(), "the empty default folder is gone");
+        manager.shutdown();
+    }
+
+    #[test]
+    fn a_download_shares_again_by_hand_and_stops_again() {
+        let rt = runtime();
+        let temp = tempfile::tempdir().unwrap();
+        let (seeder, torrent, _, _) = rt.block_on(seeder(temp.path()));
+        // Sharing finished downloads is off: only the player's Share again shares this one.
+        let mut manager = Manager::new(temp.path().join("state"), local_policy(&seeder));
+        let key = manager.prepare(5, "Shared by hand", &torrent.as_magnet().to_string(), temp.path().join("dl"), crate::platform::Platform::Ps5).unwrap();
+        rt.block_on(wait_job(&manager, &key, |job| job.state == State::Ready));
+        manager.action(&key, "start").unwrap();
+        let done = rt.block_on(wait_job(&manager, &key, |job| job.state == State::Complete));
+        assert!(!done.seeding);
+        manager.action(&key, "share").unwrap();
+        rt.block_on(wait_job(&manager, &key, |job| job.state == State::Complete && job.seeding));
+        manager.action(&key, "stop_seed").unwrap();
+        rt.block_on(wait_job(&manager, &key, |job| job.state == State::Complete && !job.seeding && !job.verifying));
+        manager.action(&key, "share").unwrap();
+        rt.block_on(wait_job(&manager, &key, |job| job.seeding));
         manager.shutdown();
     }
 

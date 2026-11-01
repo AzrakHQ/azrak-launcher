@@ -78,6 +78,7 @@ export global Icons {
     out property <image> trash: @image-url("../assets/icons/trash.svg");
     out property <image> retry: @image-url("../assets/icons/retry.svg");
     out property <image> unshare: @image-url("../assets/icons/unshare.svg");
+    out property <image> share: @image-url("../assets/icons/share.svg");
     out property <image> none;
 
     public pure function get(name: string) -> image {
@@ -88,7 +89,7 @@ export global Icons {
             : name == "check" ? check : name == "folder" ? folder : name == "log" ? log
             : name == "lock" ? lock : name == "shift" ? shift : name == "eye" ? eye : name == "eye-off" ? eye-off
             : name == "pause" ? pause : name == "close" ? close : name == "trash" ? trash : name == "retry" ? retry
-            : name == "unshare" ? unshare : none;
+            : name == "unshare" ? unshare : name == "share" ? share : none;
     }
 }
 

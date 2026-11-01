@@ -142,7 +142,9 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             d.dl = 1.0;
             d.dl_label = "Downloaded".into();
             let sharing = job.seeding || job.verifying;
-            let share = if sharing { ("stop_seed", "Stop sharing", "unshare") } else { ("remove", "Remove", "trash") };
+            // Sharing goes on and off; Remove (from this list, files kept) sits beside it.
+            let share = if sharing { ("stop_seed", "Stop sharing", "unshare") } else { ("share", "Share again", "share") };
+            let remove = ("remove", "Remove from Downloads", "trash");
             match install.map(|r| r.state) {
                 Some(state) if state.active() => {
                     let record = install.unwrap();
@@ -165,11 +167,11 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                         vec![(format!("{} player{}", job.peers, if job.peers == 1 { "" } else { "s" }), "Connected to you".into()),
                             (mbps(job.upload_speed), "Sharing speed".into()), (size, "Size".into())]
                     } else {
-                        vec![(size, "Size".into()), ("Not sharing".into(), if sharing_on { "Stopped until the launcher restarts" } else { "Sharing is off in Settings" }.into())]
+                        vec![(size, "Size".into()), ("Not sharing".into(), if sharing_on { "Share it again any time" } else { "Sharing is off in Settings" }.into())]
                     };
                     d.line = if job.seeding { "Ready · sharing".into() } else { "Ready to play".into() };
                     d.tile = 1.0;
-                    d.actions = vec![("play_install", "Play", "play"), share];
+                    d.actions = vec![("play_install", "Play", "play"), share, remove];
                 }
                 Some(Install::Failed) => {
                     (d.group, d.kind, d.bar) = (1, 2, 2);
@@ -177,13 +179,13 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                     d.note = install.unwrap().error.clone();
                     d.inst_label = "Install failed".into();
                     d.line = "Couldn't install".into();
-                    d.actions = vec![("install", "Retry install", "retry"), share];
+                    d.actions = vec![("install", "Retry install", "retry"), share, remove];
                 }
                 Some(_) => {
                     (d.group, d.kind) = (1, 1);
                     d.status = "Install cancelled".into();
                     d.line = "Install cancelled".into();
-                    d.actions = vec![("install", "Install", "disk"), share];
+                    d.actions = vec![("install", "Install", "disk"), share, remove];
                 }
                 None if failure.is_some() => {
                     (d.group, d.kind, d.bar) = (1, 2, 2);
@@ -191,7 +193,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                     d.note = failure.unwrap().clone();
                     d.inst_label = "Install failed".into();
                     d.line = "Couldn't install".into();
-                    d.actions = vec![("install", "Retry install", "retry"), share];
+                    d.actions = vec![("install", "Retry install", "retry"), share, remove];
                 }
                 None if job.install_to.is_some() => {
                     d.status = "Waiting to install".into();
@@ -199,7 +201,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                     d.stats = vec![(queued_behind.map_or("Next".into(), |name| format!("After {name}")), "Installs by itself".into()), (size, "Downloaded".into())];
                     d.line = "Installs next".into();
                     d.tile = 1.0;
-                    d.actions = vec![share];
+                    d.actions = vec![share, remove];
                 }
                 None => {
                     (d.group, d.kind) = (1, 1);
@@ -207,7 +209,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                     d.stats = vec![(size, "Downloaded".into())];
                     d.line = "Not installed".into();
                     d.tile = 1.0;
-                    d.actions = vec![("install", "Install", "disk"), share];
+                    d.actions = vec![("install", "Install", "disk"), share, remove];
                 }
             }
         }
@@ -400,7 +402,8 @@ impl App {
             }).unwrap_or((0.0, 0.0));
             let first = n == 0 || rows[n - 1].1.group != d.group;
             let mut actions: Vec<ActionData> = d.actions.iter().enumerate().map(|(k, (id, label, icon))| ActionData {
-                id: (*id).into(), label: (*label).into(), icon: (*icon).into(), primary: k == 0, danger: false, round: false,
+                // Remove from Downloads is an icon until it's focused (it's never the main thing to do).
+                id: (*id).into(), label: (*label).into(), icon: (*icon).into(), primary: k == 0, danger: false, round: *label == "Remove from Downloads",
             }).collect();
             actions.push(ActionData { id: "folder".into(), label: "Open folder".into(), icon: "folder".into(), primary: false, danger: false, round: true });
             data.push(crate::DownloadData {
