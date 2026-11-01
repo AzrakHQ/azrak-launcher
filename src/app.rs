@@ -211,6 +211,8 @@ pub struct App {
     pub dl_speeds: HashMap<String, std::collections::VecDeque<f32>>,
     /// The art the Downloads page asked for, so it's redrawn when that arrives.
     pub dl_keys: HashSet<String>,
+    /// Blurred copies of art for the glass drawn over it (present::frosted), by image key.
+    pub frost: HashMap<String, slint::Image>,
     pub live: Vec<Session>,
     pub images: images::Store,
     pub monitors: Vec<Monitor>,
@@ -521,6 +523,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         dl_shelf: 0.0,
         dl_speeds: HashMap::new(),
         dl_keys: HashSet::new(),
+        frost: HashMap::new(),
         live: Vec::new(),
         images: images::Store::new(pool, 200),
         monitors,

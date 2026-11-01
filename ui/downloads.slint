@@ -18,17 +18,34 @@ component TransferButton inherits Rectangle {
     touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
-// A small dark capsule for text over key art (the art shows at its edges, the text stays readable).
+// Frosted glass for text over key art: a blurred copy of the art (`glass`, drawn at the art's
+// size `glass-w`×`glass-h` from the page's corner) lined up behind it, a dark tint so the text
+// reads, and a light along the top edge.
 component Capsule inherits Rectangle {
+    in property <image> glass;
+    in property <bool> has-glass;
+    in property <length> glass-w;
+    in property <length> glass-h;
+    // Hovered: the tint lightens.
+    in property <bool> lit;
     height: (52px * S.k);
     border-radius: self.height / 2;
-    background: #0e1424d9;
-    border-width: 1px;
-    border-color: #ffffff29;
+    background: root.has-glass ? transparent : #0e1424d9;
+    clip: true;
     drop-shadow-blur: (24px * S.k);
     drop-shadow-color: #00000059;
-    // The light along its top edge that makes it read as glass.
-    Rectangle { x: parent.height / 2; y: 1px; width: parent.width - parent.height; height: 1px; background: #ffffff33; }
+    if root.has-glass: Image {
+        x: -root.absolute-position.x; y: -root.absolute-position.y;
+        width: root.glass-w; height: root.glass-h;
+        source: root.glass; image-fit: cover;
+    }
+    Rectangle {
+        border-radius: root.border-radius;
+        background: root.lit ? #2a3550a6 : root.has-glass ? #121828a6 : transparent;
+        border-width: 1px; border-color: #ffffff2e;
+        animate background { duration: 120ms; }
+    }
+    Rectangle { x: parent.height / 2; y: 1px; width: parent.width - parent.height; height: 1px; background: #ffffff47; }
 }
 
 // Back, on the same glass as the live numbers: one pill, highlighted as a whole.
@@ -36,8 +53,7 @@ component GlassBack inherits Capsule {
     in property <bool> pad;
     callback clicked();
     width: row.preferred-width;
-    background: ta.has-hover ? #222b40f0 : #0e1424d9;
-    animate background { duration: 120ms; }
+    lit: ta.has-hover;
     row := HorizontalLayout {
         padding-left: (16px * S.k); padding-right: (20px * S.k); spacing: (10px * S.k);
         Image { source: Icons.chevl; colorize: Theme.text; width: (20px * S.k); height: (20px * S.k); y: (parent.height - self.height) / 2; }
@@ -72,6 +88,9 @@ export component DownloadsPage inherits Rectangle {
     // There are downloads, though the filter may show none ("Nothing needs you").
     in property <bool> has-any;
     in property <string> empty-title;
+    // The selected download's art, blurred, for the glass over it.
+    in property <image> glass;
+    in property <bool> has-glass;
     callback action(string, string);
     callback select(int);
     callback filter-clicked(int);
@@ -108,6 +127,7 @@ export component DownloadsPage inherits Rectangle {
         Text { text: "Downloads"; font-size: (28px * S.k); font-weight: 600; color: Theme.text; vertical-alignment: center; }
         Rectangle { horizontal-stretch: 1; }
         if root.any || root.vpn-kind != 0: Capsule {
+            glass: root.glass; has-glass: root.has-glass && root.any; glass-w: root.width; glass-h: (800px * S.k);
             width: stats.preferred-width;
             stats := HorizontalLayout {
                 padding-left: (24px * S.k); padding-right: (24px * S.k); spacing: (18px * S.k);
@@ -122,7 +142,10 @@ export component DownloadsPage inherits Rectangle {
                 }
             }
         }
-        GlassBack { pad: root.pad; clicked => { root.close(); } }
+        GlassBack {
+            glass: root.glass; has-glass: root.has-glass && root.any; glass-w: root.width; glass-h: (800px * S.k);
+            pad: root.pad; clicked => { root.close(); }
+        }
     }
 
     // Nothing yet, or nothing under this filter.
@@ -462,6 +485,9 @@ export component DownloadPanel inherits Rectangle {
     // Which folder is being typed: 1 download, 2 install.
     in property <int> edit;
     in property <bool> pad;
+    // The Game Hub's art underneath, blurred, for the panel's glass.
+    in property <image> glass;
+    in property <bool> has-glass;
     callback toggle(int);
     callback go();
     callback cancel();
@@ -488,9 +514,17 @@ export component DownloadPanel inherits Rectangle {
         animate x { duration: 420ms; easing: ease-out-expo; }
         animate opacity { duration: 220ms; easing: ease-out-quad; }
         width: self.panel-width;
-        background: #0c111ee6;
-        border-width: 1px; border-color: #ffffff24;
+        background: root.has-glass ? transparent : #0c111ee6;
+        clip: true;
         drop-shadow-blur: (80px * S.k); drop-shadow-color: #0000008c;
+        if root.has-glass: Image {
+            x: -parent.absolute-position.x; y: -parent.absolute-position.y;
+            width: root.width; height: root.height;
+            source: root.glass; image-fit: cover;
+        }
+        // Heavy enough that a long file list reads calmly over it.
+        Rectangle { background: root.has-glass ? #0c111ecc : transparent; border-width: 1px; border-color: #ffffff24; }
+        Rectangle { x: 1px; width: 1px; background: #ffffff14; }
         TouchArea { }
         VerticalLayout {
             padding-left: (64px * S.k); padding-right: (64px * S.k); padding-top: (52px * S.k); padding-bottom: (36px * S.k);

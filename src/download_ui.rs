@@ -369,6 +369,7 @@ impl App {
         } else { self.dl_shelf = 0.0; }
 
         self.dl_keys.clear();
+        let mut glass_key = None;
         let scale = self.scale;
         let mut data = Vec::with_capacity(rows.len());
         for (n, (i, d)) in rows.iter().enumerate() {
@@ -387,7 +388,9 @@ impl App {
             });
             let tile = want(self, tile_req.or_else(|| game.and_then(|_| self.cover_req(target))), crate::images::prio::TILE);
             let (art, logo) = if n == sel {
-                (want(self, game.and_then(|_| self.target_bg_url(target)), crate::images::prio::HERO),
+                let bg = game.and_then(|_| self.target_bg_url(target));
+                glass_key = bg.as_ref().map(|r| r.key.clone());
+                (want(self, bg, crate::images::prio::HERO),
                  want(self, info.as_ref().and_then(|i| req_url(&i.logo, 960, 0.0)), crate::images::prio::HERO))
             } else { (None, None) };
             let (logo_w, logo_h) = logo.as_ref().map(|img| {
@@ -416,6 +419,7 @@ impl App {
                 group: d.group, group_first: first, group_label: GROUPS[d.group as usize].into(),
             });
         }
+        let glass = glass_key.and_then(|key| self.frost_of(&key));
         let tabs: Vec<DlTab> = ["All", "In progress", "Needs you", "Ready to play"].iter().enumerate().map(|(k, label)| DlTab {
             label: (*label).into(), count: counts[k].to_string().into(), warn: k == 2 && counts[2] > 0,
         }).collect();
@@ -444,6 +448,8 @@ impl App {
         ui.set_download_down(mbps(down).into());
         ui.set_download_up(mbps(up).into());
         let (vpn_text, vpn_kind) = match vpn { None => ("", 0), Some(Some(_)) => ("VPN on", 1), Some(None) => ("Waiting for your VPN", 2) };
+        ui.set_download_has_glass(glass.is_some());
+        ui.set_download_glass(glass.unwrap_or_default());
         ui.set_download_has_any(!jobs.is_empty());
         ui.set_download_empty_title(["Nothing downloading", "Nothing in progress", "Nothing needs you", "Nothing ready to play yet"][self.dl_filter].into());
         ui.set_download_vpn(vpn_text.into());

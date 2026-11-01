@@ -252,6 +252,10 @@ export component AppWindow inherits Window {
     in property <int> download-vpn-kind;
     in property <bool> download-has-any;
     in property <string> download-empty-title;
+    in property <image> download-glass;
+    in property <bool> download-has-glass;
+    in property <image> setup-glass;
+    in property <bool> setup-has-glass;
     // The Download & install panel.
     in property <string> setup-title;
     in property <string> setup-vpn;
@@ -1749,6 +1753,7 @@ export component AppWindow inherits Window {
             tabs: root.download-tabs; filter: root.download-filter; shelf-x: root.download-shelf-x;
             down: root.download-down; up: root.download-up; vpn: root.download-vpn; vpn-kind: root.download-vpn-kind;
             has-any: root.download-has-any; empty-title: root.download-empty-title;
+            glass: root.download-glass; has-glass: root.download-has-glass;
             action(key, action) => { root.download-action(key, action); }
             select(i) => { root.download-select(i); }
             filter-clicked(i) => { root.download-filter-clicked(i); }
@@ -1756,6 +1761,7 @@ export component AppWindow inherits Window {
         }
         if root.overlay == 15: DownloadPanel {
             title: root.setup-title; vpn: root.setup-vpn; vpn-ok: root.setup-vpn-ok; pad: root.pad-hints;
+            glass: root.setup-glass; has-glass: root.setup-has-glass;
             state: root.setup-state; message-title: root.setup-message-title; message: root.setup-message;
             files: root.setup-files; count: root.setup-count; total: root.setup-total; all-state: root.setup-all-state;
             notice: root.setup-notice; notice-kind: root.setup-notice-kind;

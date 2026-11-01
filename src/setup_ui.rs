@@ -245,7 +245,12 @@ impl App {
             }
         };
         let _ = platform;
+        // Over the Game Hub, the panel is glass over its art.
+        let over_hub = self.stack.iter().any(|(overlay, _, _)| *overlay == Overlay::Hub);
+        let glass = if over_hub { let key = self.bg_key.clone(); self.frost_of(&key) } else { None };
         let ui = self.ui();
+        ui.set_setup_has_glass(glass.is_some());
+        ui.set_setup_glass(glass.unwrap_or_default());
         ui.set_setup_state(view.state);
         ui.set_setup_message_title(view.message_title.into());
         ui.set_setup_message(view.message.into());
