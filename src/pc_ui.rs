@@ -113,7 +113,7 @@ impl App {
         parts.push(format!("goes to {shown}"));
         parts.push(match free {
             Some(free) if short => format!("only {free:.0} GB free there"),
-            _ => "then press Install".into(),
+            _ => "then it installs by itself".into(),
         });
         // An older version said first, unless the disk is short of space: that comes first (the
         // line is cut at the end when it's long).

@@ -1,5 +1,6 @@
 //! Installation is explicit and separate from downloading. The worker never runs payload code.
 use crate::{app::*, downloads, installer, util};
+use anyhow::Context;
 
 /// What a download can be installed from: archives on both consoles; PKG packages only for PS4,
 /// whose PKG extractor unpacks the game, its update and its DLC for shadPS4.
@@ -39,27 +40,54 @@ impl App {
 
     pub fn confirm_install(&mut self) {
         let Some(key) = self.install_pending.clone() else { return; };
-        let Some(job) = self.downloads.snapshot().into_iter().find(|job| job.key == key && job.state == downloads::State::Complete) else { return; };
         let destination = self.ui().get_download_path().trim().to_owned();
-        let ids = self.games.iter().find(|game| game.g.id == job.topic).map(|game| {
-            std::iter::once(game.g.title_id.clone()).chain(game.g.title_ids.clone())
-                .filter(|id| crate::psn::valid_title_id(id)).collect()
-        }).unwrap_or_default();
-        let game = self.games.iter().find(|game| game.g.id == job.topic);
-        let platform = game.map(|game| game.g.platform).unwrap_or_default();
-        // PC games are named after the game (their folder and Library name), not the release.
-        let name = match game { Some(game) if platform == crate::platform::Platform::Pc => game.name.clone(), _ => job.name };
-        let request = installer::Request { key: key.clone(), topic: job.topic, name,
-            source: job.folder, destination: util::expand_home(&destination), expected_ids: ids, platform };
-        match self.installer.start(request) {
+        match self.start_install(&key, &destination) {
             Ok(()) => {
-                self.install_states.insert(key.clone(), installer::State::Inspecting);
                 { let mut cfg = self.cfg.lock().unwrap(); cfg.install_dir = destination; cfg.save(); }
                 self.install_pending = None;
                 self.push_installs();
                 self.open_downloads(Some(&key));
             }
             Err(error) => self.ui().set_download_error(format!("{error:#}").into()),
+        }
+    }
+
+    /// Install a finished download into `destination` (a folder; ~/ is allowed).
+    pub fn start_install(&mut self, key: &str, destination: &str) -> anyhow::Result<()> {
+        let job = self.downloads.snapshot().into_iter().find(|job| job.key == key && job.state == downloads::State::Complete)
+            .context("The download isn't finished")?;
+        let ids = self.games.iter().find(|game| game.g.id == job.topic).map(|game| {
+            std::iter::once(game.g.title_id.clone()).chain(game.g.title_ids.clone())
+                .filter(|id| crate::psn::valid_title_id(id)).collect()
+        }).unwrap_or_default();
+        let game = self.games.iter().find(|game| game.g.id == job.topic);
+        let platform = game.map(|game| game.g.platform).or(job.platform).unwrap_or_default();
+        // PC games are named after the game (their folder and Library name), not the release.
+        let name = match game { Some(game) if platform == crate::platform::Platform::Pc => game.name.clone(), _ => job.name };
+        let request = installer::Request { key: key.into(), topic: job.topic, name,
+            source: job.folder, destination: util::expand_home(destination), expected_ids: ids, platform };
+        self.installer.start(request)?;
+        self.install_failures.remove(key);
+        self.install_states.insert(key.into(), installer::State::Inspecting);
+        Ok(())
+    }
+
+    /// Downloads that install by themselves: when nothing is installing, the oldest finished one
+    /// that hasn't been installed yet starts. One that failed waits for Retry install.
+    pub fn auto_install(&mut self) {
+        let installs = self.installer.snapshot();
+        if installs.iter().any(|record| record.state.active()) { return; }
+        let mut jobs = self.downloads.snapshot();
+        jobs.sort_by_key(|job| job.added);
+        let next = jobs.into_iter().find(|job| job.state == downloads::State::Complete && job.install_to.is_some()
+            && !installs.iter().any(|record| record.key == job.key) && !self.install_failures.contains_key(&job.key));
+        let Some(job) = next else { return };
+        let destination = job.install_to.as_ref().unwrap().to_string_lossy().into_owned();
+        if let Err(error) = self.start_install(&job.key, &destination) {
+            self.install_failures.insert(job.key.clone(), format!("{error:#}"));
+            self.toast_action("Couldn't install", &job.name, 2, "downloads", "See why");
+        } else {
+            self.push_installs();
         }
     }
 

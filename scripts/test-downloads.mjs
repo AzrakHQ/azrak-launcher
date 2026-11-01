@@ -86,7 +86,8 @@ let logs = '';
 child.stderr.on('data', bytes => { logs += bytes; });
 const closed = new Promise(resolve => child.once('close', resolve));
 const key = (...keys) => exec('xdotool', ['key', ...keys]);
-async function shot(name) {
+async function shot(name, wait = 0) {
+  if (wait) await new Promise(resolve => setTimeout(resolve, wait * 1000));
   const path = join(artifacts, `${name}.png`);
   await exec('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'x11grab',
     '-draw_mouse', '0', '-framerate', '10', '-video_size', '1920x1080', '-i', process.env.DISPLAY,
@@ -111,64 +112,70 @@ try {
   const { stdout } = await exec('xdotool', ['search', '--sync', '--onlyvisible', '--name', '^Azrak Launcher$']);
   await exec('xdotool', ['windowfocus', '--sync', stdout.trim().split('\n')[0]]);
   await key('ctrl+d');
-  const panel = await shot('transfers');
-  assert.match(panel, /Downloads/);
-  assert.match(panel, /Generated progress snapshot/);
-  assert.match(panel, /50[.,]0%/);
-  assert.match(panel, /Paused/);
-  assert.match(panel, /Start download/);
-  assert.match(panel, /public-domain-text/);
-  assert.match(panel, /Open folder/);
-  assert.match(panel, /restart never resumes automatically/i);
-  await key('Down', 'Right'); // Ready row, Cancel (no engine exists).
-  await shot('keyboard-selection');
+  const page = await shot('transfers');
+  assert.match(page, /Downloads/);
+  assert.match(page, /Needs you/);
+  assert.match(page, /Generated progress snapshot/);
+  assert.match(page, /Generated metadata review/);
+  assert.match(page, /Not installed/);
+  await key('Right', 'Right'); // The paused download (newest first: the completed one leads).
+  const paused = await shot('paused');
+  assert.match(paused, /Paused/);
+  assert.match(paused, /50\s*%/);
+  assert.match(paused, /Still to download/);
+  await key('e', 'e'); // Filters: In progress (nothing), then Needs you.
+  await key('q', 'q');
   await key('Escape', 'Tab');
-  const library = await shot('grouped-library');
-  assert.match(library, /1\s*games/);
-  assert.match(library, /2 releases/);
-  await key('Return');
-  const hub = await shot('hub');
+  // The bundled PS4/PC catalogs are in the Library too: find the generated game.
+  await exec('xdotool', ['type', '--delay', '100', 'Generated consent']);
+  const library = await shot('grouped-library', 1);
+  assert.match(library, /Generated consent fixture/);
+  assert.match(library, /1 of \d+ games/);
+  await key('Return', 'Return'); // Finish the search, open the card.
+  const hub = await shot('hub', 1);
   // White primary pills are not reliably recognized by OCR; screenshot review covers Install.
-  assert.match(hub, /RELEASE VERSION/);
-  assert.match(hub, /Release\s*1\s*\/\s*2/i);
-  assert.doesNotMatch(hub, /TITLE ID|CONSOLE FIRMWARE NOTE/);
+  assert.match(hub, /Release\s*2\s*of\s*2/i);
+  assert.match(hub, /Choose another release/);
   await key('Down', 'Right'); // Same card, switch exact release/topic/magnet.
   const alternate = await shot('alternate-release');
-  assert.match(alternate, /Release\s*2\s*\/\s*2/i);
+  assert.match(alternate, /Release\s*1\s*of\s*2/i);
   assert.match(alternate, /1\.00/);
   await key('Down', 'Return'); // Expand technical rows, not extra overview boxes.
   const details = await shot('technical-details');
   assert.match(details, /TITLE ID/);
   assert.match(details, /PPSA12345/);
-  await key('Return', 'Up', 'Up'); // Collapse and return to explicit Download action.
-  await key('Return'); // Open confirmation, NOT metadata lookup.
-  const consent = await shot('consent');
-  assert.match(consent, /Set up a download/);
-  assert.match(consent, /Looking up this magnet/);
-  assert.match(consent, /128 KiB/i);
-  assert.match(consent, /IP address/i);
-  // Type spaces/slashes in the destination without triggering the global Enter/Space action.
-  await key('Tab', 'ctrl+a'); // Explicit keyboard focus, not OCR-derived click coordinates.
+  await key('Return', 'Up', 'Up'); // Collapse and return to the Download action.
+  await key('Return'); // The Download & install panel: it looks the release up (no network here).
+  const setup = await shot('download-panel');
+  assert.match(setup, /Download & install/);
+  assert.match(setup, /IP address/i);
+  assert.match(setup, /Getting the file list/);
+  assert.match(setup, /Install to/);
+  // Type spaces/slashes in the download folder without triggering the global Enter/Space action.
+  await key('Up', 'Up', 'Return', 'ctrl+a'); // Cancel -> Change (install) -> Change (download).
   await exec('xdotool', ['type', '--clearmodifiers', join(artifacts, 'folder with spaces')]);
   const edited = await shot('destination-edit');
-  assert.match(edited, /Set up a download/);
   assert.match(edited, /folder with spaces/);
-  await key('Escape');
-  await shot('consent-cancelled');
+  await key('Return', 'Escape'); // Finish typing, then close: the lookup is forgotten.
+  await shot('panel-closed', 3);
   assert.deepEqual(JSON.parse(await readFile(manifest)).jobs.map(job => job.key), [hash1, hash2, catalogHash]);
-  await assert.rejects(access(join(store, 'unused-default-output')), 'Consent cancellation must not construct an engine');
+  await assert.rejects(access(join(base, `torrent-${'d'.repeat(40)}`)), 'Closing the panel removes the empty lookup folder');
+  await assert.rejects(access(join(artifacts, 'folder with spaces')), 'An unused download folder is never created');
   assert.equal(digest(await readFile(payload)), before);
-  await key('ctrl+d', 'Right', 'Return'); // Remove paused history, never payload.
+  await key('ctrl+d', 'Right', 'Right', 'Up', 'Right', 'Return'); // Paused -> Cancel (keeps files).
+  const cancelled = await shot('cancelled');
+  assert.match(cancelled, /Cancelled/);
+  await key('Return'); // The same button is now Remove: history goes, never payload.
   const removed = await shot('history-removed');
   assert.doesNotMatch(removed, /Generated progress snapshot/);
   assert.deepEqual(JSON.parse(await readFile(manifest)).jobs.map(job => job.key), [hash2, catalogHash]);
   assert.equal(digest(await readFile(payload)), before);
   await assert.rejects(access(installRoot), 'Completion alone must never create an installation destination');
-  await key('Down', 'Left', 'Return'); // Completed row -> explicit Install confirmation.
+  await key('Down', 'Home', 'Up', 'Return'); // Completed (from before installs started by themselves) -> Install.
   const installConsent = await shot('install-consent');
   assert.match(installConsent, /Install game/);
   assert.match(installConsent, /original downloads are kept/i);
-  assert.match(installConsent, /never executes payload/i);
+  assert.match(installConsent, /PS5 PKG packages/);
   await assert.rejects(access(installRoot), 'Opening consent must not install');
   await key('Tab', 'ctrl+a');
   const installedRoot = join(artifacts, 'installed library with spaces');
@@ -182,12 +189,11 @@ try {
   await key('Escape'); // Cancel without source changes or starting a worker.
   assert.equal(digest(await readFile(archive)), archiveDigest);
   await assert.rejects(access(join(config, 'installs/jobs.json')), 'Cancelled consent must not create an installation record');
-  await key('ctrl+d', 'Down', 'Return');
+  await key('Home', 'Up', 'Return');
   await shot('install-confirm-again');
   await key('Return'); // Explicit confirmation with original saved destination.
-  const installed = await shot('installed');
-  assert.match(installed, /Installed/);
-  // Review the rendered Play button; filesystem assertions below are the reliable proof.
+  const installed = await shot('installed', 4);
+  assert.match(installed, /Ready to play/);
   const records = JSON.parse(await readFile(join(config, 'installs/jobs.json'))).jobs;
   assert.equal(records.length, 1);
   assert.equal(records[0].state, 'Installed');
@@ -204,7 +210,7 @@ try {
   await Promise.race([closed, new Promise((_, reject) => { const t = setTimeout(() => reject(new Error('Graceful quit timed out')), 10_000); t.unref(); })]);
   assert.equal(child.exitCode, 0);
   assert.doesNotMatch(logs, /panicked at|event loop failed|Could not save transfer state/);
-  console.log('PASS grouped cards/releases/compact hub, progress, editable download/install consent, explicit archive installation/library registration/Play, retained sources and graceful quit.');
+  console.log('PASS grouped cards/releases/compact hub, the Downloads page and its filters, the Download & install panel (folder editing, closing forgets the lookup), cancel/remove keeping files, explicit archive installation/library registration/Play, retained sources and graceful quit.');
   console.log(`Screenshots and isolated profiles: ${artifacts}`);
 } finally {
   if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid, 'SIGTERM');

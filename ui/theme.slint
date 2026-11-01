@@ -112,18 +112,38 @@ export global Zone {
     out property <int> power: 22;
     out property <int> search-keys: 23;
     out property <int> versions: 24;
+    out property <int> setup: 25;
 }
 
 // dot: KytyPS5 compatibility level (0 none, 1 in-game, 2 menus, 3 boots, 4 doesn't boot, 5 untested)
 // stars: star rating out of 5 drawn as five stars (0 = none)
 export struct ChipData { icon: string, text: string, gold: bool, dot: int, stars: float }
 export struct ActionData { id: string, label: string, icon: string, primary: bool, danger: bool, round: bool }
+// One download on the Downloads page. kind: 0 in progress (blue), 1 needs you (amber),
+// 2 stopped (red), 3 ready to play (green). group: 0 in progress, 1 needs you, 2 ready to play.
+export struct DlStat { value: string, label: string }
 export struct DownloadData {
-    key: string, title: string, state: string, progress: float, detail: string,
-    path: string, error: string, failed: bool, complete: bool,
-    primary: string, primary-action: string, secondary: string, secondary-action: string,
-    review: bool, files: string, file-summary: string,
+    key: string, title: string,
+    art: image, has-art: bool, tile-art: image, has-tile-art: bool,
+    logo: image, has-logo: bool, logo-w: length, logo-h: length,
+    status: string, kind: int, when: string,
+    // The big number ("61" "%"), or nothing when there's no progress to show.
+    big: string, big-unit: string,
+    stats: [DlStat],
+    // The download speed over the last minutes, as path commands on a 400×160 box ("" for none).
+    spark: string,
+    // Why it stopped and what to do.
+    note: string,
+    // One bar for the whole job: Download, Install, Play.
+    dl-frac: float, inst-frac: float, ready: bool, dl-label: string, inst-label: string, bar-kind: int,
+    actions: [ActionData],
+    // The shelf tile: its line under the title, and its progress.
+    line: string, tile-frac: float,
+    group: int, group-first: bool, group-label: string,
 }
+export struct DlTab { label: string, count: string, warn: bool }
+// A file on the Download & install panel.
+export struct SetupFile { dir: string, name: string, size: string, on: bool, blocked: bool }
 
 export struct TileData {
     image: image,

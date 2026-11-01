@@ -27,6 +27,7 @@ mod trailer;
 mod config;
 mod display;
 mod download_ui;
+mod setup_ui;
 mod downloads;
 mod gamepad;
 mod game_groups;

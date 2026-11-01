@@ -1,6 +1,6 @@
-import { S, Theme, Icons, DownloadData } from "theme.slint";
+import { S, Theme, Icons, DownloadData, DlTab, SetupFile, ActionData } from "theme.slint";
 import { ScrollView } from "std-widgets.slint";
-import { BackButton } from "widgets.slint";
+import { BackButton, Btn, FocusRing } from "widgets.slint";
 
 component TransferButton inherits Rectangle {
     in property <string> label;
@@ -18,119 +18,284 @@ component TransferButton inherits Rectangle {
     touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
-export component DownloadsSheet inherits Rectangle {
+// A small dark capsule for text over key art (the art shows at its edges, the text stays readable).
+component Capsule inherits Rectangle {
+    height: (52px * S.k);
+    border-radius: self.height / 2;
+    background: #0e1424d9;
+    border-width: 1px;
+    border-color: #ffffff29;
+    drop-shadow-blur: (24px * S.k);
+    drop-shadow-color: #00000059;
+    // The light along its top edge that makes it read as glass.
+    Rectangle { x: parent.height / 2; y: 1px; width: parent.width - parent.height; height: 1px; background: #ffffff33; }
+}
+
+component PadGlyph inherits Rectangle {
+    in property <string> glyph;
+    width: (26px * S.k); height: self.width; border-radius: self.width / 2;
+    border-width: 1.5px; border-color: #ffffff59;
+    Text { text: root.glyph; font-size: (13px * S.k); color: #dfe4ef; }
+}
+
+// The Downloads page: the chosen download over its key art, filters, and a shelf of every download.
+export component DownloadsPage inherits Rectangle {
     in property <[DownloadData]> data;
-    in property <string> summary;
-    in property <int> selected;
+    in property <int> sel;
+    // -1: the shelf has focus; otherwise the selected download's button with focus.
+    in property <int> focus-btn;
+    in property <[DlTab]> tabs;
+    in property <int> filter;
+    in property <length> shelf-x;
+    in property <string> down;
+    in property <string> up;
+    in property <string> vpn;
+    // 0 no VPN rule, 1 connected, 2 waiting for it.
+    in property <int> vpn-kind;
     in property <bool> pad;
-    in-out property <length> scroll-y;
+    // There are downloads, though the filter may show none ("Nothing needs you").
+    in property <bool> has-any;
+    in property <string> empty-title;
     callback action(string, string);
+    callback select(int);
+    callback filter-clicked(int);
     callback close();
-    // Opaque: the screen underneath showing through made the sheet look broken.
+    property <DownloadData> s: root.data[root.sel];
+    property <bool> any: root.data.length > 0;
+    pure function bar-color() -> color {
+        return root.s.bar-kind == 1 ? Theme.hint : root.s.bar-kind == 2 ? Theme.danger : root.s.bar-kind == 3 ? Theme.ok : #4d94ff;
+    }
+    pure function kind-color(kind: int) -> color {
+        return kind == 1 ? Theme.warn : kind == 2 ? Theme.danger : kind == 3 ? Theme.ok : #8dbaff;
+    }
     background: Theme.bg;
     TouchArea { }
-    VerticalLayout {
-        x: (120px * S.k);
-        y: (48px * S.k);
-        width: parent.width - (240px * S.k);
-        height: parent.height - (96px * S.k);
+
+    // Key art, edge to edge, fading into the page.
+    if root.any && root.s.has-art: Image {
+        x: 0; y: 0; width: root.width; height: (800px * S.k);
+        source: root.s.art; image-fit: cover;
+    }
+    Rectangle {
+        x: 0; y: 0; width: root.width; height: (800px * S.k);
+        background: @linear-gradient(90deg, #05070f 0%, #05070fe6 26%, #05070f80 50%, #05070f00 72%);
+    }
+    Rectangle {
+        x: 0; y: 0; width: root.width; height: (802px * S.k);
+        background: @linear-gradient(180deg, #05070fcc 0%, #05070f00 22%, #05070f00 45%, #05070fe6 72%, #05070f 82%);
+    }
+
+    // Top bar: the live numbers on a capsule so they read over any art.
+    HorizontalLayout {
+        x: (120px * S.k); y: (40px * S.k); width: root.width - (240px * S.k); height: (52px * S.k);
         spacing: (14px * S.k);
-        HorizontalLayout {
-            alignment: space-between;
-            Text { text: "Downloads"; font-size: (44px * S.k); font-weight: 600; color: Theme.text; }
-            BackButton { pad: root.pad; clicked => { root.close(); } }
-        }
-        Text { text: summary; font-size: (19px * S.k); color: Theme.text2; }
-        Text {
-            text: "Downloads keep going while the launcher is open, even minimized, and stop when you close it. Finished downloads keep sharing with other players until you choose Stop sharing, or turn off Settings → Keep sharing finished downloads.";
-            font-size: (17px * S.k); color: Theme.text3; wrap: word-wrap;
-        }
-        Rectangle { height: (8px * S.k); }
-        // Nothing yet: one compact card, then the empty space below it.
-        if data.length == 0: HorizontalLayout {
-            alignment: start;
-            Rectangle {
-                background: #10203c;
-                border-radius: (20px * S.k);
-                border-width: 1px;
-                border-color: Theme.line;
-                HorizontalLayout {
-                    padding: (30px * S.k); spacing: (22px * S.k);
-                    Rectangle {
-                        width: (56px * S.k); height: (56px * S.k); border-radius: (16px * S.k); background: #0a6cff2e;
-                        Image { source: Icons.disk; colorize: #a7caff; width: (28px * S.k); height: (28px * S.k); }
-                    }
-                    VerticalLayout {
-                        alignment: center; spacing: (6px * S.k);
-                        Text { text: "Nothing downloading"; font-size: (28px * S.k); font-weight: 600; color: Theme.text; }
-                        Text { text: "Pick a game in the Library and press Download."; font-size: (21px * S.k); color: Theme.text2; }
-                    }
+        Text { text: "Downloads"; font-size: (28px * S.k); font-weight: 600; color: Theme.text; vertical-alignment: center; }
+        Rectangle { horizontal-stretch: 1; }
+        if root.any || root.vpn-kind != 0: Capsule {
+            width: stats.preferred-width;
+            stats := HorizontalLayout {
+                padding-left: (24px * S.k); padding-right: (24px * S.k); spacing: (18px * S.k);
+                if root.any: Text { text: "↓ " + root.down; font-size: (18px * S.k); font-weight: 600; color: Theme.text; vertical-alignment: center; }
+                if root.any: Rectangle { width: 1px; height: (22px * S.k); y: (15px * S.k); background: #ffffff24; }
+                if root.any: Text { text: "↑ " + root.up; font-size: (18px * S.k); font-weight: 600; color: Theme.text; vertical-alignment: center; }
+                if root.any && root.vpn-kind != 0: Rectangle { width: 1px; height: (22px * S.k); y: (15px * S.k); background: #ffffff24; }
+                if root.vpn-kind != 0: HorizontalLayout {
+                    spacing: (8px * S.k);
+                    Image { source: Icons.lock; colorize: root.vpn-kind == 1 ? Theme.ok : Theme.warn; width: (17px * S.k); height: (17px * S.k); y: (17px * S.k); }
+                    Text { text: root.vpn; font-size: (18px * S.k); font-weight: 600; color: root.vpn-kind == 1 ? Theme.ok : Theme.warn; vertical-alignment: center; }
                 }
             }
         }
-        if data.length == 0: Rectangle { vertical-stretch: 1; }
-                if data.length > 0: Rectangle {
-                    clip: true;
-                    Flickable {
-                        content-y <=> root.scroll-y;
-                        content-height: rows.preferred-height;
-                        content-width: self.width;
-            interactive: true;
-            rows := VerticalLayout {
-                width: parent.width;
-                spacing: 0;
-                for d[i] in root.data: Rectangle {
-                    height: (d.review ? 428px : 272px) * S.k;
-                    Rectangle {
-                        height: parent.height - (16px * S.k);
-                        background: d.failed ? #331727 : #101c32;
-                        border-radius: (18px * S.k);
-                        border-width: 1px;
-                        border-color: Theme.line;
-                        VerticalLayout {
-                            padding: (22px * S.k); spacing: (10px * S.k);
-                            HorizontalLayout {
-                                spacing: (20px * S.k);
-                                Text { text: d.title; font-size: (24px * S.k); font-weight: 600; color: Theme.text; overflow: elide; horizontal-stretch: 1; }
-                                Text { text: d.state; font-size: (17px * S.k); color: d.failed ? Theme.danger : d.complete ? Theme.ok : #8dbaff; }
-                            }
-                            Rectangle {
-                                height: (7px * S.k); background: #ffffff14; border-radius: (4px * S.k);
-                                Rectangle {
-                                    x: 0; y: 0;
-                                    width: parent.width * d.progress; background: d.complete ? Theme.ok : Theme.accent;
-                                    border-radius: (4px * S.k);
-                                    animate width { duration: 300ms; }
-                                }
-                            }
-                            Text { text: d.detail; font-size: (18px * S.k); color: Theme.text2; overflow: elide; }
-                            Text { text: d.path; font-size: (16px * S.k); color: Theme.text3; overflow: elide; }
-                            if d.error != "": Text { text: d.error; font-size: (17px * S.k); color: Theme.danger; wrap: word-wrap; max-height: (46px * S.k); overflow: elide; }
-                            if d.review: Text { text: d.file-summary; font-size: (18px * S.k); color: Theme.text; }
-                            if d.review: ScrollView {
-                                height: (146px * S.k);
-                                Text { x: 0; y: 0; min-width: parent.width; text: d.files; horizontal-alignment: left; vertical-alignment: top; color: Theme.text2; font-size: (16px * S.k); wrap: word-wrap; }
-                            }
-                            HorizontalLayout {
-                                spacing: (14px * S.k); alignment: start;
-                                TransferButton { label: d.primary != "" ? d.primary : d.complete ? "Complete" : "Resolving…"; primary: true; enabled: d.primary-action != ""; focused: root.selected == i * 3; clicked => { root.action(d.key, d.primary-action); } }
-                                TransferButton { label: d.secondary; focused: root.selected == i * 3 + 1; clicked => { root.action(d.key, d.secondary-action); } }
-                                TransferButton { label: "Open folder"; focused: root.selected == i * 3 + 2; clicked => { root.action(d.key, "folder"); } }
-                                Rectangle { horizontal-stretch: 1; }
-                            }
-                        }
-                    }
-                }
-            }
-                    }
-        }
-        Text {
-            text: (data.length == 0 ? "" : root.pad ? "↑ ↓ choose a download · ← → choose a button · ✕ press it · " : "↑ ↓ choose a download · ← → choose a button · Enter to press it · ")
-                + "Your downloaded files are never deleted by Cancel or Remove";
-            font-size: (17px * S.k); color: Theme.text3; wrap: word-wrap;
+        Capsule {
+            width: back.preferred-width + (8px * S.k);
+            back := BackButton { x: (4px * S.k); y: (2px * S.k); pad: root.pad; clicked => { root.close(); } }
         }
     }
+
+    // Nothing yet, or nothing under this filter.
+    if !root.any: VerticalLayout {
+        x: (120px * S.k); y: (300px * S.k); width: (900px * S.k); height: self.preferred-height;
+        spacing: (14px * S.k); alignment: start;
+        Text { text: root.has-any ? root.empty-title : "Nothing downloading"; font-size: (52px * S.k); font-weight: 700; color: Theme.text; }
+        Text {
+            text: root.has-any ? "Switch filters with " + (root.pad ? "L1 and R1." : "Q and E.") : "Pick a game in the Library and press Download. It installs by itself when it's done.";
+            font-size: (22px * S.k); color: Theme.text2; wrap: word-wrap;
+        }
+    }
+
+    // The chosen download.
+    if root.any: VerticalLayout {
+        x: (120px * S.k); y: (150px * S.k); width: (960px * S.k);
+        spacing: 0;
+        alignment: start;
+        HorizontalLayout {
+            height: (26px * S.k); spacing: (18px * S.k); alignment: start;
+            HorizontalLayout {
+                spacing: (10px * S.k);
+                Rectangle { width: (8px * S.k); height: (8px * S.k); y: (9px * S.k); border-radius: (4px * S.k); background: root.kind-color(root.s.kind); }
+                Text { text: root.s.status; font-size: (18px * S.k); font-weight: 600; color: root.kind-color(root.s.kind); vertical-alignment: center; }
+            }
+            Text { text: root.s.when; font-size: (18px * S.k); color: Theme.hint; vertical-alignment: center; }
+        }
+        Rectangle { height: (18px * S.k); }
+        Rectangle {
+            height: (150px * S.k);
+            if root.s.has-logo: Image {
+                x: 0; y: (parent.height - self.height) / 2;
+                width: root.s.logo-w; height: root.s.logo-h;
+                source: root.s.logo; image-fit: contain;
+            }
+            if !root.s.has-logo: Text {
+                x: 0; width: parent.width; height: parent.height;
+                text: root.s.title; font-size: (56px * S.k); font-weight: 700; color: Theme.text;
+                letter-spacing: -(1.5px * S.k); wrap: word-wrap; overflow: elide; vertical-alignment: center;
+            }
+        }
+        Rectangle { height: (22px * S.k); }
+        // The big number and the few facts that matter.
+        HorizontalLayout {
+            height: (96px * S.k); spacing: (52px * S.k); alignment: start;
+            if root.s.big == "" && root.s.stats.length == 0 && root.s.note != "": Text {
+                width: (900px * S.k); text: root.s.note; font-size: (22px * S.k); color: root.kind-color(root.s.kind);
+                wrap: word-wrap; overflow: elide; vertical-alignment: bottom;
+            }
+            if root.s.big != "": HorizontalLayout {
+                alignment: start;
+                Text { text: root.s.big; font-size: (104px * S.k); font-weight: 400; letter-spacing: -(4px * S.k); color: Theme.text; vertical-alignment: bottom; }
+                Text { text: root.s.big-unit; font-size: (44px * S.k); color: Theme.text2; vertical-alignment: bottom; }
+            }
+            for st[i] in root.s.stats: VerticalLayout {
+                alignment: end; spacing: (6px * S.k); padding-bottom: (4px * S.k);
+                HorizontalLayout {
+                    spacing: (12px * S.k); alignment: start;
+                    Text { text: st.value; font-size: (28px * S.k); font-weight: 600; color: Theme.text; }
+                    if i == 0 && root.s.spark != "": Path {
+                        width: (96px * S.k); height: (28px * S.k); y: (4px * S.k);
+                        commands: root.s.spark; viewbox-width: 400; viewbox-height: 160;
+                        stroke: #8dbaff; stroke-width: (2.5px * S.k); fill: transparent;
+                    }
+                }
+                Text { text: st.label; font-size: (16px * S.k); color: Theme.hint; }
+            }
+        }
+        // One bar for the whole job.
+        Rectangle { height: (30px * S.k); }
+        HorizontalLayout {
+            width: (780px * S.k); spacing: (8px * S.k); alignment: start;
+            for seg[i] in [
+                { label: root.s.dl-label, frac: root.s.dl-frac, stretch: 6 },
+                { label: root.s.inst-label, frac: root.s.inst-frac, stretch: 3 },
+                { label: "Play", frac: root.s.ready ? 1.0 : 0.0, stretch: 1 },
+            ]: VerticalLayout {
+                horizontal-stretch: seg.stretch; width: (780px * S.k - 16px * S.k) * seg.stretch / 10;
+                spacing: (12px * S.k);
+                Rectangle {
+                    height: (4px * S.k); border-radius: (2px * S.k); background: #ffffff26; clip: true;
+                    Rectangle {
+                        x: 0; width: parent.width * seg.frac; border-radius: (2px * S.k);
+                        background: i == 2 ? Theme.ok : root.bar-color();
+                        animate width { duration: 400ms; }
+                    }
+                }
+                Text {
+                    text: (seg.frac >= 1.0 && i < 2 ? "✓ " : "") + seg.label;
+                    font-size: (16px * S.k); overflow: elide;
+                    font-weight: seg.frac > 0 && seg.frac < 1 ? 600 : 500;
+                    color: i == 2 && root.s.ready ? Theme.ok : seg.frac >= 1.0 ? Theme.text2 : seg.frac > 0 ? Theme.text : Theme.text3;
+                }
+            }
+        }
+        if root.s.note != "" && (root.s.big != "" || root.s.stats.length > 0): Text {
+            height: (34px * S.k); text: root.s.note; font-size: (19px * S.k); color: root.kind-color(root.s.kind);
+            overflow: elide; vertical-alignment: bottom;
+        }
+        Rectangle { height: root.s.note != "" && (root.s.big != "" || root.s.stats.length > 0) ? (18px * S.k) : (30px * S.k); }
+        HorizontalLayout {
+            spacing: (14px * S.k); alignment: start; height: (60px * S.k);
+            for a[i] in root.s.actions: Btn {
+                data: a; h: (60px * S.k);
+                focused: root.focus-btn == i;
+                dim: root.focus-btn >= 0 && root.focus-btn != i;
+                clicked => { root.action(root.s.key, a.id); }
+            }
+        }
+    }
+
+    // Filters.
+    if root.has-any: HorizontalLayout {
+        x: (120px * S.k); y: (668px * S.k); height: (40px * S.k);
+        spacing: (36px * S.k); alignment: start;
+        Rectangle {
+            width: (34px * S.k); height: (24px * S.k); y: (8px * S.k); border-radius: (6px * S.k);
+            border-width: 1.5px; border-color: #ffffff40;
+            Text { text: root.pad ? "L1" : "Q"; font-size: (13px * S.k); font-weight: 700; color: Theme.hint; }
+        }
+        for t[i] in root.tabs: Rectangle {
+            width: row.preferred-width;
+            row := HorizontalLayout {
+                spacing: (8px * S.k);
+                Text { text: t.label; font-size: (21px * S.k); font-weight: root.filter == i ? 600 : 500; color: root.filter == i ? Theme.text : Theme.hint; vertical-alignment: center; }
+                Text { text: t.count; font-size: (21px * S.k); font-weight: 500; color: t.warn ? Theme.warn : root.filter == i ? Theme.text2 : Theme.text3; vertical-alignment: center; }
+            }
+            Rectangle { x: 0; y: parent.height + (2px * S.k); width: (28px * S.k); height: (3px * S.k); border-radius: (2px * S.k); background: root.filter == i ? Theme.text : transparent; }
+            TouchArea { mouse-cursor: pointer; clicked => { root.filter-clicked(i); } }
+        }
+        Rectangle {
+            width: (34px * S.k); height: (24px * S.k); y: (8px * S.k); border-radius: (6px * S.k);
+            border-width: 1.5px; border-color: #ffffff40;
+            Text { text: root.pad ? "R1" : "E"; font-size: (13px * S.k); font-weight: 700; color: Theme.hint; }
+        }
+    }
+
+    // The shelf: every download as key art, newest first.
+    if root.any: Rectangle {
+        x: 0; y: (730px * S.k); width: root.width; height: (270px * S.k);
+        clip: true;
+        HorizontalLayout {
+            x: (120px * S.k) - root.shelf-x; y: (8px * S.k);
+            spacing: (20px * S.k); alignment: start;
+            animate x { duration: 260ms; easing: ease-out-quad; }
+            for t[i] in root.data: VerticalLayout {
+                width: (288px * S.k) + (t.group-first && i > 0 ? (40px * S.k) : 0);
+                padding-left: t.group-first && i > 0 ? (40px * S.k) : 0;
+                spacing: (12px * S.k);
+                Text { text: t.group-first ? t.group-label : ""; height: (20px * S.k); font-size: (16px * S.k); font-weight: 600; color: Theme.hint; }
+                Rectangle {
+                    height: (162px * S.k);
+                    FocusRing { w: parent.width; h: parent.height; on: root.sel == i && root.focus-btn < 0; radius: (14px * S.k); }
+                    Rectangle {
+                        border-radius: (14px * S.k); clip: true; background: #101c32;
+                        border-width: root.sel == i && root.focus-btn >= 0 ? (2px * S.k) : 0; border-color: #ffffff99;
+                        if !t.has-tile-art: Text { x: (16px * S.k); width: parent.width - (32px * S.k); text: t.title; font-size: (20px * S.k); font-weight: 600; color: Theme.text2; wrap: word-wrap; }
+                        if t.has-tile-art: Image { width: parent.width; height: parent.height; source: t.tile-art; image-fit: cover; opacity: t.group == 2 && root.sel != i ? 0.75 : 1; }
+                        Rectangle {
+                            y: parent.height - self.height; height: (4px * S.k); background: #00000080;
+                            Rectangle { x: 0; width: parent.width * t.tile-frac; background: t.kind == 2 ? Theme.danger : t.kind == 3 ? #3ddc9799 : t.kind == 1 ? Theme.hint : #4d94ff; }
+                        }
+                    }
+                    TouchArea { mouse-cursor: pointer; clicked => { root.select(i); } }
+                }
+                VerticalLayout {
+                    spacing: (4px * S.k); padding-left: (2px * S.k);
+                    Text { text: t.title; font-size: (18px * S.k); font-weight: 600; color: Theme.text; overflow: elide; }
+                    Text { text: t.line; font-size: (15px * S.k); color: t.kind == 0 ? Theme.hint : root.kind-color(t.kind); overflow: elide; }
+                }
+            }
+        }
+    }
+
+    // Controller hints.
+    HorizontalLayout {
+        x: (120px * S.k); y: root.height - (60px * S.k); width: root.width - (240px * S.k); height: (26px * S.k);
+        spacing: (28px * S.k);
+        Text { text: "Cancel never deletes what you've downloaded"; font-size: (16px * S.k); color: Theme.hint; vertical-alignment: center; }
+        Rectangle { horizontal-stretch: 1; }
+        if root.pad: HorizontalLayout { spacing: (10px * S.k); PadGlyph { glyph: "✕"; } Text { text: "Select"; font-size: (16px * S.k); color: Theme.hint; vertical-alignment: center; } }
+        if root.pad: HorizontalLayout { spacing: (10px * S.k); PadGlyph { glyph: "○"; } Text { text: "Back"; font-size: (16px * S.k); color: Theme.hint; vertical-alignment: center; } }
+        if !root.pad: Text { text: "Enter Select · Esc Back"; font-size: (16px * S.k); color: Theme.hint; vertical-alignment: center; }
+    }
 }
+
 
 export component DownloadConsent inherits Rectangle {
     in property <bool> focus-path;
@@ -194,3 +359,263 @@ export component DownloadConsent inherits Rectangle {
         }
     }
 }
+component Check inherits Rectangle {
+    // 0 off, 1 some (a dash), 2 on.
+    in property <int> state;
+    width: (26px * S.k); height: self.width; border-radius: (7px * S.k);
+    background: state > 0 ? Theme.accent : transparent;
+    border-width: state > 0 ? 0 : (2px * S.k); border-color: #ffffff4d;
+    if state == 2: Image { source: Icons.check; colorize: #ffffff; width: (16px * S.k); height: (16px * S.k); }
+    if state == 1: Rectangle { width: (12px * S.k); height: (3px * S.k); border-radius: (2px * S.k); background: #ffffff; }
+}
+
+// "Download to" / "Install to": the folder, Change, and the space it takes on its drive.
+component Destination inherits VerticalLayout {
+    in property <string> label;
+    in-out property <string> path;
+    in property <string> line;
+    in property <float> frac;
+    in property <bool> bad;
+    in property <bool> focused;
+    in property <bool> editing;
+    callback change();
+    callback edited(bool);
+    callback done();
+    changed editing => { if root.editing { input.focus(); input.select-all(); } }
+    spacing: (8px * S.k);
+    alignment: start;
+    vertical-stretch: 0;
+    Text { text: root.label; font-size: (16px * S.t); color: Theme.hint; }
+    HorizontalLayout {
+        spacing: (16px * S.k); height: (40px * S.k);
+        Rectangle {
+            horizontal-stretch: 1;
+            border-radius: (10px * S.k);
+            background: root.editing ? #05091499 : transparent;
+            border-width: root.editing ? 1px : 0; border-color: Theme.line;
+            input := TextInput {
+                x: root.editing ? (12px * S.k) : 0; width: parent.width - self.x * 2; height: parent.height;
+                text <=> root.path; single-line: true; read-only: !root.editing;
+                font-size: (20px * S.t); font-weight: 500; color: Theme.text; vertical-alignment: center;
+                changed has-focus => { root.edited(self.has-focus); }
+                accepted => { root.done(); }
+            }
+        }
+        Rectangle {
+            width: label.preferred-width + (36px * S.k); border-radius: self.height / 2;
+            background: root.focused ? #ffffff : ta.has-hover ? #ffffff24 : #ffffff0d;
+            border-width: 1px; border-color: #ffffff24;
+            label := Text { text: root.editing ? "Done" : "Change"; font-size: (16px * S.t); font-weight: 500; color: root.focused ? #0a0d18 : Theme.text; }
+            ta := TouchArea { mouse-cursor: pointer; clicked => { if root.editing { root.done(); } else { root.change(); } } }
+        }
+    }
+    Rectangle {
+        height: (4px * S.k); border-radius: (2px * S.k); background: #ffffff1a; clip: true;
+        Rectangle { x: 0; width: parent.width * min(1.0, root.frac); background: root.bad ? Theme.danger : #4d94ff; animate width { duration: 300ms; } }
+    }
+    Text { text: root.line; font-size: (15px * S.t); color: root.bad ? Theme.danger : Theme.hint; wrap: word-wrap; }
+}
+
+// Download & install: slides in over the Game Hub when you press Download. The torrent's files
+// with a checkbox each, where it downloads and installs, and the space it takes there.
+export component DownloadPanel inherits Rectangle {
+    in property <string> title;
+    in property <string> vpn;
+    in property <bool> vpn-ok;
+    // 0 getting the file list, 1 the files, 2 nobody is sharing it, 3 it can't be downloaded.
+    in property <int> state;
+    in property <string> message-title;
+    in property <string> message;
+    in property <[SetupFile]> files;
+    in property <string> count;
+    in property <string> total;
+    in property <int> all-state;
+    in property <string> notice;
+    // 1 a warning (amber), 2 a problem (red).
+    in property <int> notice-kind;
+    in-out property <string> dl-path;
+    in-out property <string> inst-path;
+    in property <string> dl-line;
+    in property <float> dl-frac;
+    in property <bool> dl-bad;
+    in property <string> inst-line;
+    in property <float> inst-frac;
+    in property <bool> inst-bad;
+    in property <string> go-label;
+    in property <bool> go-enabled;
+    // Controller focus: a file row, or 1 Change (download), 2 Change (install), 3 the main button, 4 Cancel.
+    in property <int> focus-row: -1;
+    in property <int> focus-item;
+    // Which folder is being typed: 1 download, 2 install.
+    in property <int> edit;
+    in property <bool> pad;
+    callback toggle(int);
+    callback go();
+    callback cancel();
+    callback change(int);
+    callback edited(bool);
+    callback edit-done();
+    property <length> row-h: (53px * S.k);
+    property <bool> entered: false;
+    init => { entered = true; }
+    changed focus-row => {
+        if root.focus-row >= 0 {
+            list.content-y = max(min(0px, list.height - root.files.length * root.row-h),
+                min(0px, -(root.focus-row * root.row-h - (list.height - root.row-h) / 2)));
+        }
+    }
+    background: entered ? #03050c80 : #03050c00;
+    animate background { duration: 260ms; }
+    TouchArea { clicked => { root.cancel(); } }
+
+    Rectangle {
+        property <length> panel-width: min(root.width, (920px * S.k));
+        x: root.width - self.panel-width + (root.entered ? 0 : (120px * S.k));
+        opacity: root.entered ? 1 : 0;
+        animate x { duration: 420ms; easing: ease-out-expo; }
+        animate opacity { duration: 220ms; easing: ease-out-quad; }
+        width: self.panel-width;
+        background: #0c111ee6;
+        border-width: 1px; border-color: #ffffff24;
+        drop-shadow-blur: (80px * S.k); drop-shadow-color: #0000008c;
+        TouchArea { }
+        VerticalLayout {
+            padding-left: (64px * S.k); padding-right: (64px * S.k); padding-top: (52px * S.k); padding-bottom: (36px * S.k);
+            spacing: 0;
+            Text { text: "Download & install"; font-size: (34px * S.t); font-weight: 600; color: Theme.text; }
+            Text { text: root.title; font-size: (20px * S.t); color: Theme.text2; overflow: elide; }
+            Rectangle { height: (14px * S.k); }
+            HorizontalLayout {
+                spacing: (9px * S.k); alignment: start;
+                Image { source: Icons.lock; colorize: root.vpn-ok ? Theme.ok : Theme.warn; width: (16px * S.k); height: (16px * S.k); y: (3px * S.k); }
+                Text { text: root.vpn; font-size: (16px * S.t); font-weight: 500; color: root.vpn-ok ? Theme.ok : Theme.warn; wrap: word-wrap; }
+            }
+            if root.notice != "": VerticalLayout {
+                padding-top: (20px * S.k);
+                Rectangle {
+                    border-radius: (14px * S.k);
+                    background: root.notice-kind == 2 ? #ff5a6a1f : #ffb5471f;
+                    HorizontalLayout {
+                        padding: (14px * S.k); padding-left: (16px * S.k); spacing: (12px * S.k);
+                        Image { source: Icons.alert; colorize: root.notice-kind == 2 ? Theme.danger : Theme.warn; width: (20px * S.k); height: (20px * S.k); }
+                        Text { text: root.notice; font-size: (17px * S.t); color: root.notice-kind == 2 ? Theme.danger : Theme.warn; wrap: word-wrap; horizontal-stretch: 1; }
+                    }
+                }
+            }
+            Rectangle { height: (22px * S.k); }
+            // Files, straight from the torrent.
+            HorizontalLayout {
+                height: (40px * S.k); spacing: (16px * S.k);
+                if root.state == 1: Check {
+                    y: (7px * S.k); state: root.all-state;
+                    TouchArea { mouse-cursor: pointer; clicked => { root.toggle(-1); } }
+                }
+                Text { text: "Files"; font-size: (22px * S.t); font-weight: 600; color: Theme.text; vertical-alignment: center; }
+                if root.state == 1: HorizontalLayout {
+                    spacing: (7px * S.k); padding-left: (6px * S.k);
+                    if root.pad: PadGlyph { glyph: "△"; width: (22px * S.k); y: (9px * S.k); }
+                    Text { text: root.pad ? "Select all" : "/ Select all"; font-size: (15px * S.t); color: Theme.hint; vertical-alignment: center; }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Text { text: root.count; font-size: (18px * S.t); color: Theme.text2; vertical-alignment: center; }
+                Text { text: root.total; font-size: (18px * S.t); font-weight: 600; color: Theme.text; vertical-alignment: center; }
+            }
+            Rectangle { height: (10px * S.k); }
+            Rectangle {
+                vertical-stretch: 1; min-height: (120px * S.k);
+                clip: true;
+                Rectangle { y: 0; height: 1px; background: #ffffff14; }
+                list := Flickable {
+                    visible: root.state == 1;
+                    y: 1px; height: parent.height - 1px;
+                    content-height: root.files.length * root.row-h;
+                    animate content-y { duration: 160ms; easing: ease-out-quad; }
+                    for f[i] in root.files: Rectangle {
+                        y: i * root.row-h + (3px * S.k); height: root.row-h - (6px * S.k);
+                        border-radius: (10px * S.k);
+                        background: root.focus-row == i ? #ffffff14 : transparent;
+                        border-width: root.focus-row == i ? (3px * S.k) : 0; border-color: Theme.ring;
+                        HorizontalLayout {
+                            padding-left: (12px * S.k); padding-right: (12px * S.k); spacing: (16px * S.k);
+                            if !f.blocked: Check { y: (parent.height - self.height) / 2; state: f.on ? 2 : 0; }
+                            if f.blocked: Rectangle {
+                                width: (26px * S.k);
+                                Image { source: Icons.stop; colorize: Theme.warn; width: (20px * S.k); height: (20px * S.k); }
+                            }
+                            HorizontalLayout {
+                                horizontal-stretch: 1;
+                                if f.dir != "": Text { text: f.dir; font-size: (18px * S.t); color: Theme.text3; vertical-alignment: center; overflow: elide; max-width: (300px * S.k); }
+                                Text { text: f.name; font-size: (18px * S.t); color: f.blocked ? Theme.warn : f.on ? Theme.text : Theme.text3; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                            }
+                            Text { text: f.size; font-size: (17px * S.t); color: f.blocked ? Theme.warn : f.on ? Theme.text2 : Theme.text3; vertical-alignment: center; }
+                        }
+                        if !f.blocked: TouchArea { mouse-cursor: pointer; clicked => { root.toggle(i); } }
+                    }
+                }
+                if root.state == 0: VerticalLayout {
+                    y: (8px * S.k); alignment: start; spacing: (22px * S.k); padding-left: (12px * S.k);
+                    HorizontalLayout {
+                        spacing: (12px * S.k); height: (40px * S.k); alignment: start;
+                        Image {
+                            source: Icons.spinner; colorize: #8dbaff; width: (20px * S.k); height: (20px * S.k); y: (10px * S.k);
+                            transform-rotation: animation-tick() / 2.5ms * 1deg;
+                        }
+                        Text { text: "Getting the file list from other players…"; font-size: (17px * S.t); color: Theme.text2; vertical-alignment: center; }
+                    }
+                    for w[i] in [340, 420, 260, 380, 300]: HorizontalLayout {
+                        spacing: (16px * S.k); alignment: start; height: (26px * S.k);
+                        Rectangle { width: (26px * S.k); border-radius: (7px * S.k); background: #ffffff10; }
+                        Rectangle { width: w * 1px * S.k; height: (14px * S.k); y: (6px * S.k); border-radius: (7px * S.k); background: #ffffff12; }
+                    }
+                }
+                if root.state >= 2: VerticalLayout {
+                    y: (40px * S.k); alignment: start; spacing: (14px * S.k); padding-left: (12px * S.k); padding-right: (12px * S.k);
+                    Text { text: root.message-title; font-size: (24px * S.t); font-weight: 600; color: Theme.text; wrap: word-wrap; }
+                    Text { text: root.message; font-size: (18px * S.t); color: Theme.text2; wrap: word-wrap; }
+                }
+            }
+            // Where it goes, and the space on each drive.
+            Rectangle { height: (18px * S.k); }
+            Rectangle { height: 1px; background: #ffffff14; }
+            Rectangle { height: (22px * S.k); }
+            Destination {
+                label: "Download to"; path <=> root.dl-path; line: root.dl-line; frac: root.dl-frac; bad: root.dl-bad;
+                focused: root.focus-item == 1; editing: root.edit == 1;
+                change => { root.change(1); } edited(f) => { root.edited(f); } done => { root.edit-done(); }
+            }
+            Rectangle { height: (20px * S.k); }
+            Destination {
+                label: "Install to"; path <=> root.inst-path; line: root.inst-line; frac: root.inst-frac; bad: root.inst-bad;
+                focused: root.focus-item == 2; editing: root.edit == 2;
+                change => { root.change(2); } edited(f) => { root.edited(f); } done => { root.edit-done(); }
+            }
+            Rectangle { height: (22px * S.k); }
+            Text {
+                text: "Only download games you're allowed to. The download stays after installing, so other players can get it too.";
+                font-size: (15px * S.t); color: Theme.text3; wrap: word-wrap;
+            }
+            Rectangle { height: (16px * S.k); }
+            HorizontalLayout {
+                height: (64px * S.k); spacing: (14px * S.k);
+                Rectangle {
+                    horizontal-stretch: 1; border-radius: self.height / 2;
+                    background: !root.go-enabled ? #ffffff14 : #ffffff;
+                    drop-shadow-blur: root.focus-item == 3 && root.go-enabled ? (28px * S.k) : 0;
+                    drop-shadow-color: #0a6cff8c;
+                    border-width: root.focus-item == 3 ? (4px * S.k) : 0;
+                    border-color: root.go-enabled ? #0a6cff8c : Theme.ring;
+                    Text { text: root.go-label; font-size: (21px * S.t); font-weight: 600; color: root.go-enabled ? #05070f : Theme.text3; }
+                    TouchArea { enabled: root.go-enabled; mouse-cursor: pointer; clicked => { root.go(); } }
+                }
+                Rectangle {
+                    width: (170px * S.k); border-radius: self.height / 2;
+                    background: root.focus-item == 4 ? #ffffff : cta.has-hover ? #ffffff24 : #ffffff1a;
+                    border-width: 1px; border-color: #ffffff29;
+                    Text { text: "Cancel"; font-size: (21px * S.t); font-weight: 600; color: root.focus-item == 4 ? #0a0d18 : Theme.text; }
+                    cta := TouchArea { mouse-cursor: pointer; clicked => { root.cancel(); } }
+                }
+            }
+        }
+    }
+}
+

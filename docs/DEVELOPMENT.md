@@ -160,15 +160,24 @@ uploader-provided console notes, not KytyPS5 compatibility guarantees.
 
 Use this feature only for content you are authorized to obtain and share.
 
-1. Open a release's **Game Hub → Download** (also available in Options).
-2. Choose the destination and **Look up metadata**. This contacts trackers,
-  DHT and peers and reveals your IP address (your VPN's, with **Download only through a
-  VPN** on), but downloads no payload files.
-3. Review the file count, names and total size, then choose **Start download**.
-  All files are downloaded; the first 100 names are shown for large torrents.
-4. Keep browsing or minimize the window. Open **Downloads** with the top-bar
-  disk icon, **Ctrl+D**, or **Settings → Manage downloads**. It shows a progress
-  bar, percentage, verified bytes, MiB/s, ETA and this client's connected peers.
+1. Open a release's **Game Hub → Download** (also available in Options). The **Download &
+  install** panel slides in over the Game Hub and looks the release up straight away. This
+  contacts trackers, DHT and peers and reveals your IP address (your VPN's, with **Download
+  only through a VPN** on; the panel says which), but downloads no payload files.
+2. The torrent's files arrive with a checkbox each (librqbit's `only_files`); untick what you
+  don't want. Windows programs (`.exe`, `.bat`, `.lnk`…) are left out of PS4/PS5 releases and
+  can't be ticked; a release the launcher couldn't install says so before anything downloads.
+  If nobody answers, the panel offers **Keep trying**.
+3. Choose where it downloads and where it installs. Each folder shows the space it needs on
+  its own drive (on the same drive, the download takes its space first), and **Download &
+  install** stays off until both fit. Closing the panel forgets the lookup and its empty folder.
+4. The download starts and the game **installs by itself** when it finishes, one install at a
+  time (the rest wait their turn). The download stays afterwards, for sharing.
+5. Keep browsing or minimize the window. Open **Downloads** with the top-bar disk icon,
+  **Ctrl+D**, or **Settings → Manage downloads**: the selected download over its key art (its
+  progress, speed with a speed line, time left), one bar from Download to Install to Play, and
+  a shelf of every download, newest first, filtered with L1/R1 (Q/E) into In progress, Needs
+  you and Ready to play.
 
 **Pause / Resume** preserve and recheck partial pieces. **Cancel** stops the job
 and keeps files. **Remove** clears inactive history and cached metadata, never
@@ -197,7 +206,8 @@ not establish authenticity or safety of their contents.
 paused, and reopening never resumes an unfinished download; choose Resume/Retry
 explicitly. Completed downloads seed again as described above. Transfer history and metadata live
 under the XDG configuration directory in the launcher's transfers subfolder.
-Download completion does not extract, install, launch a game or rescan the library.
+A download started from the panel installs into the folder chosen there once it completes;
+downloads from before that (and failed installs, after **Retry install**) install by hand.
 Choose the separate **Install** action when ready.
 
 Transfers can upload pieces while downloading and, by default, after completion,
@@ -338,14 +348,16 @@ search, actual responsive column counts, and persisted density at 1349×768 and 
 It uses authored poster art, an inert generated library fixture, private PID/network
 namespaces and temporary profiles; no real games, magnets or user settings are accessed.
 Add `--full-hd` for 1920×1080 evidence. Screenshots and logs are retained under a temporary
-artifact directory. `node scripts/test-downloads.mjs` additionally checks the explicit
-Download → Install → Play workflow with a generated archive without executing its payload.
+artifact directory. `node scripts/test-downloads.mjs` additionally checks the Downloads page,
+the Download & install panel and the Install → Play workflow with a generated archive without
+executing its payload.
 
 `cargo test --offline` also runs generated, tracker/DHT-disabled loopback transfers:
 metadata-only preparation, intermediate progress, pause/resume with corrupt-piece
 repair, paused recovery, shutdown and cancellation/removal that retain partial
-files. No catalog/game magnet is used. `node scripts/test-downloads.mjs` checks
-the native progress/metadata/consent UI, text editing and keep-files removal with
+files, and downloading only the chosen files into a chosen folder. No catalog/game magnet is
+used. `node scripts/test-downloads.mjs` checks the Downloads page and its filters, the Download
+& install panel (typing a folder; closing it forgets the lookup), keep-files removal with
 fabricated local snapshots in a network-disabled namespace. In addition to the
 catalog test prerequisites, it requires Tesseract and ImageMagick. Screenshots
 are retained for visual inspection; these UI fixtures do not perform transfers.

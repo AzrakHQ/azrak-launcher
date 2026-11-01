@@ -1,6 +1,6 @@
-import { S, Theme, Icons, Zone, DownloadData, BootStep, OsiDisk, WjKey, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, ToastData, MenuItem, RunningData } from "theme.slint";
+import { S, Theme, Icons, Zone, DownloadData, DlTab, SetupFile, BootStep, OsiDisk, WjKey, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, ToastData, MenuItem, RunningData } from "theme.slint";
 import { FocusRing, Chip, Btn, Kicker, Badge, Switch, KeyCap, KeyboardKey, BackButton, Shimmer, Cover } from "widgets.slint";
-import { DownloadsSheet, DownloadConsent } from "downloads.slint";
+import { DownloadsPage, DownloadConsent, DownloadPanel } from "downloads.slint";
 import { LibraryFilter, LibrarySortPicker } from "library.slint";
 import { AboutSlint, Palette } from "std-widgets.slint";
 
@@ -240,6 +240,45 @@ export component AppWindow inherits Window {
     in-out property <string> download-path;
     in-out property <bool> download-editing;
     in-out property <length> downloads-y;
+    // The Downloads page: the selected download, the button with focus (-1: the shelf), the filter.
+    in property <int> download-sel;
+    in property <int> download-focus-btn: -1;
+    in property <[DlTab]> download-tabs;
+    in property <int> download-filter;
+    in property <length> download-shelf-x;
+    in property <string> download-down;
+    in property <string> download-up;
+    in property <string> download-vpn;
+    in property <int> download-vpn-kind;
+    in property <bool> download-has-any;
+    in property <string> download-empty-title;
+    // The Download & install panel.
+    in property <string> setup-title;
+    in property <string> setup-vpn;
+    in property <bool> setup-vpn-ok;
+    in property <int> setup-state;
+    in property <string> setup-message-title;
+    in property <string> setup-message;
+    in property <[SetupFile]> setup-files;
+    in property <string> setup-count;
+    in property <string> setup-total;
+    in property <int> setup-all-state;
+    in property <string> setup-notice;
+    in property <int> setup-notice-kind;
+    in-out property <string> setup-dl-path;
+    in-out property <string> setup-inst-path;
+    in property <string> setup-dl-line;
+    in property <float> setup-dl-frac;
+    in property <bool> setup-dl-bad;
+    in property <string> setup-inst-line;
+    in property <float> setup-inst-frac;
+    in property <bool> setup-inst-bad;
+    in property <string> setup-go-label;
+    in property <bool> setup-go-enabled;
+    in property <int> setup-focus-row: -1;
+    in property <int> setup-focus-item;
+    in property <int> setup-edit;
+    in-out property <bool> setup-editing;
     in property <bool> pad-hints;
     // Trailer player: video frames come from libmpv through an OpenGL texture (src/trailer.rs).
     in property <image> trailer-frame;
@@ -399,6 +438,13 @@ export component AppWindow inherits Window {
     callback toast-clicked(int, string);            // id, action
     callback trailer-action(string);                // toggle, close, controls, seek:<0..1>
     callback download-close();
+    callback download-select(int);
+    callback download-filter-clicked(int);
+    callback setup-toggle(int);
+    callback setup-go();
+    callback setup-cancel();
+    callback setup-change(int);
+    callback setup-edit-done();
     callback hub-release(int);
     callback genres-scroll(int);
     in-out property <bool> hub-details-open;
@@ -1698,11 +1744,32 @@ export component AppWindow inherits Window {
             choose(index) => { root.click(Zone.sort-picker, index); }
             close => { root.click(Zone.sort-picker, -1); }
         }
-        if root.overlay == 7 && !root.download-consent: DownloadsSheet {
-            data: root.downloads; summary: root.download-summary; selected: root.idx; pad: root.pad-hints;
-            scroll-y <=> root.downloads-y;
+        if root.overlay == 7 && !root.download-consent: DownloadsPage {
+            data: root.downloads; sel: root.download-sel; focus-btn: root.download-focus-btn; pad: root.pad-hints;
+            tabs: root.download-tabs; filter: root.download-filter; shelf-x: root.download-shelf-x;
+            down: root.download-down; up: root.download-up; vpn: root.download-vpn; vpn-kind: root.download-vpn-kind;
+            has-any: root.download-has-any; empty-title: root.download-empty-title;
             action(key, action) => { root.download-action(key, action); }
+            select(i) => { root.download-select(i); }
+            filter-clicked(i) => { root.download-filter-clicked(i); }
             close => { root.download-close(); }
+        }
+        if root.overlay == 15: DownloadPanel {
+            title: root.setup-title; vpn: root.setup-vpn; vpn-ok: root.setup-vpn-ok; pad: root.pad-hints;
+            state: root.setup-state; message-title: root.setup-message-title; message: root.setup-message;
+            files: root.setup-files; count: root.setup-count; total: root.setup-total; all-state: root.setup-all-state;
+            notice: root.setup-notice; notice-kind: root.setup-notice-kind;
+            dl-path <=> root.setup-dl-path; inst-path <=> root.setup-inst-path;
+            dl-line: root.setup-dl-line; dl-frac: root.setup-dl-frac; dl-bad: root.setup-dl-bad;
+            inst-line: root.setup-inst-line; inst-frac: root.setup-inst-frac; inst-bad: root.setup-inst-bad;
+            go-label: root.setup-go-label; go-enabled: root.setup-go-enabled;
+            focus-row: root.setup-focus-row; focus-item: root.setup-focus-item; edit: root.setup-edit;
+            toggle(i) => { root.setup-toggle(i); }
+            go => { root.setup-go(); }
+            cancel => { root.setup-cancel(); }
+            change(i) => { root.setup-change(i); }
+            edited(focused) => { root.setup-editing = focused; }
+            edit-done => { root.setup-edit-done(); root.focus-root(); }
         }
         if root.overlay == 7 && root.download-consent: DownloadConsent {
             focus-path: root.download-focus-path;

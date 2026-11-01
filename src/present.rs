@@ -558,6 +558,9 @@ impl App {
         if self.hub_keys.contains(key) {
             self.push_hub();
         }
+        if self.dl_keys.contains(key) && self.overlay == Overlay::Downloads {
+            self.push_downloads();
+        }
         if key == self.viewer_key {
             self.push_viewer();
         }

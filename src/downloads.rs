@@ -27,13 +27,6 @@ pub enum State { Resolving, Ready, Checking, Downloading, Paused, Complete, Fail
 
 impl State {
     pub fn active(self) -> bool { matches!(self, Self::Resolving | Self::Checking | Self::Downloading) }
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Resolving => "Getting the file list", Self::Ready => "Ready · check the files, then Start download",
-            Self::Checking => "Checking existing pieces", Self::Downloading => "Downloading", Self::Paused => "Paused",
-            Self::Complete => "Complete · stopped", Self::Failed => "Failed", Self::Cancelled => "Cancelled · partial files kept",
-        }
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -47,7 +40,9 @@ pub struct Job {
     pub done: u64,
     pub total: u64,
     pub file_count: usize,
-    pub files: Vec<String>,
+    /// Unused; still written (empty) because older versions of the launcher need it to read
+    /// the manifest at all.
+    #[serde(default)] files: Vec<String>,
     pub error: String,
     #[serde(skip)] pub speed: f64,
     #[serde(skip)] pub eta: String,
@@ -83,31 +78,12 @@ pub struct Entry {
 }
 
 impl Job {
-    pub fn label(&self) -> &'static str {
-        // "Sharing", not "seeding": the word players know (Settings → Keep sharing finished downloads).
-        if self.state == State::Complete && self.seeding { "Complete · sharing" }
-        else if self.state == State::Complete && self.verifying { "Complete · checking files before sharing" }
-        else if self.waiting_vpn && !self.state.active() && self.state != State::Complete { "Paused · waiting for your VPN" }
-        else { self.state.label() }
-    }
     fn clear_runtime(&mut self) {
         self.speed = 0.0; self.peers = 0; self.eta.clear(); self.seeding = false; self.upload_speed = 0.0; self.verifying = false;
     }
     pub fn progress(&self) -> f32 {
         if self.state == State::Complete { return 1.0; }
         if self.total == 0 { 0.0 } else { (self.done as f64 / self.total as f64).clamp(0.0, 1.0) as f32 }
-    }
-    pub fn primary(&self) -> &'static str {
-        match self.state {
-            State::Ready => "Start download", State::Checking | State::Downloading => "Pause",
-            State::Paused => "Resume", State::Failed | State::Cancelled => "Retry", _ => "",
-        }
-    }
-    pub fn action_id(&self) -> &'static str {
-        match self.state {
-            State::Ready => "start", State::Checking | State::Downloading => "pause",
-            State::Paused => "resume", State::Failed | State::Cancelled => "retry", _ => "",
-        }
     }
 }
 
@@ -490,12 +466,6 @@ pub fn drive(path: &Path) -> Option<Drive> {
     Some(Drive { free: available_space(existing).ok()?, dev, mount })
 }
 
-pub fn bytes_label(bytes: u64) -> String {
-    let value = bytes as f64;
-    if bytes >= 1024 * 1024 * 1024 { format!("{:.2} GiB", value / (1024.0 * 1024.0 * 1024.0)) }
-    else if bytes >= 1024 * 1024 { format!("{:.1} MiB", value / (1024.0 * 1024.0)) }
-    else if bytes >= 1024 { format!("{:.1} KiB", value / 1024.0) } else { format!("{bytes} B") }
-}
 
 struct Resolved { key: String, bytes: Vec<u8>, peers: Vec<SocketAddr> }
 struct Worker {
@@ -1161,7 +1131,7 @@ mod tests {
             assert!(Policy::default().seed_after_download, "production seeding defaults on");
             let job = worker.job(&key).unwrap();
             assert!(job.seeding);
-            assert_eq!(job.label(), "Complete · sharing");
+            assert!(job.state == State::Complete && job.seeding, "complete and sharing");
             assert_eq!(job.progress(), 1.0);
             assert!(!job.state.active(), "completion remains installable, not a download");
             assert_eq!(job.speed, 0.0);
@@ -1211,13 +1181,13 @@ mod tests {
             assert_eq!(restored[0].state, State::Complete);
             assert!(!restored[0].seeding);
             assert_eq!(restored[0].upload_speed, 0.0);
-            assert_eq!(restored[0].label(), State::Complete.label());
+            assert!(restored[0].state == State::Complete && !restored[0].seeding && !restored[0].verifying);
             let source_uploaded = source_handle.stats().uploaded_bytes;
             // A restart seeds again: the files are checked first, then shared, never downloaded.
             let manager = Manager::new(worker.store.clone(), worker.policy.clone());
             let resumed = wait_job(&manager, &key, |job| job.seeding).await;
             assert_eq!(resumed.state, State::Complete);
-            assert_eq!(resumed.label(), "Complete · sharing");
+            assert!(resumed.state == State::Complete && resumed.seeding, "complete and sharing");
             assert!(resumed.error.is_empty());
             // Only the Settings switch stops it.
             manager.set_seed_after_download(false).unwrap();
@@ -1361,7 +1331,7 @@ mod tests {
                     let stopped = wait_job(&manager, &key, |job| !job.seeding).await;
                     assert_eq!(stopped.state, State::Complete);
                     assert_eq!(stopped.progress(), 1.0);
-                    assert_eq!(stopped.label(), State::Complete.label());
+                    assert!(stopped.state == State::Complete && !stopped.seeding && !stopped.verifying);
                     assert!(session.get(handle.id().into()).is_none());
                     assert_unchanged(&manager, &key, &payload, State::Complete, 1).await;
                 }
@@ -1403,7 +1373,7 @@ mod tests {
             worker.start(&key).await.unwrap();
             let job = worker.job(&key).unwrap();
             assert!(job.waiting_vpn && job.state == State::Paused, "{:?}", job.state);
-            assert_eq!(job.label(), "Paused · waiting for your VPN");
+            assert!(job.state == State::Paused && job.waiting_vpn, "paused, waiting for the VPN");
             assert!(worker.session.is_none() && worker.handles.is_empty());
 
             // The VPN connects (here: loopback, where the authored seed listens): the session is
@@ -1811,6 +1781,20 @@ mod tests {
         let mut job = job(temp.path(), &key); job.platform = Some(crate::platform::Platform::Ps5);
         let mut worker = Worker::new(temp.path().join("store2"), Arc::new(Mutex::new(vec![job])), Policy { local_only: true, ..Default::default() });
         assert!(worker.resolved(Resolved { key, bytes, peers: vec![] }).is_err(), "only programs: nothing to download");
+    }
+
+    #[test]
+    fn older_launchers_can_still_read_the_manifest() {
+        // v1.22 and before require every field they know, `files` included.
+        let temp = tempfile::tempdir().unwrap();
+        let mut j = job(temp.path(), &"e".repeat(40));
+        j.entries = vec![Entry { path: "a.pkg".into(), size: 1, blocked: false }];
+        j.selected = Some(vec![0]);
+        let saved = serde_json::to_value(&Manifest { schema: 1, jobs: vec![j] }).unwrap();
+        let job = &saved["jobs"][0];
+        for field in ["key", "topic", "name", "magnet", "folder", "state", "done", "total", "file_count", "files", "error"] {
+            assert!(job.get(field).is_some(), "{field} is written");
+        }
     }
 
     #[test]

@@ -46,6 +46,7 @@ pub const Z_WIFI_JOIN: i32 = 21;
 pub const Z_POWER: i32 = 22;
 pub const Z_SEARCH_KEYS: i32 = 23;
 pub const Z_VERSIONS: i32 = 24;
+pub const Z_SETUP: i32 = 25;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Overlay {
@@ -67,6 +68,8 @@ pub enum Overlay {
     Power = 13,
     /// The Library's search on a controller (search_keys.rs).
     SearchKeys = 14,
+    /// Download & install: the files to get and where they go (setup_ui.rs).
+    Setup = 15,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -192,9 +195,22 @@ pub struct App {
     pub installer: crate::installer::Manager,
     pub install_pending: Option<String>,
     pub install_states: HashMap<String, crate::installer::State>,
-    pub download_pending: Option<(i64, String, String, crate::platform::Platform)>,
+    /// Installs that couldn't start by themselves (why), until the player retries.
+    pub install_failures: HashMap<String, String>,
     pub download_states: HashMap<String, crate::downloads::State>,
     pub download_model: Rc<VecModel<crate::DownloadData>>,
+    /// The Download & install panel, while it's open.
+    pub setup: Option<crate::setup_ui::Setup>,
+    pub setup_model: Rc<VecModel<crate::SetupFile>>,
+    /// The Downloads page: the selected download (by key), its filter, which button has focus
+    /// (-1: the shelf), how far the shelf is scrolled, and recent speeds for each download.
+    pub dl_sel: Option<String>,
+    pub dl_filter: usize,
+    pub dl_btn: i32,
+    pub dl_shelf: f32,
+    pub dl_speeds: HashMap<String, std::collections::VecDeque<f32>>,
+    /// The art the Downloads page asked for, so it's redrawn when that arrives.
+    pub dl_keys: HashSet<String>,
     pub live: Vec<Session>,
     pub images: images::Store,
     pub monitors: Vec<Monitor>,
@@ -494,9 +510,17 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         installer: crate::installer::Manager::load(),
         install_pending: None,
         install_states: HashMap::new(),
-        download_pending: None,
+        install_failures: HashMap::new(),
         download_states: HashMap::new(),
         download_model: Rc::new(VecModel::default()),
+        setup: None,
+        setup_model: Rc::new(VecModel::default()),
+        dl_sel: None,
+        dl_filter: 0,
+        dl_btn: -1,
+        dl_shelf: 0.0,
+        dl_speeds: HashMap::new(),
+        dl_keys: HashSet::new(),
         live: Vec::new(),
         images: images::Store::new(pool, 200),
         monitors,
@@ -603,6 +627,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
     ui.set_tiles(ModelRc::from(app.tile_model.clone()));
     ui.set_toasts(ModelRc::from(app.toast_model.clone()));
     ui.set_downloads(ModelRc::from(app.download_model.clone()));
+    ui.set_setup_files(ModelRc::from(app.setup_model.clone()));
     app.set_catalog(catalog.games.clone());
     app.relayout();
     app.push_all();
@@ -742,6 +767,13 @@ fn wire_callbacks(ui: &AppWindow) {
     ui.on_toast_clicked(|id, action| with_app(move |app| app.toast_clicked(id, &action)));
     ui.on_trailer_action(|action| with_app(move |app| app.trailer_action(&action)));
     ui.on_download_close(|| with_app(|app| app.back()));
+    ui.on_download_select(|i| with_app(move |app| app.select_download(i as usize, true)));
+    ui.on_download_filter_clicked(|i| with_app(move |app| app.filter_downloads(i as usize)));
+    ui.on_setup_toggle(|i| with_app(move |app| app.setup_toggle(i)));
+    ui.on_setup_go(|| with_app(|app| app.setup_go()));
+    ui.on_setup_cancel(|| with_app(|app| app.back()));
+    ui.on_setup_change(|i| with_app(move |app| app.setup_change(i)));
+    ui.on_setup_edit_done(|| with_app(|app| app.setup_edit_done()));
     ui.on_hub_release(|delta| with_app(move |app| app.cycle_hub_release(delta)));
     ui.on_genres_scroll(|delta| with_app(move |app| app.scroll_genres(delta)));
 }
@@ -1784,6 +1816,10 @@ impl App {
             self.ui().invoke_focus_root();
             if act == Act::Confirm { return; }
         }
+        if self.overlay == Overlay::Setup && self.ui().get_setup_editing() {
+            self.setup_edit_done();
+            if act == Act::Confirm || act == Act::Back { return; }
+        }
         self.act(act);
     }
 
@@ -1817,6 +1853,14 @@ impl App {
             && !self.ui().get_download_editing() && !ctrl && !alt && k(Key::Tab) {
             self.ui().set_download_focus_path(true);
             return true;
+        }
+        // Typing a folder on the Download & install panel: Enter and Esc finish it.
+        if self.overlay == Overlay::Setup && self.ui().get_setup_editing() {
+            if k(Key::Escape) {
+                self.setup_edit_done();
+                return true;
+            }
+            return false;
         }
         if self.overlay == Overlay::Downloads && self.ui().get_download_consent() && self.ui().get_download_editing() {
             if k(Key::Escape) {
@@ -1888,6 +1932,10 @@ impl App {
             Act::Trailer
         } else if text == "/" {
             Act::Search
+        } else if self.overlay == Overlay::Downloads && (text == "q" || text == "Q") {
+            Act::TabPrev
+        } else if self.overlay == Overlay::Downloads && (text == "e" || text == "E") {
+            Act::TabNext
         } else if (text == "s" || text == "S") && self.overlay == Overlay::None && self.view == 0 {
             Act::Settings
         } else if k(Key::Tab) {
@@ -2062,6 +2110,7 @@ impl App {
             Overlay::Settings => self.act_settings(a),
             Overlay::Hub => self.act_hub(a),
             Overlay::Downloads => self.act_downloads(a),
+            Overlay::Setup => self.act_setup(a),
             Overlay::Sort => self.act_sort_picker(a),
             Overlay::None => self.act_main(a),
         }
@@ -2477,10 +2526,12 @@ impl App {
         }
         if self.overlay != Overlay::None {
             if self.overlay == Overlay::Downloads {
-                self.download_pending = None;
                 self.install_pending = None;
                 self.ui().set_download_consent(false);
                 self.ui().invoke_focus_root();
+            }
+            if self.overlay == Overlay::Setup {
+                self.setup_closed();
             }
             audio::play(Sound::Back);
             if self.overlay == Overlay::Settings && self.edit_index >= 0 {
@@ -2661,7 +2712,7 @@ impl App {
             // isn't offered as the obvious next step.
             let discouraged = job.is_none() && self.outlook(t).is_some_and(|o| o.discourages_download());
             let (id, label) = if installing { ("download", "Installing…") }
-                else if job.as_ref().is_some_and(|job| job.state == crate::downloads::State::Complete) { ("install", "Install") }
+                else if job.as_ref().is_some_and(|job| job.state == crate::downloads::State::Complete && job.install_to.is_none()) { ("install", "Install") }
                 else if job.is_some() { ("download", "View download") }
                 else if discouraged { ("download", "Download anyway") }
                 else { ("download", "Download") };
