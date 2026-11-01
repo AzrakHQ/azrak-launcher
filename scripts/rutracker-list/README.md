@@ -152,6 +152,18 @@ On `--platform ps5|ps4` it only looks up releases without a title ID, for which 
 can't find PlayStation artwork (mostly new releases from the daily refresh), and only accepts an
 exact name match (edition words aside); ProtonDB isn't asked.
 
+### File lists (PC games)
+
+`node files.mjs --platform linux|wine` reads each release's file list (RuTracker's "Список
+файлов", `viewtorrent.php`) into its Russian source as `files` (`hash`, `collected_at`, `count`,
+`bytes`, `truncated`, `list` of `[path, bytes]`, at most 2000 entries), which the launcher's
+[package.rs](../../src/package.rs) judges. RuTracker shows file lists only to signed-in users: sign
+in yourself in the browser it opens (or pass `--attach PORT` to use a Chrome already running with
+the collector profile and a debugging port). The torrent's own folder is left out, as downloads
+leave it out. A list belongs to the info hash it was read for: re-uploaded releases are read again
+on the next run, new releases from the daily refresh have none until then. Translation leaves
+file lists alone, and the daily workflow keeps them. Progress is saved every 25 releases.
+
 ### Publishing the offline launcher snapshot
 
 After collection and translation, `npm run publish` validates the complete English

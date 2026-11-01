@@ -302,7 +302,7 @@ PKGs inside archives, and archives containing multiple complete games are unsupp
 An unsupported or malformed archive fails with an explanation instead of publishing
 a partial library entry. Generated RAR4 stored and multipart fixtures (unrar), ZIP, 7z/split 7z
 and TAR fixtures (libarchive 3.7.2) are tested, and a real solid RAR5 with a 128 MiB dictionary
-inside a YAD Simple Installer was installed (`pc_real_release_installs`, run by hand).
+inside a YAD Simple Installer was installed (`real_release_installs`, run by hand).
 
 **Build with the system C++ compiler.** unrar builds its checksum tables in static constructors;
 a compiler that emits them in `.ctors` (conda's GCC, exported as `CXX` by an active conda
@@ -401,6 +401,18 @@ installers or redistributables). It writes `.azrak-game.json` (name, topic, laun
 alternatives); the Library finds PC games by it (in a games folder, a folder in it, or one level
 deeper) and links them to their catalog entry by topic, else by name among PC releases only (a
 PC and a PS5 game of the same name are two games).
+
+**Releases it can't install aren't offered.** [package.rs](../src/package.rs) judges a release from
+its file names: archives at the top (or in a folder at the top), installers, start scripts,
+AppImages, programs and `.exe`s (not installers) can be installed; a release of only a `.deb`,
+`.rpm`, Flatpak, Snap or Arch package, a disc image, a bare `.jar` or `.love`, or a Windows
+installer can't. Where names can't tell (what's in an archive, whether a file without an extension
+is a program) it says yes. The PC catalogs carry each release's file list
+([files.mjs](../scripts/rutracker-list/files.mjs), with the torrent's info hash): the catalog import
+records why a release can't be installed, and the Library leaves it out unless you're downloading
+it or have downloaded it. A list from an older upload (another hash), a cut list, or none at all
+says nothing, so those releases stay listed. A download also stops as soon as its torrent's file
+list arrives, before any data, when the same check fails ("Azrak can't install this release: …").
 
 **Playing** runs the target in its folder, in its own process group. Start scripts often hand
 over to the game and exit, so a PC game counts as running while any process of its group is

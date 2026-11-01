@@ -13,7 +13,7 @@ impl App {
             self.open_downloads(Some(&key));
             return;
         }
-        self.download_pending = Some((game.g.id, game.name.clone(), game.g.magnet.clone()));
+        self.download_pending = Some((game.g.id, game.name.clone(), game.g.magnet.clone(), game.g.platform));
         let ui = self.ui();
         ui.set_download_title(game.name.clone().into());
         ui.set_download_path(self.cfg.lock().unwrap().download_dir.clone().into());
@@ -50,9 +50,9 @@ impl App {
     pub fn confirm_download(&mut self) {
         if self.overlay != Overlay::Downloads || !self.ui().get_download_consent() { return; }
         if self.ui().get_download_is_install() { self.confirm_install(); return; }
-        let Some((topic, name, magnet)) = self.download_pending.clone() else { return };
+        let Some((topic, name, magnet, platform)) = self.download_pending.clone() else { return };
         let path = self.ui().get_download_path().trim().to_owned();
-        match self.downloads.prepare(topic, &name, &magnet, util::expand_home(&path)) {
+        match self.downloads.prepare(topic, &name, &magnet, util::expand_home(&path), platform) {
             Ok(key) => {
                 self.download_pending = None;
                 { let mut cfg = self.cfg.lock().unwrap(); cfg.download_dir = path; cfg.save(); }

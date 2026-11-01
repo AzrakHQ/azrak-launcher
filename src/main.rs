@@ -21,6 +21,7 @@ mod pcgame;
 mod os;
 mod exfat;
 mod rar;
+mod package;
 mod results;
 mod trailer;
 mod config;

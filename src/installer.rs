@@ -1873,13 +1873,20 @@ mod tests {
         assert!(pc_archives(&source, &source.plan).unwrap().is_empty());
     }
 
-    /// A real PC release: PC_RELEASE=/path/to/file-or-folder cargo test -- --ignored pc_real_release
+    /// A real release: RELEASE=/path/to/file-or-folder [RELEASE_NAME=Balatro] cargo test -- --ignored
+    /// real_release (a PC game; RELEASE_TITLE_ID=PPSA02929 for a PS5 or PS4 one).
     #[test]
     #[ignore]
-    fn pc_real_release_installs() {
-        let Ok(release) = std::env::var("PC_RELEASE") else { return };
+    fn real_release_installs() {
+        let Ok(release) = std::env::var("RELEASE") else { return };
         let (_t, mut req) = fixture();
-        pc(&mut req, &std::env::var("PC_NAME").unwrap_or_else(|_| "Game".into()));
+        match std::env::var("RELEASE_TITLE_ID") {
+            Ok(tid) => {
+                req.platform = if tid.starts_with("CUSA") { crate::platform::Platform::Ps4 } else { crate::platform::Platform::Ps5 };
+                req.expected_ids = vec![tid];
+            }
+            Err(_) => pc(&mut req, &std::env::var("RELEASE_NAME").unwrap_or_else(|_| "Game".into())),
+        }
         let release = Path::new(&release);
         let copy = |from: &Path, to: &Path| { fs::copy(from, to).unwrap(); };
         if release.is_dir() {
@@ -1890,8 +1897,12 @@ mod tests {
         } else { copy(release, &req.source.join(release.file_name().unwrap())); }
         let started = Instant::now();
         let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
-        let m = manifest(&p);
-        eprintln!("Installed in {:?}: {} launches {} ({:?}), alternatives {:?}", started.elapsed(), p.display(), m.launch, m.kind, m.alternatives);
+        if req.platform == crate::platform::Platform::Pc {
+            let m = manifest(&p);
+            eprintln!("Installed in {:?}: {} launches {} ({:?}), alternatives {:?}", started.elapsed(), p.display(), m.launch, m.kind, m.alternatives);
+        } else {
+            eprintln!("Installed in {:?}: {} ({} files at the top)", started.elapsed(), p.display(), fs::read_dir(&p).unwrap().count());
+        }
         clean(&req);
     }
 

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 
 pub const CATALOG_TTL: f64 = 6.0 * 3600.0;
-pub const CATALOG_SCHEMA: u32 = 5;
+pub const CATALOG_SCHEMA: u32 = 6;
 pub const SOURCE: &str = "https://rutracker.net/forum/viewforum.php?f=546";
 pub const PS4_SOURCE: &str = "https://rutracker.net/forum/viewforum.php?f=973";
 /// PC games: native Linux games, and Windows games packed with Wine, DOSBox and the like.
@@ -140,6 +140,9 @@ pub struct Game {
     pub wine: bool,
     /// PC: the game on Steam, for artwork and ratings.
     pub steam: Option<Steam>,
+    /// Why the launcher can't install it, judged from its file list (scripts/rutracker-list/
+    /// files.mjs) when that list belongs to the torrent its magnet names.
+    pub unsupported: Option<String>,
 }
 
 impl Game {
@@ -365,6 +368,17 @@ fn is_game(title: &str, genre: &str, title_id: &str, magnet: &str) -> bool {
     !app && !thread && !NOT_GAME.is_match(title)
 }
 
+/// A topic's file list, if it's the list of the torrent `magnet` names: one collected before a
+/// re-upload says nothing about the new torrent.
+fn file_list(topic: &Value, magnet: &str) -> Option<Vec<(String, u64)>> {
+    let files = &topic["files"];
+    let hash = files["hash"].as_str()?;
+    if !magnet.to_ascii_uppercase().contains(&format!("BTIH:{}", hash.to_ascii_uppercase())) { return None; }
+    // A cut list could leave out what starts the game.
+    if files["truncated"].as_bool() == Some(true) { return None; }
+    files["list"].as_array()?.iter().map(|entry| Some((entry[0].as_str()?.to_string(), entry[1].as_u64()?))).collect()
+}
+
 fn import_for(src: &Source, bytes: &[u8]) -> Result<CatalogFile, String> {
     let report: Value = serde_json::from_slice(bytes).map_err(|error| format!("Invalid RuTracker JSON: {error}"))?;
     if report["complete"].as_bool() != Some(true) || report["source"].as_str() != Some(src.url) {
@@ -406,6 +420,7 @@ fn import_for(src: &Source, bytes: &[u8]) -> Result<CatalogFile, String> {
         let candidate = text(topic, "magnet");
         if !is_game(&title, &genre, &raw_id, &candidate) { continue; }
         let magnet = if candidate.starts_with("magnet:?") && MAGNET_RE.is_match(&candidate) { candidate } else { String::new() };
+        let unsupported = file_list(topic, &magnet).and_then(|files| crate::package::unsupported(src.platform, &files));
         let multiplayer = text(&info, "multiplayer");
         let mode = match multiplayer.as_str() { "No" | "None" => "Single player".to_string(), "Yes" => "Multiplayer".to_string(), _ => multiplayer };
         // Release dates are not posting dates: do not invent "added" timestamps.
@@ -421,7 +436,7 @@ fn import_for(src: &Source, bytes: &[u8]) -> Result<CatalogFile, String> {
             title_ids: ids, region: text(&info, "region"), magnet,
             seeders: topic["seeders"].as_u64(), leechers: topic["leechers"].as_u64(),
             peers_observed: Some(text(topic, "peers_observed")).filter(|at| !at.is_empty()).unwrap_or_else(|| snapshot_at.clone()), game_info: info, platform: src.platform,
-            wine: src.url == WINE_SOURCE, steam,
+            wine: src.url == WINE_SOURCE, steam, unsupported,
         });
     }
     // Topics, not title IDs, are the identity: retain regional/version variants.
@@ -591,6 +606,25 @@ mod tests {
         report["topic_count"] = Value::from(2);
         report["translation"]["language"] = Value::String("ru".into());
         assert!(import(&serde_json::to_vec(&report).unwrap()).is_err());
+    }
+    #[test]
+    fn pc_releases_carry_why_their_file_list_cant_be_installed() {
+        let magnet = |c: char| format!("magnet:?xt=urn:btih:{}", c.to_string().repeat(40));
+        let files = |hash: char, list: Value| serde_json::json!({ "hash": hash.to_string().repeat(40), "count": 1, "truncated": false, "list": list });
+        let linux = serde_json::to_vec(&serde_json::json!({ "source": LINUX_SOURCE, "complete": true,
+            "translation": { "language": "en" }, "collected_at": "2026-11-01T00:00:00Z", "topic_count": 4,
+            "topics": [
+                { "id": "1", "title": "Deb Game [amd64] [Native]", "magnet": magnet('A'), "files": files('A', serde_json::json!([["game_1.0_amd64.deb", 100]])) },
+                { "id": "2", "title": "Balatro [1.0.1o] [Native]", "magnet": magnet('B'), "files": files('B', serde_json::json!([["balatro_v1.0.1o.run", 100]])) },
+                { "id": "3", "title": "Reuploaded [Native]", "magnet": magnet('C'), "files": files('D', serde_json::json!([["old.deb", 100]])) },
+                { "id": "4", "title": "No List [Native]", "magnet": magnet('E') }
+            ] })).unwrap();
+        let file = import_for(&SOURCES[2], &linux).unwrap();
+        let verdict = |id: i64| file.games.iter().find(|g| g.id == id).unwrap().unsupported.clone();
+        assert!(verdict(1).unwrap().contains("Debian package"));
+        assert_eq!(verdict(2), None);
+        assert_eq!(verdict(3), None, "the list is of an older upload");
+        assert_eq!(verdict(4), None, "no list: can't tell");
     }
     #[test]
     fn bundled_snapshot_is_complete_and_keeps_magnets() {

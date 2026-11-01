@@ -192,7 +192,7 @@ pub struct App {
     pub installer: crate::installer::Manager,
     pub install_pending: Option<String>,
     pub install_states: HashMap<String, crate::installer::State>,
-    pub download_pending: Option<(i64, String, String)>,
+    pub download_pending: Option<(i64, String, String, crate::platform::Platform)>,
     pub download_states: HashMap<String, crate::downloads::State>,
     pub download_model: Rc<VecModel<crate::DownloadData>>,
     pub live: Vec<Session>,
@@ -3334,10 +3334,10 @@ fn emulator_version(platform: crate::platform::Platform, kyty: &std::path::Path)
     }
 }
 
-/// Whether the Library lists a release. PS5 PKG packages can't be installed (KytyPS5 runs
-/// extracted games), so they aren't, except one you're downloading or have downloaded.
+/// Whether the Library lists a release: not one the launcher can't install (a PS5 PKG package,
+/// or a release whose file list says so), except one you're downloading or have downloaded.
 fn listed(g: &Game, downloaded: &HashSet<i64>) -> bool {
-    !g.is_pkg() || downloaded.contains(&g.id)
+    !(g.is_pkg() || g.unsupported.is_some()) || downloaded.contains(&g.id)
 }
 
 /// Finds the catalog release an installed game is: a PC game by the topic it was installed from,
@@ -3404,6 +3404,9 @@ mod catalog_index_tests {
         assert!(listed(&release(2, "[PS5] Stray [EUR / folder]", Platform::Ps5), &none));
         assert!(listed(&release(3, "[PS4] Firewatch [EUR / PKG]", Platform::Ps4), &none), "PS4 PKGs install");
         assert!(listed(&release(1, "[PS5] Diablo II: Resurrected [FPKG]", Platform::Ps5), &HashSet::from([1])), "already downloaded");
+        let deb = crate::catalog::Game { unsupported: Some("it's a Debian package (.deb)".into()), ..release(4, "Some Game [Native]", Platform::Pc) };
+        assert!(!listed(&deb, &none));
+        assert!(listed(&deb, &HashSet::from([4])), "already downloaded");
     }
 
     #[test]

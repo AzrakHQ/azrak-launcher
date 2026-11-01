@@ -9,10 +9,11 @@ const platform = platformFrom(process.argv.slice(2));
 const output = fileURLToPath(new URL(`../../dist/rutracker/${platform.key}-topics.json`, import.meta.url));
 const cachePath = fileURLToPath(new URL('../../dist/rutracker/english-translations.json', import.meta.url));
 const original = JSON.parse(await readFile(process.argv.includes('--from-original') ? `${output}.ru-backup.json` : output, 'utf8'));
-// Steam data (PC catalogs) is in English already and may hold names in other scripts: it skips
-// translation and is put back afterwards.
+// Steam data (PC catalogs) is in English already and may hold names in other scripts, and file
+// lists (files.mjs) are file names: both skip translation and are put back afterwards.
 const steam = new Map(original.topics.filter(t => t.steam).map(t => [t.id, t.steam]));
-const prepared = prepareCatalog({ ...original, topics: original.topics.map(({ steam: _, ...t }) => t) });
+const files = new Map(original.topics.filter(t => t.files).map(t => [t.id, t.files]));
+const prepared = prepareCatalog({ ...original, topics: original.topics.map(({ steam: _, files: __, ...t }) => t) });
 const inputs = translationInputs(prepared);
 let cache = {};
 try { cache = JSON.parse(await readFile(cachePath, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -137,7 +138,10 @@ function validate(value, key = '') {
   }
 }
 validate(result);
-for (const topic of result.topics) if (steam.has(topic.id)) topic.steam = steam.get(topic.id);
+for (const topic of result.topics) {
+  if (steam.has(topic.id)) topic.steam = steam.get(topic.id);
+  if (files.has(topic.id)) topic.files = files.get(topic.id);
+}
 const backup = `${output}.ru-backup.json`;
 try { await access(backup); } catch (error) { if (error.code !== 'ENOENT') throw error; await copyFile(output, backup); }
 result.translation = { language: 'en', source_language: 'ru', translated_at: new Date().toISOString(),

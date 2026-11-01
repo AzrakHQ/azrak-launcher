@@ -433,3 +433,24 @@ test("Steam artwork comes from Steam's own list, hashed paths included", async (
     assert.equal(topics[4].steam.assets.portrait, 'https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/9/h/hero_capsule_2x.jpg');
   } finally { globalThis.fetch = realFetch; }
 });
+
+test('file lists: the torrent folder is left out, folders nest, a re-upload is read again', async () => {
+  const { parseFileTree, needsList, fileRecord, MAX_FILES } = await import('./files.mjs');
+  assert.deepEqual(parseFileTree('<ul class="ftree"><li class="dir"><div><b>./Balatro</b><s></s></div><ul><li><div><b>balatro_v1.0.1o.run</b><s></s><i>67239530</i></div></li></ul></li></ul>'),
+    [['balatro_v1.0.1o.run', 67239530]]);
+  assert.deepEqual(parseFileTree('<ul class="ftree"><li><div><b>Stygian Outer Gods.sh</b><s></s><i>13104455918</i></div></li></ul>'),
+    [['Stygian Outer Gods.sh', 13104455918]]);
+  assert.deepEqual(parseFileTree('<ul class="ftree"><li class="dir"><div><b>./Game &amp; Co</b><s></s></div><ul>'
+    + '<li class="dir"><div><b>bin</b><s></s></div><ul><li><div><b>game.x86_64</b><s></s><i>10</i></div></li></ul></li>'
+    + '<li><div><b>start.sh</b><s></s><i>2</i></div></li></ul></li></ul>'),
+    [['bin/game.x86_64', 10], ['start.sh', 2]]);
+  assert.equal(parseFileTree('Not logged in'), null);
+  const topic = { magnet: 'magnet:?xt=urn:btih:4d8e6c1d354c9680421fafc0ac6878555aa460b9' };
+  assert.ok(needsList(topic));
+  topic.files = fileRecord(topic, Array.from({ length: MAX_FILES + 1 }, (_, i) => [`f${i}`, 1]));
+  assert.equal(topic.files.hash, '4D8E6C1D354C9680421FAFC0AC6878555AA460B9');
+  assert.ok(topic.files.truncated && topic.files.list.length === MAX_FILES && topic.files.count === MAX_FILES + 1);
+  assert.ok(!needsList(topic));
+  topic.magnet = 'magnet:?xt=urn:btih:0000000000000000000000000000000000000000';
+  assert.ok(needsList(topic), 'a re-upload');
+});

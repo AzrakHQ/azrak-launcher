@@ -159,7 +159,7 @@ pub fn probe_file(path: &Path) -> Probe {
 }
 
 /// Helpers that come with games but don't start them.
-fn helper(name: &str) -> bool {
+pub(crate) fn helper(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     const WORDS: [&str; 22] = ["setup", "unins", "install", "redist", "vcredist", "dxsetup", "directx", "dotnet", "physx",
         "crashhandler", "crash_handler", "crashpad", "crashreport", "bugreport", "uploader", "desktop", "settings",
