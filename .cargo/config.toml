@@ -1,0 +1,8 @@
+# unrar (src/rar.rs) is C++ that builds its tables in static constructors. A compiler that still
+# emits those in `.ctors` (conda's GCC, which an active conda environment exports as CXX) builds a
+# decoder whose constructors never run once rust-lld links it, and every RAR then fails its
+# checksums. The system compiler uses `.init_array`. A CXX_<target> set in the environment still
+# wins; src/rar.rs checks itself before its first archive either way.
+[env]
+CXX_x86_64_unknown_linux_gnu = "c++"
+CXX_aarch64_unknown_linux_gnu = "c++"

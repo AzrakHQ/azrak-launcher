@@ -14,7 +14,7 @@ const SLINT_COMMIT = '372cf0ee5577c3dfec309a45e7b778ba4e81b734';
 const FALLBACK_REPOS = new Set([
   'rodrimati1992/assert_cfg', 'slint-ui/slint', 'brendanzab/gl-rs',
   'boinkor-net/governor', 'ikatson/rqbit', 'nical/lyon',
-  'mondeja/rspolib', 'DioxusLabs/taffy',
+  'mondeja/rspolib', 'DioxusLabs/taffy', 'muja/unrar.rs',
 ]);
 // Reviewed repositories that moved since their crates were published. GitHub redirects the
 // old name, but requests never follow redirects, so ask the new location directly.
@@ -221,7 +221,9 @@ export async function packageLicenses({ output, cargo = process.env.CARGO || 'ca
           apache = { bytes: document.bytes, source };
         }
       }
-      if (!documents.some(d => /^(?:licen[cs]e|copying)/i.test(path.posix.basename(d.relative))) || expression.includes(ROYALTY)) {
+      // A vendored library's license (unrar_sys's vendor/unrar/license.txt) isn't the crate's own.
+      const own = documents.filter(d => !d.relative.startsWith('vendor/'));
+      if (!own.some(d => /^(?:licen[cs]e|copying)/i.test(path.posix.basename(d.relative))) || expression.includes(ROYALTY)) {
         const fallback = await upstreamDocuments(pkg, allowUpstream, cache);
         for (const document of fallback.documents) record.documents.push(await store(
           `crates/${key(pkg)}/${document.relative}`, document.bytes, document.source));

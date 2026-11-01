@@ -20,6 +20,7 @@ mod pc_ui;
 mod pcgame;
 mod os;
 mod exfat;
+mod rar;
 mod results;
 mod trailer;
 mod config;

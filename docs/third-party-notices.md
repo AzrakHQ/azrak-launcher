@@ -82,6 +82,17 @@ v9.0.1 repository tree has no applicable standalone NOTICE file. This is not a
 claim that no other source attribution exists. Apache-2.0 does not impose a
 general in-application “Built with librqbit” branding requirement.
 
+## UnRAR 7.1 (built in, through unrar_sys 0.5.8)
+
+RAR archives are read by RARLAB's UnRAR source code, vendored by the `unrar_sys` crate
+(MIT OR Apache-2.0 for the crate's own code) and compiled into the launcher. UnRAR itself is
+freeware under its own license, retained unchanged as
+`licenses/crates/unrar_sys@0.5.8/vendor/unrar/license.txt`. In particular: UnRAR source code may
+be used in any software to handle RAR archives without limitations free of charge, but cannot be
+used to develop RAR (WinRAR) compatible archiver and to re-create RAR compression algorithm, which
+is proprietary. All copyrights to RAR and UnRAR are owned by Alexander Roshal. The launcher only
+reads RAR archives; it does not create them.
+
 ## Tools downloaded at run time
 
 These are not part of this release. The launcher downloads them from their official

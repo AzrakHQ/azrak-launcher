@@ -24,6 +24,7 @@ sha2 = "0.10"
 librqbit = { version = "=9.0.1", default-features = false, features = ["rust-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 anyhow = "1"
+unrar_sys = "0.5.8"
 url = "2"
 data-encoding = "2"
 

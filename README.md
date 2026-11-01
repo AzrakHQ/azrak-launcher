@@ -129,8 +129,8 @@ Wine (choose **PC games only** to see just those). They show Steam's artwork and
 and Wine-packed games show their [ProtonDB](https://www.protondb.com/) rating, which says how
 well the Windows version runs on Linux.
 
-**Install** unpacks the game, whether it's a folder, an archive, a GOG installer (`.sh`) or an
-AppImage, and finds how to start it: the uploader's start script, the game's program or its
+**Install** unpacks the game, whether it's a folder, an archive, a GOG installer (`.sh`), a YAD
+Simple Installer (`.run`) or an AppImage, and finds how to start it: the uploader's start script, the game's program or its
 AppImage. **Play** starts it. If it starts the wrong thing, choose **Options → Start with …** to
 try the next one.
 

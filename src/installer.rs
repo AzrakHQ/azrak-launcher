@@ -497,62 +497,156 @@ impl Api {
                 version: sym!("archive_version_string"), _lib: lib })
         }
     }
+    /// Loaded once, for the first archive libarchive reads.
+    fn get() -> Result<&'static Self> {
+        static API: std::sync::OnceLock<Api> = std::sync::OnceLock::new();
+        if let Some(api) = API.get() { return Ok(api); }
+        let api = Self::load()?;
+        Ok(API.get_or_init(|| api))
+    }
     fn version(&self) -> String { unsafe { CStr::from_ptr((self.version)()).to_string_lossy().into_owned() } }
 }
 
-struct Archive<'a> { api: &'a Api, handle: Handle, files: Vec<File>, _names: Vec<CString>, links: bool }
-impl<'a> Archive<'a> {
-    fn open(api: &'a Api, source: &Source, volumes: &[String]) -> Result<Self> {
+/// How an archive is read: a RAR (and the one inside a YAD Simple Installer) by RARLAB's own
+/// decoder, which reads every RAR; everything else by libarchive.
+enum Reader {
+    Libarchive { api: &'static Api, handle: Handle, buf: Vec<u8>, _names: Vec<CString> },
+    Rar(crate::rar::Archive),
+}
+impl Drop for Reader {
+    fn drop(&mut self) { if let Reader::Libarchive { api, handle, .. } = self { unsafe { (api.free)(*handle); } } }
+}
+
+/// An archive entry as its decoder reports it, before it's checked.
+struct Raw { path: String, kind: RawKind, size: Option<u64>, exec: bool }
+enum RawKind { File, Directory, Symlink(Option<String>), Refused(&'static str) }
+
+fn libarchive_status(api: &Api, handle: Handle, code: i32, action: &str) -> Result<()> {
+    if code != 0 {
+        let p = unsafe { (api.error)(handle) };
+        let error = if p.is_null() { "unsupported format or missing volume".into() } else { unsafe { CStr::from_ptr(p).to_string_lossy().into_owned() } };
+        bail!("{action}: {error} [{}]; verify all volumes, format support and that the archive is not password-protected", api.version());
+    }
+    Ok(())
+}
+
+struct Archive { reader: Reader, files: Vec<File>, links: bool }
+impl Archive {
+    fn open(source: &Source, volumes: &[String]) -> Result<Self> {
         let files: Vec<File> = volumes.iter().map(|p| source.file(p)).collect::<Result<_>>()?;
+        if let Some(start) = crate::rar::offset(&files[0])? {
+            ensure!(start <= crate::rar::MAX_SFX, "The archive inside {} starts {} KiB in; only the first {} KiB can be searched",
+                volumes[0], start / 1024, crate::rar::MAX_SFX / 1024);
+            // Named through the pinned torrent folder: unrar finds each next volume beside the first.
+            let base = format!("/proc/self/fd/{}", source.dir.0.as_raw_fd());
+            let paths: Vec<String> = volumes.iter().map(|v| format!("{base}/{v}")).collect();
+            return Ok(Self { reader: Reader::Rar(crate::rar::Archive::open(&paths)?), files, links: false });
+        }
+        let api = Api::get()?;
         let names: Vec<CString> = files.iter().map(|f| CString::new(format!("/proc/self/fd/{}", f.as_raw_fd())).unwrap()).collect();
         let mut pointers: Vec<_> = names.iter().map(|n| n.as_ptr()).collect();
         pointers.push(std::ptr::null());
         let handle = unsafe { (api.new)() };
         ensure!(!handle.is_null(), "libarchive allocation failed");
-        let archive = Self { api, handle, files, _names: names, links: false };
-        archive.status(unsafe { (api.formats)(handle) }, "Enable archive formats")?;
-        archive.status(unsafe { (api.filters)(handle) }, "Enable archive filters")?;
-        archive.status(unsafe { (api.open)(handle, pointers.as_ptr(), 64 * 1024) }, "Open archive (unsupported format, missing volume, or password protection)")?;
+        let archive = Self { reader: Reader::Libarchive { api, handle, buf: vec![0u8; 256 * 1024], _names: names }, files, links: false };
+        libarchive_status(api, handle, unsafe { (api.formats)(handle) }, "Enable archive formats")?;
+        libarchive_status(api, handle, unsafe { (api.filters)(handle) }, "Enable archive filters")?;
+        libarchive_status(api, handle, unsafe { (api.open)(handle, pointers.as_ptr(), 64 * 1024) }, "Open archive (unsupported format, missing volume, or password protection)")?;
         Ok(archive)
     }
-    fn status(&self, code: i32, action: &str) -> Result<()> {
-        if code != 0 {
-            let p = unsafe { (self.api.error)(self.handle) };
-            let error = if p.is_null() { "unsupported format or missing volume".into() } else { unsafe { CStr::from_ptr(p).to_string_lossy().into_owned() } };
-            bail!("{action}: {error} [{}]; verify all volumes, format support and that the archive is not password-protected", self.api.version());
-        }
-        Ok(())
-    }
-    fn header(&self) -> Result<Option<Entry>> {
-        let mut entry = std::ptr::null_mut();
-        let code = unsafe { (self.api.next)(self.handle, &mut entry) };
-        if code == 1 { return Ok(None); } // ARCHIVE_EOF
-        self.status(code, "Read archive header")?;
-        ensure!(!entry.is_null(), "Missing archive header");
-        unsafe {
-            ensure!((self.api.encrypted)(entry) <= 0, "Password-protected archives are unsupported");
-            ensure!((self.api.hardlink)(entry).is_null(), "Archive hardlinks are unsupported");
-            let kind = (self.api.kind)(entry);
-            let p = (self.api.pathname)(entry);
-            ensure!(!p.is_null(), "Missing archive pathname");
-            let path = normal_path(CStr::from_ptr(p).to_str().context("Non-UTF-8 archive path is unsupported")?)?;
-            // PC games ship library symlinks (libfoo.so -> libfoo.so.1); only ones that stay
-            // inside the game are kept. Console games have none.
-            let target = (self.api.symlink)(entry);
-            if !target.is_null() || kind == libc::S_IFLNK {
-                ensure!(self.links, "Archive symlinks are forbidden");
-                ensure!(!target.is_null(), "Symlink without a target: {path}");
-                let target = CStr::from_ptr(target).to_str().context("Non-UTF-8 symlink target")?;
-                inside_link(&path, target)?;
-                return Ok(Some(Entry { path, directory: false, size: 0, link: Some(target.into()), exec: false }));
+    fn header(&mut self) -> Result<Option<Entry>> {
+        let raw = match &mut self.reader {
+            Reader::Rar(rar) => {
+                let Some(h) = rar.next()? else { return Ok(None) };
+                ensure!(!h.encrypted, "Password-protected archives are unsupported");
+                use crate::rar::Kind;
+                let kind = match h.kind {
+                    Kind::File => RawKind::File,
+                    Kind::Directory => RawKind::Directory,
+                    Kind::Symlink(target) => RawKind::Symlink(Some(target)),
+                    Kind::Unsupported(what) => bail!("Archive entry {} is a {what}, which is unsupported", h.path),
+                };
+                Raw { path: h.path, kind, size: Some(h.size), exec: h.exec }
             }
-            ensure!(kind == libc::S_IFREG || kind == libc::S_IFDIR, "Archive special files are forbidden");
-            let directory = kind == libc::S_IFDIR;
-            ensure!(directory || (self.api.size_set)(entry) != 0, "Archive has unknown uncompressed size; cannot safely install");
-            let size = (self.api.size)(entry);
-            ensure!(size >= 0 && (!directory || size == 0), "Invalid declared archive size");
-            let exec = !directory && (self.api.perm)(entry) & 0o111 != 0;
-            Ok(Some(Entry { path, directory, size: size as u64, link: None, exec }))
+            Reader::Libarchive { api, handle, .. } => unsafe {
+                let mut entry = std::ptr::null_mut();
+                let code = (api.next)(*handle, &mut entry);
+                if code == 1 { return Ok(None); } // ARCHIVE_EOF
+                libarchive_status(api, *handle, code, "Read archive header")?;
+                ensure!(!entry.is_null(), "Missing archive header");
+                ensure!((api.encrypted)(entry) <= 0, "Password-protected archives are unsupported");
+                ensure!((api.hardlink)(entry).is_null(), "Archive hardlinks are unsupported");
+                let kind = (api.kind)(entry);
+                let p = (api.pathname)(entry);
+                ensure!(!p.is_null(), "Missing archive pathname");
+                let path = CStr::from_ptr(p).to_str().context("Non-UTF-8 archive path is unsupported")?.to_string();
+                let target = (api.symlink)(entry);
+                let kind = if !target.is_null() || kind == libc::S_IFLNK {
+                    let target = if target.is_null() { None } else { Some(CStr::from_ptr(target).to_str().context("Non-UTF-8 symlink target")?.to_string()) };
+                    RawKind::Symlink(target)
+                } else if kind == libc::S_IFREG { RawKind::File }
+                else if kind == libc::S_IFDIR { RawKind::Directory }
+                else { RawKind::Refused("Archive special files are forbidden") };
+                let size = ((api.size_set)(entry) != 0).then(|| (api.size)(entry));
+                ensure!(size.is_none_or(|s| s >= 0), "Invalid declared archive size");
+                Raw { path, kind, size: size.map(|s| s as u64), exec: (api.perm)(entry) & 0o111 != 0 }
+            },
+        };
+        let path = normal_path(&raw.path)?;
+        // PC games ship library symlinks (libfoo.so -> libfoo.so.1); only ones that stay inside
+        // the game are kept. Console games have none.
+        let directory = match raw.kind {
+            RawKind::Symlink(target) => {
+                ensure!(self.links, "Archive symlinks are forbidden");
+                let target = target.with_context(|| format!("Symlink without a target: {path}"))?;
+                inside_link(&path, &target)?;
+                return Ok(Some(Entry { path, directory: false, size: 0, link: Some(target), exec: false }));
+            }
+            RawKind::Refused(why) => bail!("{why}"),
+            RawKind::File => false,
+            RawKind::Directory => true,
+        };
+        ensure!(directory || raw.size.is_some(), "Archive has unknown uncompressed size; cannot safely install");
+        let size = raw.size.unwrap_or(0);
+        ensure!(!directory || size == 0, "Invalid declared archive size");
+        Ok(Some(Entry { path, directory, size, link: None, exec: !directory && raw.exec }))
+    }
+    /// Pass the current entry's bytes to `sink`, in order.
+    fn read(&mut self, sink: &mut dyn FnMut(&[u8]) -> Result<()>) -> Result<()> {
+        match &mut self.reader {
+            Reader::Rar(rar) => rar.read(sink),
+            Reader::Libarchive { api, handle, buf, .. } => loop {
+                let n = unsafe { (api.data)(*handle, buf.as_mut_ptr().cast(), buf.len()) };
+                if n < 0 { libarchive_status(api, *handle, n as i32, "Extract archive data (corruption, password, or missing volume)")?; }
+                if n == 0 { return Ok(()); }
+                ensure!(n as usize <= buf.len(), "Invalid libarchive read length");
+                sink(&buf[..n as usize])?;
+            },
+        }
+    }
+    fn skip(&mut self) -> Result<()> {
+        match &mut self.reader {
+            Reader::Rar(rar) => rar.skip(),
+            Reader::Libarchive { api, handle, .. } => libarchive_status(api, *handle, unsafe { (api.skip)(*handle) }, "Inspect archive data (missing volume or corrupt archive)"),
+        }
+    }
+    /// The first `max` bytes of the current entry, which is then done with.
+    fn head(&mut self, max: usize) -> Result<Vec<u8>> {
+        match &mut self.reader {
+            Reader::Rar(rar) => rar.head(max),
+            Reader::Libarchive { api, handle, .. } => {
+                let mut head = vec![0u8; max];
+                let mut got = 0;
+                while got < head.len() {
+                    let n = unsafe { (api.data)(*handle, head[got..].as_mut_ptr().cast(), head.len() - got) };
+                    if n < 0 { libarchive_status(api, *handle, n as i32, "Inspect archive data (corruption, password, or missing volume)")?; }
+                    if n <= 0 { break; }
+                    got += (n as usize).min(head.len() - got);
+                }
+                head.truncate(got);
+                self.skip()?;
+                Ok(head)
+            }
         }
     }
     fn verify_sources(&self, source: &Source, volumes: &[String]) -> Result<()> {
@@ -563,14 +657,13 @@ impl<'a> Archive<'a> {
         Ok(())
     }
 }
-impl Drop for Archive<'_> { fn drop(&mut self) { unsafe { (self.api.free)(self.handle); } } }
 
-fn inspect_archive(api: &Api, source: &Source, paths: &[String], cancel: &AtomicBool) -> Result<Plan> {
-    inspect_archive_with(api, source, paths, false, cancel)
+fn inspect_archive(source: &Source, paths: &[String], cancel: &AtomicBool) -> Result<Plan> {
+    inspect_archive_with(source, paths, false, cancel)
 }
 
-fn inspect_archive_with(api: &Api, source: &Source, paths: &[String], links: bool, cancel: &AtomicBool) -> Result<Plan> {
-    let mut archive = Archive::open(api, source, paths)?;
+fn inspect_archive_with(source: &Source, paths: &[String], links: bool, cancel: &AtomicBool) -> Result<Plan> {
+    let mut archive = Archive::open(source, paths)?;
     archive.links = links;
     let mut plan = Plan::default();
     loop {
@@ -579,19 +672,13 @@ fn inspect_archive_with(api: &Api, source: &Source, paths: &[String], links: boo
         // PC archives: is there a program in it? Read by its first bytes, as pcgame does once
         // it's installed (torrents and tar files often drop the executable flag).
         if links && !plan.starts && !entry.directory && entry.link.is_none() && entry.size > 0 {
-            let mut head = vec![0u8; entry.size.min(4096) as usize];
-            let mut got = 0;
-            while got < head.len() {
-                let n = unsafe { (api.data)(archive.handle, head[got..].as_mut_ptr().cast(), head.len() - got) };
-                if n < 0 { archive.status(n as i32, "Inspect archive data (corruption, password, or missing volume)")?; }
-                if n <= 0 { break; }
-                got += (n as usize).min(head.len() - got);
-            }
+            let head = archive.head(entry.size.min(4096) as usize)?;
             use crate::pcgame::Probe;
-            plan.starts = matches!(crate::pcgame::probe(&head[..got]), Probe::Elf { .. } | Probe::Exe | Probe::AppImage);
+            plan.starts = matches!(crate::pcgame::probe(&head), Probe::Elf { .. } | Probe::Exe | Probe::AppImage);
+        } else {
+            archive.skip()?;
         }
         plan.add(entry)?;
-        archive.status(unsafe { (api.skip)(archive.handle) }, "Inspect archive data (missing volume or corrupt archive)")?;
     }
     archive.verify_sources(source, paths)?;
     ensure!(!plan.entries.is_empty(), "Archive is empty");
@@ -702,41 +789,40 @@ fn copy_entries<'e>(source: &Source, entries: impl Iterator<Item = &'e Entry>, o
     }
     Ok(())
 }
-fn extract(api: &Api, source: &Source, paths: &[String], plan: &Plan, output: &Dir, cancel: &AtomicBool, progress: Progress<'_>) -> Result<()> {
-    extract_with(api, source, paths, plan, output, 0, plan.total, cancel, progress)
+fn extract(source: &Source, paths: &[String], plan: &Plan, output: &Dir, cancel: &AtomicBool, progress: Progress<'_>) -> Result<()> {
+    extract_with(source, paths, plan, output, 0, plan.total, cancel, progress)
 }
 
 /// Extract one archive into `output`; `before` bytes of a larger install are already done.
 #[allow(clippy::too_many_arguments)]
-fn extract_with(api: &Api, source: &Source, paths: &[String], plan: &Plan, output: &Dir, before: u64, all: u64, cancel: &AtomicBool, progress: Progress<'_>) -> Result<()> {
-    let mut archive = Archive::open(api, source, paths)?;
+fn extract_with(source: &Source, paths: &[String], plan: &Plan, output: &Dir, before: u64, all: u64, cancel: &AtomicBool, progress: Progress<'_>) -> Result<()> {
+    let mut archive = Archive::open(source, paths)?;
     archive.links = plan.entries.iter().any(|e| e.link.is_some());
     let mut done = 0u64;
-    let mut buf = vec![0u8; 256 * 1024];
     for expected in &plan.entries {
         check_cancel(cancel)?;
         let entry = archive.header()?.context("Archive truncated since inspection")?;
         ensure!(&entry == expected, "Archive headers changed since inspection");
         if entry.directory {
             output.parent(&format!("{}/_", entry.path), true)?;
+            archive.skip()?;
         } else if let Some(link) = &entry.link {
             output.symlink(&entry.path, link)?;
+            archive.skip()?;
         } else {
             let mut target = output.new_file(&entry.path)?;
             if entry.exec { target.set_permissions(fs::Permissions::from_mode(0o700))?; }
             let mut count = 0u64;
-            loop {
+            archive.read(&mut |chunk| {
                 check_cancel(cancel)?;
-                let n = unsafe { (api.data)(archive.handle, buf.as_mut_ptr().cast(), buf.len()) };
-                if n < 0 { archive.status(n as i32, "Extract archive data (corruption, password, or missing volume)")?; }
-                if n == 0 { break; }
-                ensure!(n as usize <= buf.len(), "Invalid libarchive read length");
-                count = count.checked_add(n as u64).context("Output size overflow")?;
-                done = done.checked_add(n as u64).context("Total output overflow")?;
+                let n = chunk.len() as u64;
+                count = count.checked_add(n).context("Output size overflow")?;
+                done = done.checked_add(n).context("Total output overflow")?;
                 ensure!(count <= entry.size && done <= plan.total, "Archive output exceeds inspected header size");
-                target.write_all(&buf[..n as usize])?;
+                target.write_all(chunk)?;
                 progress(State::Extracting, before + done, all);
-            }
+                Ok(())
+            })?;
             ensure!(count == entry.size, "Archive entry truncated: {}", entry.path);
             target.sync_all()?;
         }
@@ -855,8 +941,7 @@ fn install(req: &Request, cancel: &AtomicBool, progress: Progress<'_>, commit: &
     progress(State::Inspecting, 0, 0);
     let source = Source::inspect(req, cancel)?;
     let paths = volumes(&source.plan)?;
-    let api = if paths.is_some() { Some(Api::load()?) } else { None };
-    let archive_plan = if let Some(paths) = &paths { Some(inspect_archive(api.as_ref().unwrap(), &source, paths, cancel)?) } else { None };
+    let archive_plan = if let Some(paths) = &paths { Some(inspect_archive(&source, paths, cancel)?) } else { None };
     let image = exfat_image(&source)?;
     ensure!(image.is_none() || paths.is_none(), "This download has both an archive and a disk image; choose a single release folder");
     let volume = match &image { Some(path) => Some(crate::exfat::Volume::open(source.file(path)?).context("Open exFAT disk image")?), None => None };
@@ -876,7 +961,7 @@ fn install(req: &Request, cancel: &AtomicBool, progress: Progress<'_>, commit: &
     let stage = Stage::new(destination, &req.key)?;
     let output = stage.payload()?;
     progress(State::Extracting, 0, plan.total);
-    if let Some(paths) = &paths { extract(api.as_ref().unwrap(), &source, paths, plan, &output, cancel, progress)?; }
+    if let Some(paths) = &paths { extract(&source, paths, plan, &output, cancel, progress)?; }
     else if let (Some(v), Some((nodes, _)), Some(path)) = (&volume, &image_plan, &image) {
         extract_image(v, nodes, plan, &output, cancel, progress)?;
         let _ = source.file(path).context("Disk image changed while installing")?;
@@ -896,8 +981,9 @@ fn install(req: &Request, cancel: &AtomicBool, progress: Progress<'_>, commit: &
 /// An archive at the top of a PC release.
 struct PcArchive {
     volumes: Vec<String>,
-    /// A GOG Linux installer (`.sh` with a zip appended, read as that zip; the script never runs).
-    gog: bool,
+    /// An installer read as the archive inside it: GOG's Linux `.sh` (a zip appended) or a YAD
+    /// Simple Installer `.run` (a RAR appended). Its script never runs.
+    installer: bool,
     /// What sits beside it that could start the game.
     beside: Beside,
 }
@@ -910,13 +996,17 @@ enum Beside { Nothing, Script, Program }
 fn pc_archives(source: &Source, plan: &Plan) -> Result<Vec<PcArchive>> {
     let top: Vec<&Entry> = plan.entries.iter().filter(|e| !e.directory && e.path.matches('/').count() <= 1).collect();
     let folder = |path: &str| path.rsplit_once('/').map_or("", |(dir, _)| dir).to_string();
-    let mut gog = HashSet::new();
-    for e in top.iter().filter(|e| e.path.to_ascii_lowercase().ends_with(".sh")) {
-        if gog_installer(source, &e.path)? { gog.insert(e.path.clone()); }
+    let mut installers = HashSet::new();
+    for e in &top {
+        let lower = e.path.to_ascii_lowercase();
+        if !lower.ends_with(".sh") && !lower.ends_with(".run") { continue; }
+        if (lower.ends_with(".sh") && gog_installer(source, &e.path)?) || crate::rar::offset(&source.file(&e.path)?)?.is_some() {
+            installers.insert(e.path.clone());
+        }
     }
     let mut starters: std::collections::HashMap<String, Beside> = std::collections::HashMap::new();
     for e in &top {
-        if gog.contains(&e.path) || volume_of(&e.path)?.is_some() { continue; }
+        if installers.contains(&e.path) || volume_of(&e.path)?.is_some() { continue; }
         let mut head = Vec::with_capacity(4096);
         source.file(&e.path)?.take(4096).read_to_end(&mut head)?;
         use crate::pcgame::Probe;
@@ -931,8 +1021,8 @@ fn pc_archives(source: &Source, plan: &Plan) -> Result<Vec<PcArchive>> {
     let mut archives = Vec::new();
     let mut families: Vec<(String, Plan)> = Vec::new();
     for e in &top {
-        if gog.contains(&e.path) {
-            archives.push(PcArchive { volumes: vec![e.path.clone()], gog: true, beside: Beside::Nothing });
+        if installers.contains(&e.path) {
+            archives.push(PcArchive { volumes: vec![e.path.clone()], installer: true, beside: Beside::Nothing });
             continue;
         }
         let Some((family, _)) = volume_of(&e.path)? else { continue };
@@ -945,7 +1035,7 @@ fn pc_archives(source: &Source, plan: &Plan) -> Result<Vec<PcArchive>> {
     for (_, one) in &families {
         if let Some(volumes) = volumes(one)? {
             let beside = starters.get(&folder(&volumes[0])).copied().unwrap_or(Beside::Nothing);
-            archives.push(PcArchive { volumes, gog: false, beside });
+            archives.push(PcArchive { volumes, installer: false, beside });
         }
     }
     Ok(archives)
@@ -975,17 +1065,16 @@ fn install_pc(req: &Request, cancel: &AtomicBool, progress: Progress<'_>, commit
     progress(State::Inspecting, 0, 0);
     let source = Source::inspect(req, cancel)?;
     let archives = pc_archives(&source, &source.plan)?;
-    let api = if archives.is_empty() { None } else { Some(Api::load()?) };
-    // Which archives are the release's packaging, to unpack: a GOG installer; one with nothing
+    // Which archives are the release's packaging, to unpack: an installer; one with nothing
     // beside it that could start the game; one beside only a start script that holds a program
     // (the script starts it). The rest are the game's data, copied: `data.tar` beside
     // `game.x86_64` (helper scripts in it or not), or beside the `start.sh` that reads it.
     let mut groups = Vec::new();
     let mut plans = Vec::new();
     for archive in archives {
-        let plan = inspect_archive_with(api.as_ref().unwrap(), &source, &archive.volumes, true, cancel)?;
+        let plan = inspect_archive_with(&source, &archive.volumes, true, cancel)?;
         let packaging = match archive.beside { Beside::Nothing => true, Beside::Script => plan.starts, Beside::Program => false };
-        if archive.gog || packaging {
+        if archive.installer || packaging {
             groups.push(archive.volumes);
             plans.push(plan);
         }
@@ -1013,7 +1102,7 @@ fn install_pc(req: &Request, cancel: &AtomicBool, progress: Progress<'_>, commit
     progress(State::Extracting, 0, total.total);
     let mut before = 0;
     for (group, plan) in groups.iter().zip(&plans) {
-        extract_with(api.as_ref().unwrap(), &source, group, plan, &output, before, total.total, cancel, progress)?;
+        extract_with(&source, group, plan, &output, before, total.total, cancel, progress)?;
         before += plan.total;
     }
     copy_entries(&source, source.plan.entries.iter().filter(loose), &output, before, total.total, cancel, progress)?;
@@ -1481,6 +1570,61 @@ mod tests {
         assert_eq!(Sha256::digest(fs::read(&archive).unwrap()), digest); unpublished(&req);
     }
 
+    /// One volume of a generated RAR4 set (new numbering: x.part1.rar, x.part2.rar). Each file is
+    /// (name, its bytes in this volume, whole size, CRC, split flags); a part's CRC covers its own
+    /// bytes, the last part's the whole file.
+    fn rar4_volume(first: bool, last: bool, files: &[(&str, &[u8], u32, u32, u16)]) -> Vec<u8> {
+        let mut out = b"Rar!\x1a\x07\0".to_vec();
+        let flags: u16 = 0x0001 | 0x0010 | if first { 0x0100 } else { 0 }; // volume, new numbering, first
+        let [lo, hi] = flags.to_le_bytes();
+        rar_header(&mut out, vec![0, 0, 0x73, lo, hi, 13, 0, 0, 0, 0, 0, 0, 0]);
+        for &(name, data, size, crc, split) in files {
+            let mut h = vec![0, 0, 0x74];
+            h.extend_from_slice(&(0x8000 | split).to_le_bytes());
+            h.extend_from_slice(&((32 + name.len()) as u16).to_le_bytes());
+            h.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            h.extend_from_slice(&size.to_le_bytes());
+            h.push(3);
+            h.extend_from_slice(&crc.to_le_bytes());
+            h.extend_from_slice(&0x00210000u32.to_le_bytes());
+            h.extend_from_slice(&[20, 0x30]);
+            h.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            h.extend_from_slice(&0o100644u32.to_le_bytes());
+            h.extend_from_slice(name.as_bytes());
+            rar_header(&mut out, h);
+            out.extend_from_slice(data);
+        }
+        let [lo, hi] = (if last { 0u16 } else { 0x0001 }).to_le_bytes(); // more volumes follow
+        rar_header(&mut out, vec![0, 0, 0x7b, lo, hi, 7, 0]);
+        out
+    }
+    fn rar4_set(binary: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let (a, b) = binary.split_at(binary.len() / 2);
+        let size = binary.len() as u32;
+        (rar4_volume(true, false, &[("game/sce_sys/param.json", PARAM, PARAM.len() as u32, rar_crc32(PARAM), 0),
+            ("game/eboot.bin", a, size, rar_crc32(a), 0x0002)]),
+         rar4_volume(false, true, &[("game/eboot.bin", b, size, rar_crc32(binary), 0x0001)]))
+    }
+
+    #[test]
+    fn rar_volumes_install_as_one_and_a_missing_volume_never_publishes() {
+        eprintln!("RAR decoder: {}", crate::rar::Archive::version());
+        let binary = rar_binary(); let (one, two) = rar4_set(&binary);
+        let (_t, req) = fixture();
+        fs::write(req.source.join("x.part1.rar"), &one).unwrap();
+        fs::write(req.source.join("x.part2.rar"), &two).unwrap();
+        let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
+        assert_eq!(fs::read(p.join("eboot.bin")).unwrap(), binary);
+        assert_eq!(fs::read(p.join("sce_sys/param.json")).unwrap(), PARAM);
+        clean(&req);
+
+        let (_t, req) = fixture();
+        fs::write(req.source.join("x.part1.rar"), &one).unwrap();
+        let error = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap_err();
+        assert!(format!("{error:#}").contains("Missing RAR volume x.part2.rar"), "{error:#}");
+        unpublished(&req);
+    }
+
     #[test]
     fn folder_copy_progress_hidden_stage_atomic_and_no_overwrite() {
         let (_t, req) = fixture(); game(&req.source.join("wrapper/game"));
@@ -1690,6 +1834,64 @@ mod tests {
         assert_eq!(fs::read(p.join("data.tar")).unwrap(), data);
         assert!(!p.join("level.dat").exists());
         assert_eq!(manifest(&p).launch, "game.x86_64");
+        clean(&req);
+    }
+
+    /// A YAD Simple Installer: its script (one that would leave a trace if it ever ran), helper
+    /// programs, then `rar` as the last `arcsz` bytes.
+    fn ysi(rar: &[u8]) -> Vec<u8> {
+        let mut out = format!("#!/usr/bin/env sh\n# YAD Simple Installer script, version 040726r\napp=\"Some Game\"\narcsz={}\nexport arcsz\n\
+            touch /tmp/azrak-ysi-script-ran\nexit 0\n", rar.len()).into_bytes();
+        out.resize(300 * 1024, 0x7f); // yad, pv and unrar for two processors, and a picture
+        out.extend_from_slice(rar);
+        out
+    }
+
+    #[test]
+    fn pc_ysi_installer_is_unpacked_without_running_it() {
+        let (_t, mut req) = fixture();
+        pc(&mut req, "Some Game");
+        let program = elf_program();
+        let installer = ysi(&rar4(&[("Some Game/run.sh", b"#!/bin/sh\ncd \"$(dirname \"$0\")\" && ./game.x86_64\n"),
+            ("Some Game/game.x86_64", &program), ("Some Game/uninstall.sh", b"#!/bin/sh\n")], 0));
+        fs::write(req.source.join("some_game_v1.0.run"), &installer).unwrap();
+        let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
+        assert!(p.file_name().unwrap().to_str().unwrap().starts_with("Some-Game-"), "{}", p.display());
+        assert_eq!(fs::read(p.join("game.x86_64")).unwrap(), program);
+        assert!(executable(&p.join("game.x86_64")) && executable(&p.join("run.sh")));
+        assert!(!Path::new("/tmp/azrak-ysi-script-ran").exists());
+        assert_eq!(fs::read(req.source.join("some_game_v1.0.run")).unwrap(), installer, "the download is kept as it was");
+        clean(&req);
+
+        // A script that only looks like one (its archive size doesn't lead to a RAR) is a file.
+        let (_t, mut req) = fixture();
+        pc(&mut req, "Some Game");
+        let mut fake = ysi(b"not a rar archive");
+        let n = fake.len(); fake[n - 3] = b'!';
+        fs::write(req.source.join("some_game_v1.0.run"), &fake).unwrap();
+        let source = Source::inspect(&req, &AtomicBool::new(false)).unwrap();
+        assert!(pc_archives(&source, &source.plan).unwrap().is_empty());
+    }
+
+    /// A real PC release: PC_RELEASE=/path/to/file-or-folder cargo test -- --ignored pc_real_release
+    #[test]
+    #[ignore]
+    fn pc_real_release_installs() {
+        let Ok(release) = std::env::var("PC_RELEASE") else { return };
+        let (_t, mut req) = fixture();
+        pc(&mut req, &std::env::var("PC_NAME").unwrap_or_else(|_| "Game".into()));
+        let release = Path::new(&release);
+        let copy = |from: &Path, to: &Path| { fs::copy(from, to).unwrap(); };
+        if release.is_dir() {
+            for e in fs::read_dir(release).unwrap() {
+                let e = e.unwrap();
+                if e.file_name() != OWNED && e.file_type().unwrap().is_file() { copy(&e.path(), &req.source.join(e.file_name())); }
+            }
+        } else { copy(release, &req.source.join(release.file_name().unwrap())); }
+        let started = Instant::now();
+        let p = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap();
+        let m = manifest(&p);
+        eprintln!("Installed in {:?}: {} launches {} ({:?}), alternatives {:?}", started.elapsed(), p.display(), m.launch, m.kind, m.alternatives);
         clean(&req);
     }
 

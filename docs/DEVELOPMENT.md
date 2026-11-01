@@ -289,19 +289,28 @@ the destination added to Game folders, and the library refreshed. The action the
 becomes **Play**. Original archives and downloaded folders are always retained;
 installation itself never executes their contents.
 
-Loose game folders are copied. RAR, ZIP, 7z and TAR-family decoding uses dynamically
-loaded system libarchive; no archive helper process is executed. Matching multipart
-RAR and split 7z volumes are ordered and checked for gaps, but decoder support varies
-with the installed libarchive version. Password-protected archives, PS5 PKG packages,
+Loose game folders are copied. RAR is read by RARLAB's own decoder, built in
+([rar.rs](../src/rar.rs), unrar from the `unrar_sys` crate): libarchive refuses RAR5 packed
+with a dictionary over 64 MiB (common on RuTracker) and can't find the RAR inside an installer.
+unrar only tests each file and hands its bytes to the installer, which names and writes every
+file itself; it may move on only to the volumes the installer listed, and checks every file's
+checksum. ZIP, 7z and TAR-family decoding uses dynamically loaded system libarchive; no archive
+helper process is executed. Matching multipart RAR and split 7z volumes are ordered and checked
+for gaps; 7z support varies with the installed libarchive version. Password-protected archives, PS5 PKG packages,
 PKGs inside archives, and archives containing multiple complete games are unsupported
 (PS4 PKG releases: see *PS4 games*).
 An unsupported or malformed archive fails with an explanation instead of publishing
-a partial library entry. RAR4 stored, ZIP, 7z/split 7z and TAR generated fixtures were
-tested on libarchive 3.7.2; compressed/solid/multipart RAR variants are not certified.
+a partial library entry. Generated RAR4 stored and multipart fixtures (unrar), ZIP, 7z/split 7z
+and TAR fixtures (libarchive 3.7.2) are tested, and a real solid RAR5 with a 128 MiB dictionary
+inside a YAD Simple Installer was installed (`pc_real_release_installs`, run by hand).
+
+**Build with the system C++ compiler.** unrar builds its checksum tables in static constructors;
+a compiler that emits them in `.ctors` (conda's GCC, exported as `CXX` by an active conda
+environment) yields a decoder whose constructors never run under rust-lld, so every RAR looks
+damaged. [.cargo/config.toml](../.cargo/config.toml) pins `c++`, and rar.rs reads a tiny built-in
+RAR before its first archive and refuses with that explanation if it can't.
 
 **Validation is not an authenticity, malware or universal checksum guarantee.**
-In particular, libarchive 3.7.2 accepted corrupted stored-RAR4 payload bytes despite
-their CRC in a probe; do not rely on it for full RAR integrity verification.
 
 Keep the launcher open until installation finishes. Graceful quit/restart cancels
 an active installation and cleans its owned staging directory; retry is explicit.
@@ -380,7 +389,8 @@ decides: nothing that could start the game, it's the release's packaging (unpack
 (native, `.exe`, AppImage), it's the game's data (copied as it is, helper scripts in it or not);
 only a start script, it's unpacked if it holds a program (read by first bytes while inspecting
 it: the script starts it), else it's the data the script reads. GOG Linux installers (a shell script with a zip appended) are read
-as that zip by libarchive; the script never runs. Symlinks in archives are kept only when they
+as that zip by libarchive, and YAD Simple Installers (a `.run`: a script, its helper programs, then
+a RAR as its last `arcsz` bytes) as that RAR by unrar; their scripts never run. Symlinks in archives are kept only when they
 stay inside the game (relative, not climbing above its folder); others fail the install.
 Torrents drop the executable flag, so every ELF program, `#!` script and AppImage is made
 executable, recognised by its first bytes. The game's folder is the payload, or the single folder
