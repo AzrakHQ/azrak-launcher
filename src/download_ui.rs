@@ -75,7 +75,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
         State::Resolving => {
             d.status = "Getting the file list".into();
             d.line = "Getting the file list".into();
-            d.actions = vec![("cancel", "Cancel", "")];
+            d.actions = vec![("cancel", "Cancel", "close")];
         }
         State::Ready => {
             (d.group, d.kind) = (1, 1);
@@ -84,11 +84,11 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             if job.entries.is_empty() {
                 d.status = "Ready to download".into();
                 d.line = "Ready to download".into();
-                d.actions = vec![("start", "Start download", "disk"), ("cancel", "Remove", "")];
+                d.actions = vec![("start", "Start download", "disk"), ("cancel", "Remove", "trash")];
             } else {
                 d.status = "Waiting for you to choose its files".into();
                 d.line = "Choose its files".into();
-                d.actions = vec![("choose", "Choose files", "disk"), ("cancel", "Remove", "")];
+                d.actions = vec![("choose", "Choose files", "check"), ("cancel", "Remove", "trash")];
             }
         }
         State::Checking | State::Downloading => {
@@ -101,7 +101,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             }
             d.stats.push((format!("{} of {}", size_label(job.done), size), "Downloaded".into()));
             d.line = if job.eta.is_empty() { format!("{}%", pct(job.progress())) } else { format!("{}% · {} left", pct(job.progress()), job.eta) };
-            d.actions = vec![("pause", "Pause", ""), ("cancel", "Cancel", "")];
+            d.actions = vec![("pause", "Pause", "pause"), ("cancel", "Cancel", "close")];
         }
         State::Paused => {
             (d.group, d.kind, d.bar) = (1, 1, 1);
@@ -113,11 +113,11 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                 d.status = "Paused until your VPN connects".into();
                 d.stats.push(("By itself".into(), "Resumes".into()));
                 d.line = "Waiting for your VPN".into();
-                d.actions = vec![("vpn", "VPN settings", "gear"), ("cancel", "Cancel", "")];
+                d.actions = vec![("vpn", "VPN settings", "gear"), ("cancel", "Cancel", "close")];
             } else {
                 d.status = "Paused".into();
                 d.line = format!("Paused · {}%", pct(job.progress()));
-                d.actions = vec![("resume", "Resume", "play"), ("cancel", "Cancel", "")];
+                d.actions = vec![("resume", "Resume", "play"), ("cancel", "Cancel", "close")];
             }
         }
         State::Failed => {
@@ -128,7 +128,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             d.note = job.error.clone();
             d.stats = vec![(format!("{} of {}", size_label(job.done), size), "Downloaded, and kept".into())];
             d.line = "Stopped".into();
-            d.actions = vec![("retry", "Retry", ""), ("remove", "Remove", "")];
+            d.actions = vec![("retry", "Retry", "retry"), ("remove", "Remove", "trash")];
         }
         State::Cancelled => {
             (d.group, d.kind, d.bar) = (1, 1, 1);
@@ -136,13 +136,13 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             d.status = "Cancelled · what's downloaded is kept".into();
             d.dl_label = "Cancelled".into();
             d.line = "Cancelled".into();
-            d.actions = vec![("retry", "Download again", ""), ("remove", "Remove", "")];
+            d.actions = vec![("retry", "Download again", "retry"), ("remove", "Remove", "trash")];
         }
         State::Complete => {
             d.dl = 1.0;
             d.dl_label = "Downloaded".into();
             let sharing = job.seeding || job.verifying;
-            let share = if sharing { ("stop_seed", "Stop sharing", "") } else { ("remove", "Remove", "") };
+            let share = if sharing { ("stop_seed", "Stop sharing", "unshare") } else { ("remove", "Remove", "trash") };
             match install.map(|r| r.state) {
                 Some(state) if state.active() => {
                     let record = install.unwrap();
@@ -154,7 +154,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                         (format!("{} of {}", size_label(record.done), size_label(record.total.max(record.done))), "Unpacked".into())];
                     d.line = format!("Installing · {}%", pct(record.progress()));
                     d.tile = record.progress();
-                    d.actions = vec![("cancel_install", "Cancel install", "")];
+                    d.actions = vec![("cancel_install", "Cancel install", "close")];
                 }
                 Some(Install::Installed) => {
                     (d.group, d.kind, d.bar) = (2, 3, 3);
@@ -177,7 +177,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                     d.note = install.unwrap().error.clone();
                     d.inst_label = "Install failed".into();
                     d.line = "Couldn't install".into();
-                    d.actions = vec![("install", "Retry install", ""), share];
+                    d.actions = vec![("install", "Retry install", "retry"), share];
                 }
                 Some(_) => {
                     (d.group, d.kind) = (1, 1);
@@ -191,7 +191,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                     d.note = failure.unwrap().clone();
                     d.inst_label = "Install failed".into();
                     d.line = "Couldn't install".into();
-                    d.actions = vec![("install", "Retry install", ""), share];
+                    d.actions = vec![("install", "Retry install", "retry"), share];
                 }
                 None if job.install_to.is_some() => {
                     d.status = "Waiting to install".into();

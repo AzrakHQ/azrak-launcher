@@ -31,6 +31,22 @@ component Capsule inherits Rectangle {
     Rectangle { x: parent.height / 2; y: 1px; width: parent.width - parent.height; height: 1px; background: #ffffff33; }
 }
 
+// Back, on the same glass as the live numbers: one pill, highlighted as a whole.
+component GlassBack inherits Capsule {
+    in property <bool> pad;
+    callback clicked();
+    width: row.preferred-width;
+    background: ta.has-hover ? #222b40f0 : #0e1424d9;
+    animate background { duration: 120ms; }
+    row := HorizontalLayout {
+        padding-left: (16px * S.k); padding-right: (20px * S.k); spacing: (10px * S.k);
+        Image { source: Icons.chevl; colorize: Theme.text; width: (20px * S.k); height: (20px * S.k); y: (parent.height - self.height) / 2; }
+        Text { text: "Back"; font-size: (18px * S.k); font-weight: 500; color: Theme.text; vertical-alignment: center; }
+        Text { text: root.pad ? "○" : "Esc"; font-size: (15px * S.k); color: root.pad ? #ff8f9c : Theme.text3; vertical-alignment: center; }
+    }
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
 component PadGlyph inherits Rectangle {
     in property <string> glyph;
     width: (26px * S.k); height: self.width; border-radius: self.width / 2;
@@ -106,10 +122,7 @@ export component DownloadsPage inherits Rectangle {
                 }
             }
         }
-        Capsule {
-            width: back.preferred-width + (8px * S.k);
-            back := BackButton { x: (4px * S.k); y: (2px * S.k); pad: root.pad; clicked => { root.close(); } }
-        }
+        GlassBack { pad: root.pad; clicked => { root.close(); } }
     }
 
     // Nothing yet, or nothing under this filter.

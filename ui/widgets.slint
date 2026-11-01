@@ -207,7 +207,8 @@ export component Btn inherits Rectangle {
         padding-left: !open ? 0 : data.round ? (22px * S.k) : (36px * S.k);
         padding-right: !open ? 0 : data.round ? (26px * S.k) : (36px * S.k);
         spacing: (12px * S.k);
-        Image {
+        // No icon: no gap where one would be.
+        if data.icon != "": Image {
             source: Icons.get(data.icon);
             colorize: solid && !(focused && data.danger) ? #0a0d18 : #ffffff;
             width: (26px * S.k);
