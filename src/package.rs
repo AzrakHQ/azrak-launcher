@@ -131,7 +131,8 @@ mod tests {
         let catalog: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         let (mut listed, mut hidden, mut unknown) = (0, std::collections::BTreeMap::<String, Vec<String>>::new(), 0);
         for topic in catalog["topics"].as_array().unwrap() {
-            let Some(list) = topic["files"]["list"].as_array().filter(|_| topic["files"]["truncated"] != true) else { unknown += 1; continue };
+            let files = &topic["files"];
+            let Some(list) = files["list"].as_array().filter(|_| files["truncated"] != true && files["deeper_starters"] != true) else { unknown += 1; continue };
             let files: Vec<(String, u64)> = list.iter().map(|e| (e[0].as_str().unwrap().to_string(), e[1].as_u64().unwrap())).collect();
             match unsupported(Platform::Pc, &files) {
                 None => listed += 1,

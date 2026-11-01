@@ -163,6 +163,9 @@ the collector profile and a debugging port). The torrent's own folder is left ou
 leave it out. A list belongs to the info hash it was read for: re-uploaded releases are read again
 on the next run, new releases from the daily refresh have none until then. Translation leaves
 file lists alone, and the daily workflow keeps them. Progress is saved every 25 releases.
+`./publish-files.sh` then merges the lists into the published catalog's Russian sources (only
+where the torrent is still the same), pushes them to the `catalog` branch and starts the daily
+workflow, which translates and publishes them.
 
 ### Publishing the offline launcher snapshot
 

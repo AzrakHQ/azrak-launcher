@@ -374,8 +374,9 @@ fn file_list(topic: &Value, magnet: &str) -> Option<Vec<(String, u64)>> {
     let files = &topic["files"];
     let hash = files["hash"].as_str()?;
     if !magnet.to_ascii_uppercase().contains(&format!("BTIH:{}", hash.to_ascii_uppercase())) { return None; }
-    // A cut list could leave out what starts the game.
-    if files["truncated"].as_bool() == Some(true) { return None; }
+    // A cut list, or one that left out a file deep inside that could start the game, can't
+    // show a release can't be installed.
+    if files["truncated"].as_bool() == Some(true) || files["deeper_starters"].as_bool() == Some(true) { return None; }
     files["list"].as_array()?.iter().map(|entry| Some((entry[0].as_str()?.to_string(), entry[1].as_u64()?))).collect()
 }
 
@@ -612,12 +613,14 @@ mod tests {
         let magnet = |c: char| format!("magnet:?xt=urn:btih:{}", c.to_string().repeat(40));
         let files = |hash: char, list: Value| serde_json::json!({ "hash": hash.to_string().repeat(40), "count": 1, "truncated": false, "list": list });
         let linux = serde_json::to_vec(&serde_json::json!({ "source": LINUX_SOURCE, "complete": true,
-            "translation": { "language": "en" }, "collected_at": "2026-11-01T00:00:00Z", "topic_count": 4,
+            "translation": { "language": "en" }, "collected_at": "2026-11-01T00:00:00Z", "topic_count": 5,
             "topics": [
                 { "id": "1", "title": "Deb Game [amd64] [Native]", "magnet": magnet('A'), "files": files('A', serde_json::json!([["game_1.0_amd64.deb", 100]])) },
                 { "id": "2", "title": "Balatro [1.0.1o] [Native]", "magnet": magnet('B'), "files": files('B', serde_json::json!([["balatro_v1.0.1o.run", 100]])) },
                 { "id": "3", "title": "Reuploaded [Native]", "magnet": magnet('C'), "files": files('D', serde_json::json!([["old.deb", 100]])) },
-                { "id": "4", "title": "No List [Native]", "magnet": magnet('E') }
+                { "id": "4", "title": "No List [Native]", "magnet": magnet('E') },
+                { "id": "5", "title": "Deep [Native]", "magnet": magnet('F'), "files": {
+                    "hash": "F".repeat(40), "truncated": false, "deeper_starters": true, "list": [["Game/data.deb", 1]] } }
             ] })).unwrap();
         let file = import_for(&SOURCES[2], &linux).unwrap();
         let verdict = |id: i64| file.games.iter().find(|g| g.id == id).unwrap().unsupported.clone();
@@ -625,6 +628,7 @@ mod tests {
         assert_eq!(verdict(2), None);
         assert_eq!(verdict(3), None, "the list is of an older upload");
         assert_eq!(verdict(4), None, "no list: can't tell");
+        assert_eq!(verdict(5), None, "something left out of the list could start it");
     }
     #[test]
     fn bundled_snapshot_is_complete_and_keeps_magnets() {

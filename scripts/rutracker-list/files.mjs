@@ -6,6 +6,7 @@
 //
 //   node files.mjs --platform linux [--catalog dist/rutracker/linux-topics.json.ru-backup.json]
 //                  [--attach PORT] [--limit N] [--delay 1500] [--login-timeout 300]
+//   node files.mjs --merge FROM.json INTO.json    (publish-files.sh uses it)
 //
 // A list is stored with the torrent's info hash: a re-uploaded release (new hash) is read again.
 import { readFile, rename, writeFile } from 'node:fs/promises';
@@ -45,16 +46,51 @@ export function parseFileTree(html) {
   });
 }
 
+/** Game data, by extension: never what starts a game nor what makes a release uninstallable
+ * (src/package.rs looks at archives, scripts, programs, packages and images). */
+const DATA = new Set(('dll so pak pck ogg wav mp3 flac opus wma png jpg jpeg bmp tga dds gif webp ico svg ttf otf fon '
+  + 'txt md pdf html htm css js json xml ini cfg conf lua py pyc nls mo po dat assets ress resource bank fsb bik bk2 '
+  + 'usm webm mp4 avi mkv ogv wmv mov wem bnk pdb manifest cat inf reg tex mdl bsp uasset uexp ubulk utoc ucas mesh anim '
+  + 'shader spv glsl hlsl fx sav log db sqlite csv yml yaml toml strings loc lng font xnb xwb xsb wad pk3 pk4 vpk '
+  + 'forge sbf pff mtl obj fbx dae ani cur rtf doc docx xls cs h c cpp hpp mdmp crt pem cer a def res sys idl bundle').split(' '));
+const extension = path => {
+  const name = path.slice(path.lastIndexOf('/') + 1).toLowerCase();
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot + 1) : '';
+};
+const isData = path => /\.so(\.\d+)+$/i.test(path) || DATA.has(extension(path));
+/** Could start a game, loosely (more than package.rs accepts): a script, a program, an .exe, a
+ * file without a real extension. */
+const mayStart = path => {
+  const ext = extension(path);
+  return !ext || ext.length > 5 || /^\d+$/.test(ext) || /[^a-z0-9]/.test(ext)
+    || ['sh', 'run', 'appimage', 'exe', 'x86_64', 'x86', 'x64', 'bin', 'amd64', 'i386', 'i686'].includes(ext);
+};
+const depth = path => (path.match(/\//g) || []).length;
+
+/** What's published of a list, small enough for the catalog: everything at the top and one
+ * folder down, game data left out two folders down, nothing deeper; `deeper_starters` says
+ * whether something left out could start the game (then the list can't show a release can't be
+ * installed). Applying it again changes nothing. */
+export function compact(files) {
+  const deeper = files.list.some(([path]) => depth(path) >= 3 && mayStart(path));
+  const list = files.list.filter(([path]) => depth(path) <= 1 || (depth(path) === 2 && !isData(path)));
+  return { ...files, list, deeper_starters: Boolean(files.deeper_starters) || deeper };
+}
+
 /** The magnet's info hash, upper case. */
 export const infoHash = magnet => /urn:btih:([a-z\d]+)/i.exec(magnet || '')?.[1]?.toUpperCase() ?? null;
 
 /** Topics whose list is missing or belongs to an older upload. */
 export const needsList = topic => Boolean(infoHash(topic.magnet)) && topic.files?.hash !== infoHash(topic.magnet);
 
-/** What's kept for a topic: its hash, when it was read, and the (possibly cut) list. */
+/** What's kept for a topic: its hash, when it was read, how many files it has, and its compact
+ * list (cut if it's still too long). */
 export function fileRecord(topic, list, now = new Date()) {
+  const files = compact({ list });
   return { hash: infoHash(topic.magnet), collected_at: now.toISOString(), count: list.length,
-    bytes: list.reduce((sum, [, size]) => sum + size, 0), truncated: list.length > MAX_FILES, list: list.slice(0, MAX_FILES) };
+    bytes: list.reduce((sum, [, size]) => sum + size, 0), truncated: files.list.length > MAX_FILES,
+    deeper_starters: files.deeper_starters, list: files.list.slice(0, MAX_FILES) };
 }
 
 /** Runs in the signed-in RuTracker page: the raw list page for each topic. */
@@ -73,11 +109,34 @@ async function fetchLists(ids) {
   return out;
 }
 
+/** Copy `from`'s file lists into `into` (another copy of the catalog, such as the published one),
+ * where it's the same topic and torrent. Returns how many were copied. */
+export function mergeFileLists(from, into) {
+  const lists = new Map(from.topics.filter(t => t.files).map(t => [t.id, t.files]));
+  let merged = 0;
+  for (const topic of into.topics) {
+    const files = lists.get(topic.id);
+    if (!files || files.hash !== infoHash(topic.magnet)) continue;
+    const published = compact(files);
+    if (JSON.stringify(topic.files) !== JSON.stringify(published)) { topic.files = published; merged++; }
+  }
+  return merged;
+}
+
 async function main(args) {
   const option = (name, fallback) => {
     const i = args.indexOf(name);
     return i < 0 ? fallback : args[i + 1];
   };
+  if (args[0] === '--merge') {
+    const [from, into] = [args[1], args[2]].map(path => resolve(path));
+    const target = JSON.parse(await readFile(into, 'utf8'));
+    const merged = mergeFileLists(JSON.parse(await readFile(from, 'utf8')), target);
+    await writeFile(`${into}.tmp`, JSON.stringify(target, null, 2) + '\n');
+    await rename(`${into}.tmp`, into);
+    console.log(`${merged} file lists merged into ${into} (${target.topics.filter(t => t.files).length} of ${target.topics.length} releases have one)`);
+    return;
+  }
   const platform = platformFrom(args);
   const path = resolve(option('--catalog', fileURLToPath(new URL(`../../dist/rutracker/${platform.key}-topics.json.ru-backup.json`, import.meta.url))));
   const limit = Number(option('--limit', 'Infinity'));

@@ -450,7 +450,23 @@ test('file lists: the torrent folder is left out, folders nest, a re-upload is r
   topic.files = fileRecord(topic, Array.from({ length: MAX_FILES + 1 }, (_, i) => [`f${i}`, 1]));
   assert.equal(topic.files.hash, '4D8E6C1D354C9680421FAFC0AC6878555AA460B9');
   assert.ok(topic.files.truncated && topic.files.list.length === MAX_FILES && topic.files.count === MAX_FILES + 1);
+  const game = fileRecord(topic, [['Game/start.sh', 1], ['Game/bin/game.x86_64', 1], ['Game/data/level.pak', 1],
+    ['Game/data/maps/a.pak', 1], ['Game/prefix/drive_c/windows/notepad.exe', 1]]);
+  assert.deepEqual(game.list, [['Game/start.sh', 1], ['Game/bin/game.x86_64', 1]], 'data two folders down and anything deeper go');
+  assert.ok(game.deeper_starters && game.count === 5, 'a left-out .exe could start it');
+  assert.ok(!fileRecord(topic, [['Game/start.sh', 1], ['Game/data/maps/a.pak', 1]]).deeper_starters);
   assert.ok(!needsList(topic));
   topic.magnet = 'magnet:?xt=urn:btih:0000000000000000000000000000000000000000';
   assert.ok(needsList(topic), 'a re-upload');
+});
+
+test('file lists merge into another copy of the catalog only for the same torrent', async () => {
+  const { mergeFileLists } = await import('./files.mjs');
+  const hash = c => c.repeat(40);
+  const list = c => ({ hash: hash(c), collected_at: '2026-11-01T00:00:00Z', count: 1, bytes: 1, truncated: false, list: [['a.sh', 1]] });
+  const from = { topics: [{ id: '1', files: list('A') }, { id: '2', files: list('B') }, { id: '3', files: list('C') }] };
+  const into = { topics: [{ id: '1', magnet: `magnet:?xt=urn:btih:${hash('a')}` }, { id: '2', magnet: `magnet:?xt=urn:btih:${hash('D')}` }, { id: '4', magnet: '' }] };
+  assert.equal(mergeFileLists(from, into), 1);
+  assert.deepEqual(into.topics.map(t => Boolean(t.files)), [true, false, false], 'topic 2 was re-uploaded');
+  assert.equal(mergeFileLists(from, into), 0, 'already there');
 });
