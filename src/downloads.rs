@@ -61,6 +61,25 @@ pub struct Job {
     #[serde(default)] pub waiting_vpn: bool,
     /// What it's for: a download the launcher couldn't install stops once its file list is known.
     #[serde(default)] pub platform: Option<crate::platform::Platform>,
+    /// Every file in the torrent, in its order, while the player chooses what to download.
+    /// Emptied once the download starts (the choice is in `selected`).
+    #[serde(default)] pub entries: Vec<Entry>,
+    /// The files to download (indices into the torrent); `None` for all of them.
+    #[serde(default)] pub selected: Option<Vec<usize>>,
+    /// Where the game installs as soon as the download finishes; `None` to install by hand.
+    #[serde(default)] pub install_to: Option<PathBuf>,
+    /// When it was added (Unix seconds; 0 for downloads from before this was recorded).
+    #[serde(default)] pub added: u64,
+}
+
+/// One file of a torrent, as the player sees it before downloading.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Entry {
+    pub path: String,
+    pub size: u64,
+    /// Left out for safety: a program a console game never needs (a Windows .exe in a PS4
+    /// release). It can't be chosen.
+    #[serde(default)] pub blocked: bool,
 }
 
 impl Job {
@@ -119,7 +138,7 @@ impl Default for Policy {
     }
 }
 
-enum Command { Prepare(Job), Start(String), Pause(String), Cancel(String), Remove(String), StopSeed(String), SetSeedAfterDownload(bool), SetVpn(Option<String>), Shutdown }
+enum Command { Prepare(Job), Begin { key: String, base: PathBuf, selected: Vec<usize>, install_to: Option<PathBuf> }, Discard(String), Start(String), Pause(String), Cancel(String), Remove(String), StopSeed(String), SetSeedAfterDownload(bool), SetVpn(Option<String>), Shutdown }
 
 const VPN_WAIT: &str = "Waiting for your VPN: downloads only run through it (Settings → Downloads)";
 const FILES_CHANGED: &str = "The downloaded files were moved, changed or deleted, so this download can't seed. Remove it, or download it again.";
@@ -166,11 +185,30 @@ impl Manager {
             name: name.chars().filter(|c| !c.is_control()).take(200).collect(), magnet,
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
             speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false,
-            platform: Some(platform),
+            platform: Some(platform), entries: vec![], selected: None, install_to: None, added: crate::util::now_secs() as u64,
         };
         self.tx.try_send(Command::Prepare(job.clone())).context("Download worker is busy or unavailable")?;
         jobs.push(job);
         Ok(key)
+    }
+
+    /// Start a download whose file list has arrived, with the player's choices: where it goes
+    /// (`base`), which files (`selected`, indices into the torrent) and where it installs after.
+    pub fn begin(&self, key: &str, base: PathBuf, selected: Vec<usize>, install_to: Option<PathBuf>) -> Result<()> {
+        ensure!(base.is_absolute(), "Choose an absolute download folder (or a ~/ path)");
+        ensure!(install_to.as_ref().is_none_or(|path| path.is_absolute()), "Choose an absolute install folder (or a ~/ path)");
+        let jobs = self.jobs.lock().unwrap();
+        let job = jobs.iter().find(|job| job.key == key).context("Transfer not found")?;
+        ensure!(job.state == State::Ready, "This download has already started");
+        ensure!(!selected.is_empty(), "Choose at least one file");
+        ensure!(selected.iter().all(|&i| job.entries.get(i).is_some_and(|entry| !entry.blocked)), "That file can't be downloaded");
+        self.tx.try_send(Command::Begin { key: key.into(), base, selected, install_to }).context("Download worker is busy or unavailable")
+    }
+
+    /// Forget a download that never started (the player closed the Download & install panel):
+    /// stop looking it up and remove it, with its still-empty folder.
+    pub fn discard(&self, key: &str) -> Result<()> {
+        self.tx.try_send(Command::Discard(key.into())).context("Download worker is busy or unavailable")
     }
 
     pub fn action(&self, key: &str, action: &str) -> Result<()> {
@@ -314,6 +352,19 @@ fn owned_folder(job: &Job) -> Result<PathBuf> {
     Ok(folder)
 }
 
+/// Remove a transfer folder that holds nothing but its ownership marker. Anything else in it
+/// (a partial download, someone's files) keeps it.
+fn remove_unused(folder: &Path, key: &str) {
+    let only_marker = std::fs::read_dir(folder).is_ok_and(|entries| {
+        let names: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.file_name()).collect();
+        names.len() == 1 && names[0] == MARKER
+    });
+    if only_marker && std::fs::read_to_string(folder.join(MARKER)).ok().as_deref() == Some(key) {
+        let _ = std::fs::remove_file(folder.join(MARKER));
+        let _ = std::fs::remove_dir(folder);
+    }
+}
+
 fn check_path(folder: &Path, relative: &Path) -> Result<()> {
     ensure!(!relative.as_os_str().is_empty(), "Torrent contains an empty filename");
     let mut path = folder.to_path_buf();
@@ -367,12 +418,25 @@ fn inspect_metadata(bytes: &[u8], key: &str, folder: &Path) -> Result<(u64, Vec<
     Ok((total, files))
 }
 
+/// Whether file `index` of a torrent is downloaded (`selected`: `None` for every file).
+fn chosen(selected: Option<&[usize]>, index: usize) -> bool {
+    selected.is_none_or(|selected| selected.contains(&index))
+}
+
+/// What a console game never needs: Windows programs and scripts. Left out of PS4/PS5 releases.
+fn blocked(platform: Option<crate::platform::Platform>, path: &str) -> bool {
+    use crate::platform::Platform;
+    const PROGRAMS: [&str; 12] = [".exe", ".com", ".scr", ".msi", ".bat", ".cmd", ".lnk", ".vbs", ".vbe", ".js", ".ps1", ".pif"];
+    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    matches!(platform, Some(Platform::Ps4 | Platform::Ps5)) && PROGRAMS.iter().any(|ext| name.ends_with(ext))
+}
+
 /// Every file of a completed download is still in place at its full size: seeding must never
 /// turn into downloading missing files again.
-fn payload_present(bytes: &[u8], folder: &Path) -> Result<()> {
+fn payload_present(bytes: &[u8], folder: &Path, selected: Option<&[usize]>) -> Result<()> {
     let meta = librqbit::torrent_from_bytes(bytes).context("Invalid torrent metadata")?;
     let info = meta.info.data.validate().context("Unsafe torrent metadata")?;
-    for file in info.iter_file_details() {
+    for (_, file) in info.iter_file_details().enumerate().filter(|(i, _)| chosen(selected, *i)) {
         let found = std::fs::symlink_metadata(folder.join(file.filename.to_pathbuf())).ok();
         ensure!(found.is_some_and(|m| m.is_file() && m.len() == file.len), FILES_CHANGED);
     }
@@ -380,11 +444,11 @@ fn payload_present(bytes: &[u8], folder: &Path) -> Result<()> {
 }
 
 /// Disk allocation, not saved verified progress: deleted files and sparse holes need space again.
-fn required_space(bytes: &[u8], folder: &Path) -> Result<u64> {
+fn required_space(bytes: &[u8], folder: &Path, selected: Option<&[usize]>) -> Result<u64> {
     let meta = librqbit::torrent_from_bytes(bytes)?;
     let info = meta.info.data.validate()?;
     let mut required = 0u64;
-    for file in info.iter_file_details() {
+    for (_, file) in info.iter_file_details().enumerate().filter(|(i, _)| chosen(selected, *i)) {
         let path = file.filename.to_pathbuf();
         check_path(folder, &path)?;
         let allocated = match std::fs::symlink_metadata(folder.join(path)) {
@@ -404,6 +468,26 @@ fn available_space(folder: &Path) -> Result<u64> {
     ensure!(unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } == 0, "Cannot check destination free space");
     let stat = unsafe { stat.assume_init() };
     Ok((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+}
+
+/// The drive a folder is on (or would be on: the folder needn't exist yet).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Drive {
+    pub free: u64,
+    /// Which filesystem: two folders on the same one share its free space.
+    pub dev: u64,
+    /// Where it's mounted ("/home", "/mnt/games"), for saying which drive.
+    pub mount: PathBuf,
+}
+
+pub fn drive(path: &Path) -> Option<Drive> {
+    use std::os::unix::fs::MetadataExt;
+    let existing = path.ancestors().find(|p| p.is_dir())?;
+    let dev = std::fs::metadata(existing).ok()?.dev();
+    let mount = existing.ancestors()
+        .take_while(|p| std::fs::metadata(p).is_ok_and(|m| m.dev() == dev))
+        .last().unwrap_or(existing).to_path_buf();
+    Some(Drive { free: available_space(existing).ok()?, dev, mount })
 }
 
 pub fn bytes_label(bytes: u64) -> String {
@@ -586,9 +670,13 @@ impl Worker {
         }
         secure_write(&self.store.join(format!("{}.torrent", job.key)), &resolved.bytes)?;
         self.peers.insert(job.key.clone(), resolved.peers);
+        let entries: Vec<Entry> = files.into_iter()
+            .map(|(path, size)| Entry { blocked: blocked(job.platform, &path), path, size }).collect();
+        ensure!(entries.iter().any(|entry| !entry.blocked), "Nothing in this release can be downloaded: it only holds programs a console game never needs.");
         self.update(&job.key, |job| {
-            job.total = total; job.file_count = files.len();
-            job.files = files.into_iter().take(100).map(|(path, size)| format!("{path} · {}", bytes_label(size))).collect();
+            job.total = total; job.file_count = entries.len();
+            job.selected = Some((0..entries.len()).filter(|&i| !entries[i].blocked).collect());
+            job.entries = entries;
             job.state = State::Ready; job.error.clear();
         });
         self.persist();
@@ -609,18 +697,20 @@ impl Worker {
             let mut bytes = Vec::new();
             std::fs::File::open(path)?.take(MAX_METADATA + 1).read_to_end(&mut bytes)?;
             let folder = owned_folder(&job)?;
-            let (total, _) = inspect_metadata(&bytes, key, &folder)?;
-            ensure!(available_space(&folder)? >= required_space(&bytes, &folder)?, "Not enough free space in the download folder");
+            let (total, files) = inspect_metadata(&bytes, key, &folder)?;
+            let selected = job.selected.as_deref();
+            let total = if selected.is_some() { files.iter().enumerate().filter(|(i, _)| chosen(selected, *i)).map(|(_, f)| f.1).sum() } else { total };
+            ensure!(available_space(&folder)? >= required_space(&bytes, &folder, selected)?, "Not enough free space in the download folder");
             let session = self.session().await?;
             let magnet = librqbit::Magnet::parse(&job.magnet)?;
             let peers = self.peers.get(key).cloned().unwrap_or_else(|| self.policy.initial_peers.clone());
             let response = session.add_torrent(AddTorrent::from_bytes(bytes), Some(AddTorrentOptions {
                 paused: false, overwrite: true, output_folder: Some(folder.to_string_lossy().into_owned()),
-                trackers: Some(magnet.trackers), initial_peers: Some(peers), ..Default::default()
+                trackers: Some(magnet.trackers), initial_peers: Some(peers), only_files: job.selected.clone(), ..Default::default()
             })).await?;
             let handle = response.into_handle().context("No transfer handle")?;
             self.handles.insert(key.into(), handle);
-            self.update(key, |job| { job.folder = folder; job.total = total; job.done = 0; job.state = State::Checking; job.error.clear(); });
+            self.update(key, |job| { job.folder = folder; job.total = total; job.done = 0; job.state = State::Checking; job.error.clear(); job.entries.clear(); });
         }
         self.persist();
         Ok(())
@@ -708,13 +798,14 @@ impl Worker {
         ensure!(job.folder.is_dir(), FILES_CHANGED);
         let folder = owned_folder(&job)?;
         inspect_metadata(&bytes, key, &folder)?;
-        payload_present(&bytes, &folder)?;
+        payload_present(&bytes, &folder, job.selected.as_deref())?;
         let session = self.session().await?;
         let magnet = librqbit::Magnet::parse(&job.magnet)?;
         let peers = self.peers.get(key).cloned().unwrap_or_else(|| self.policy.initial_peers.clone());
+        // Only the files that were downloaded: sharing must never fetch the ones left out.
         let response = session.add_torrent(AddTorrent::from_bytes(bytes), Some(AddTorrentOptions {
             paused: true, overwrite: true, output_folder: Some(folder.to_string_lossy().into_owned()),
-            trackers: Some(magnet.trackers), initial_peers: Some(peers), ..Default::default()
+            trackers: Some(magnet.trackers), initial_peers: Some(peers), only_files: job.selected.clone(), ..Default::default()
         })).await?;
         let handle = response.into_handle().context("No transfer handle")?;
         self.handles.insert(key.into(), handle);
@@ -743,6 +834,34 @@ impl Worker {
                 self.fail(key, anyhow::anyhow!(FILES_CHANGED));
             }
         }
+    }
+
+    /// The player's choices for a download whose file list has arrived, then start it.
+    async fn begin(&mut self, key: &str, base: &Path, selected: Vec<usize>, install_to: Option<PathBuf>) -> Result<()> {
+        let job = self.job(key).context("Missing transfer")?;
+        if job.state != State::Ready { return Ok(()); }
+        let folder = base.join(format!("torrent-{key}"));
+        if folder != job.folder {
+            // Looking it up made an empty folder where downloads went by default: not there now.
+            remove_unused(&job.folder, key);
+        }
+        self.update(key, |job| { job.folder = folder; job.selected = Some(selected); job.install_to = install_to; });
+        self.persist();
+        self.start(key).await
+    }
+
+    /// Forget a download that never started, and the empty folder looking it up made.
+    async fn discard(&mut self, key: &str) -> Result<()> {
+        let Some(job) = self.job(key) else { return Ok(()) };
+        if !matches!(job.state, State::Resolving | State::Ready | State::Failed) || job.done > 0 { return Ok(()); }
+        self.stop_job(key, State::Cancelled).await?;
+        self.jobs.lock().unwrap().retain(|job| job.key != key);
+        let _ = std::fs::remove_file(self.store.join(format!("{key}.torrent")));
+        remove_unused(&job.folder, key);
+        self.peers.remove(key);
+        self.persist();
+        self.stop_idle_session().await;
+        Ok(())
     }
 
     async fn remove(&mut self, key: &str) -> Result<()> {
@@ -808,6 +927,11 @@ impl Worker {
                 command = rx.recv() => {
                     let result = match command {
                         Some(Command::Prepare(job)) => { let key = job.key; Some((key.clone(), self.resolve(&key).await)) },
+                        Some(Command::Begin { key, base, selected, install_to }) => {
+                            let result = self.begin(&key, &base, selected, install_to).await;
+                            Some((key, result))
+                        },
+                        Some(Command::Discard(key)) => Some((key.clone(), self.discard(&key).await)),
                         Some(Command::Start(key)) => Some((key.clone(), self.start(&key).await)),
                         Some(Command::Pause(key)) => {
                             self.update(&key, |job| job.waiting_vpn = false);
@@ -893,7 +1017,7 @@ mod tests {
             magnet: format!("magnet:?xt=urn:btih:{key}"), folder: base.join(format!("torrent-{key}")),
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
             speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false,
-            platform: None,
+            platform: None, entries: vec![], selected: None, install_to: None, added: 0,
         }
     }
 
@@ -1582,15 +1706,120 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let (key, bytes) = metadata(&[&["payload"]], None, false);
         inspect_metadata(&bytes, &key, temp.path()).unwrap();
-        assert_eq!(required_space(&bytes, temp.path()).unwrap(), 65536);
+        assert_eq!(required_space(&bytes, temp.path(), None).unwrap(), 65536);
         let path = temp.path().join("payload");
         std::fs::File::create(&path).unwrap().set_len(65536).unwrap();
-        assert_eq!(required_space(&bytes, temp.path()).unwrap(), 65536, "sparse length is not allocation");
+        assert_eq!(required_space(&bytes, temp.path(), None).unwrap(), 65536, "sparse length is not allocation");
         std::fs::write(&path, vec![42; 65536]).unwrap();
-        assert_eq!(required_space(&bytes, temp.path()).unwrap(), 0);
+        assert_eq!(required_space(&bytes, temp.path(), None).unwrap(), 0);
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(required_space(&bytes, temp.path()).unwrap(), 65536, "deleted completed file needs space");
+        assert_eq!(required_space(&bytes, temp.path(), None).unwrap(), 65536, "deleted completed file needs space");
         assert!(available_space(temp.path()).unwrap() > 0);
+    }
+
+    /// A two-file torrent (a "game" and an "extra", 256 KiB each, whole pieces apiece).
+    async fn two_file_seeder(root: &Path) -> (Arc<Session>, librqbit::CreateTorrentResult, Vec<u8>, Vec<u8>) {
+        let mut seed = 0x9e3779b9u32;
+        let mut bytes = |n: usize| -> Vec<u8> { (0..n).map(|_| { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; seed as u8 }).collect() };
+        let (game, extra) = (bytes(256 * 1024), bytes(256 * 1024));
+        let source = root.join("Release");
+        std::fs::create_dir_all(source.join("Extras")).unwrap();
+        std::fs::write(source.join("game.pkg"), &game).unwrap();
+        std::fs::write(source.join("Extras").join("artbook.bin"), &extra).unwrap();
+        let session = Session::new_with_opts(root.to_path_buf(), SessionOptions {
+            dht: None, disable_trackers: true, disable_local_service_discovery: true, persistence: None, fastresume: false,
+            listen: Some(librqbit::ListenerOptions {
+                mode: librqbit::ListenerMode::TcpOnly, listen_addr: "127.0.0.1:0".parse().unwrap(),
+                enable_upnp_port_forwarding: false, ..Default::default()
+            }),
+            ..Default::default()
+        }).await.unwrap();
+        let (torrent, handle) = session.create_and_serve_torrent(&source, librqbit::CreateTorrentOptions {
+            name: None, trackers: vec![], piece_length: Some(65536),
+        }).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !handle.stats().finished { tokio::time::sleep(Duration::from_millis(25)).await; }
+        }).await.expect("seeder verifies fixture");
+        (session, torrent, game, extra)
+    }
+
+    #[test]
+    fn only_the_chosen_files_download_where_the_player_chose() {
+        let rt = runtime();
+        let temp = tempfile::tempdir().unwrap();
+        let (seeder, torrent, game, _) = rt.block_on(two_file_seeder(temp.path()));
+        let store = temp.path().join("state");
+        let mut manager = Manager::new(store.clone(), local_policy(&seeder));
+        let key = manager.prepare(3, "Two files", &torrent.as_magnet().to_string(), temp.path().join("default"), crate::platform::Platform::Ps4).unwrap();
+        let ready = rt.block_on(wait_job(&manager, &key, |job| job.state == State::Ready));
+        assert!(ready.added > 0);
+        assert_eq!(ready.entries.len(), 2);
+        let pkg = ready.entries.iter().position(|e| e.path.ends_with("game.pkg")).unwrap();
+        let other = ready.entries.iter().find(|e| e.path.ends_with("artbook.bin")).unwrap().path.clone();
+        let pkg_path = ready.entries[pkg].path.clone();
+        assert_eq!(ready.selected.as_ref().unwrap().len(), 2, "everything that isn't blocked is chosen at first");
+        assert!(manager.begin(&key, temp.path().join("chosen"), vec![], None).is_err(), "nothing chosen");
+        assert!(manager.begin(&key, PathBuf::from("relative"), vec![pkg], None).is_err());
+        let install_to = temp.path().join("games");
+        manager.begin(&key, temp.path().join("chosen"), vec![pkg], Some(install_to.clone())).unwrap();
+        let done = rt.block_on(wait_job(&manager, &key, |job| job.state == State::Complete));
+        assert_eq!(done.total, game.len() as u64, "progress counts only the chosen file");
+        assert_eq!(done.install_to, Some(install_to));
+        assert!(done.entries.is_empty(), "the full file list isn't kept once it started");
+        assert!(done.folder.starts_with(temp.path().join("chosen").canonicalize().unwrap()));
+        assert_eq!(std::fs::read(done.folder.join(&pkg_path)).unwrap(), game);
+        let extra = std::fs::read(done.folder.join(&other)).unwrap_or_default();
+        assert!(extra.iter().all(|&b| b == 0), "the file left out wasn't downloaded");
+        assert!(!temp.path().join("default").join(format!("torrent-{key}")).exists(), "the empty default folder is gone");
+        manager.shutdown();
+    }
+
+    #[test]
+    fn closing_the_panel_forgets_a_download_that_never_started() {
+        let rt = runtime();
+        let temp = tempfile::tempdir().unwrap();
+        let (seeder, torrent, _, _) = rt.block_on(two_file_seeder(temp.path()));
+        let store = temp.path().join("state");
+        let mut manager = Manager::new(store.clone(), local_policy(&seeder));
+        let key = manager.prepare(4, "Two files", &torrent.as_magnet().to_string(), temp.path().join("dl"), crate::platform::Platform::Ps4).unwrap();
+        let ready = rt.block_on(wait_job(&manager, &key, |job| job.state == State::Ready));
+        manager.discard(&key).unwrap();
+        rt.block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while !manager.snapshot().is_empty() { tokio::time::sleep(Duration::from_millis(25)).await; }
+            }).await.expect("discarded");
+        });
+        assert!(!ready.folder.exists());
+        assert!(!store.join(format!("{key}.torrent")).exists());
+        manager.shutdown();
+    }
+
+    #[test]
+    fn windows_programs_are_left_out_of_console_releases() {
+        let temp = tempfile::tempdir().unwrap();
+        for (platform, blocked_exe, start) in [(Some(crate::platform::Platform::Ps4), true, "CUSA00001-app.pkg"), (Some(crate::platform::Platform::Pc), false, "start.sh")] {
+            let (key, bytes) = metadata(&[&["Game", start], &["Game", "Setup.exe"], &["Game", "readme.txt"]], None, false);
+            let mut job = job(temp.path(), &key); job.platform = platform;
+            let mut worker = Worker::new(temp.path().join("store"), Arc::new(Mutex::new(vec![job])), Policy { local_only: true, ..Default::default() });
+            worker.resolved(Resolved { key: key.clone(), bytes, peers: vec![] }).unwrap();
+            let job = worker.job(&key).unwrap();
+            let exe = job.entries.iter().position(|e| e.path.ends_with("Setup.exe")).unwrap();
+            assert_eq!(job.entries[exe].blocked, blocked_exe);
+            assert_eq!(job.selected.unwrap().contains(&exe), !blocked_exe);
+        }
+        let (key, bytes) = metadata(&[&["Setup.exe"]], None, false);
+        let mut job = job(temp.path(), &key); job.platform = Some(crate::platform::Platform::Ps5);
+        let mut worker = Worker::new(temp.path().join("store2"), Arc::new(Mutex::new(vec![job])), Policy { local_only: true, ..Default::default() });
+        assert!(worker.resolved(Resolved { key, bytes, peers: vec![] }).is_err(), "only programs: nothing to download");
+    }
+
+    #[test]
+    fn a_drive_is_found_for_a_folder_that_doesnt_exist_yet() {
+        let temp = tempfile::tempdir().unwrap();
+        let a = drive(&temp.path().join("not/made/yet")).unwrap();
+        let b = drive(temp.path()).unwrap();
+        assert_eq!(a.dev, b.dev);
+        assert!(a.free > 0 && temp.path().starts_with(&a.mount));
     }
 
     #[test]
