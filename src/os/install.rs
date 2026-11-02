@@ -163,6 +163,10 @@ impl App {
     pub fn osi_tell_installed(&mut self) {
         self.osi.tell_installed = false;
         self.note_setting(crate::settings::SId::InstallOs, "Installed: restart without the USB stick to start it", 1);
+        // Also on Home, which is where the player is after Later.
+        self.sticky_status = "AzrakOS is installed: restart without the USB stick".into();
+        let (status, busy) = (self.status.clone(), self.status_busy);
+        self.set_status(if busy { &status } else { "" }, busy);
     }
 
     fn osi_back(&mut self) {

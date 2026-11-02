@@ -350,10 +350,13 @@ impl App {
         self.settings_sections = titles.iter().map(|t| self.section_info(t)).collect();
         self.settings_headers = titles;
         self.settings_section = self.settings_section.min(self.settings_sections.len() - 1);
-        // What a row just did, in place of its hint (see App::note_setting).
+        // What a row just did, in place of its hint (see App::note_setting): on the row of that
+        // name (a network, a device), and never over a problem the row shows itself.
         for (id, r) in rows.iter_mut() {
-            if let Some((note, kind)) = self.setting_notes.get(id) {
-                (r.hint, r.hint_kind) = (note.into(), *kind);
+            let kind = std::mem::discriminant(id);
+            let found = self.setting_notes.iter().find(|(nid, (_, _, label))| std::mem::discriminant(*nid) == kind && (label.is_empty() || label.as_str() == r.label.as_str()));
+            if let Some((_, (note, note_kind, _))) = found {
+                if r.hint_kind != 2 || *note_kind == 2 { (r.hint, r.hint_kind) = (note.into(), *note_kind); }
             }
         }
         self.settings_ids = rows.iter().map(|(id, _)| *id).collect();
@@ -597,6 +600,8 @@ impl App {
 
     pub fn settings_change(&mut self, i: usize, dir: i32) {
         let Some(id) = self.settings_ids.get(i).copied() else { return };
+        // Pressed again: what it said last time goes.
+        self.setting_notes.remove(&id);
         if self.system_change(id, dir) {
             return;
         }
@@ -668,6 +673,8 @@ impl App {
 
     pub fn settings_activate(&mut self, i: usize) {
         let Some(id) = self.settings_ids.get(i).copied() else { return };
+        // Pressed again: what it said last time goes.
+        self.setting_notes.remove(&id);
         if self.system_activate(id, i) {
             return;
         }

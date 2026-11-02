@@ -109,7 +109,9 @@ impl App {
         if self.overlay == Overlay::Power {
             self.back();
         }
-        let (id, what) = if restart { (SId::Restart, "Couldn't restart") } else { (SId::ShutDown, "Couldn't shut down") };
+        let what = if restart { "Couldn't restart" } else { "Couldn't shut down" };
+        // On the row that was pressed (Restart to update is a System row).
+        let id = self.power.what.map(power_row).unwrap_or(if restart { SId::Restart } else { SId::ShutDown });
         self.note_setting(id, &format!("{what}: {why}"), 2);
     }
 

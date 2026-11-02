@@ -150,6 +150,8 @@ export struct DownloadData {
     line: string, tile-frac: float,
     // Downloading or verifying right now: the bars move (a light sweeps across them).
     working: bool,
+    // The note is a problem with something just pressed (amber, whatever the download's colour).
+    note-bad: bool,
     group: int, group-first: bool, group-label: string,
 }
 export struct DlTab { label: string, count: string, warn: bool }
@@ -284,4 +286,5 @@ export struct OsiDisk { label: string, detail: string, warn: bool }
 export struct WjKey { label: string, w: float, focused: bool, accent: bool, on: bool, icon: string }
 
 export struct MenuItem { label: string, icon: string }
-export struct RunningData { active: bool, name: string, time: string }
+// note: what Resume couldn't do, in place of the time (until it's pressed again).
+export struct RunningData { active: bool, name: string, time: string, note: string }

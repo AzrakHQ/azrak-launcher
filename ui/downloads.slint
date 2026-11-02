@@ -201,7 +201,7 @@ export component DownloadsPage inherits Rectangle {
         HorizontalLayout {
             height: (126px * S.k); spacing: (52px * S.k); alignment: start;
             if root.s.big == "" && root.s.stats.length == 0 && root.s.note != "": Text {
-                width: (900px * S.k); text: root.s.note; font-size: (22px * S.k); color: root.kind-color(root.s.kind);
+                width: (900px * S.k); text: root.s.note; font-size: (22px * S.k); color: root.s.note-bad ? Theme.warn : root.kind-color(root.s.kind);
                 wrap: word-wrap; overflow: elide; vertical-alignment: bottom;
             }
             if root.s.big != "": HorizontalLayout {
@@ -257,7 +257,7 @@ export component DownloadsPage inherits Rectangle {
             }
         }
         if root.s.note != "" && (root.s.big != "" || root.s.stats.length > 0): Text {
-            height: (34px * S.k); text: root.s.note; font-size: (19px * S.k); color: root.kind-color(root.s.kind);
+            height: (34px * S.k); text: root.s.note; font-size: (19px * S.k); color: root.s.note-bad ? Theme.warn : root.kind-color(root.s.kind);
             overflow: elide; vertical-alignment: bottom;
         }
         Rectangle { height: root.s.note != "" && (root.s.big != "" || root.s.stats.length > 0) ? (18px * S.k) : (30px * S.k); }

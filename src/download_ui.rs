@@ -319,7 +319,13 @@ impl App {
                 self.push_installs();
                 if let Some(path) = install.as_ref().filter(|record| record.state == Install::Installed).and_then(|record| record.path.as_ref()) {
                     if let Some(local) = self.locals.iter().position(|game| &game.l.path == path) {
+                        // A game that can't start says why here, on its row (not behind this page).
+                        let id = self.locals[local].l.id.clone();
+                        let before = self.game_notes.get(&id).cloned();
                         self.run_action("play", Target { game: self.locals[local].cat, local: Some(local) });
+                        if let Some((text, true, _)) = self.game_notes.get(&id).cloned().filter(|n| Some(n) != before.as_ref()) {
+                            self.note_download(key, &text);
+                        }
                     } else { self.note_download(key, "Its folder is missing: check Game folders in Settings"); }
                 }
                 return;
@@ -347,7 +353,8 @@ impl App {
 
     /// What pressing something on a download just did, on its row until the next press there.
     pub fn note_download(&mut self, key: &str, text: &str) {
-        self.dl_notes.insert(key.to_string(), text.to_string());
+        // One line (an error can carry line breaks, which would spill out of the row).
+        self.dl_notes.insert(key.to_string(), text.split_whitespace().collect::<Vec<_>>().join(" "));
         self.push_downloads();
     }
 
@@ -448,6 +455,9 @@ impl App {
                 spark: if d.spark { self.dl_speeds.get(&job.key).map(spark_path).unwrap_or_default() } else { String::new() }.into(),
                 // What pressing something on it just did, else what it needs.
                 note: self.dl_notes.get(&job.key).cloned().unwrap_or_else(|| d.note.clone()).into(),
+                // What a press there couldn't do: in amber, whatever the download's own colour.
+                // A finished download's own note is a problem too (its files changed, a delete refused).
+                note_bad: self.dl_notes.contains_key(&job.key) || (job.state == State::Complete && !job.error.is_empty()),
                 dl_frac: d.dl, inst_frac: d.inst, ready: d.ready, dl_label: d.dl_label.clone().into(), inst_label: d.inst_label.clone().into(), bar_kind: d.bar,
                 actions: ModelRc::new(VecModel::from(actions)),
                 line: d.line.clone().into(), tile_frac: d.tile, working: d.working,

@@ -439,7 +439,9 @@ impl App {
                         platform => format!("Installed locally. Launches with the {} emulator.", platform.emulator()),
                     });
                 h.desc = truncate(&desc, 260).into();
-                if let Some((note, warn)) = self.game_notes.get(&self.game_key(t)) {
+                let key = self.game_key(t);
+                if self.hub.is_none() { self.keep_brief_notes_for(&key); }
+                if let Some((note, warn, _)) = self.game_notes.get(&key) {
                     (h.note, h.note_warn) = (note.into(), *warn);
                 }
                 self.hero_actions = self.actions_for(t, false);
@@ -1222,7 +1224,9 @@ impl App {
             h.verdict_detail = self.verdict_detail(t).into();
         }
         // Something about this game (it crashed, it couldn't start) comes before what Download means.
-        if let Some((note, warn)) = self.game_notes.get(&self.game_key(t)).cloned().or_else(|| self.download_note(t)) {
+        let key = self.game_key(t);
+        self.keep_brief_notes_for(&key);
+        if let Some((note, warn)) = self.game_notes.get(&key).map(|(n, w, _)| (n.clone(), *w)).or_else(|| self.download_note(t)) {
             h.download_note = note.into();
             h.download_note_warn = warn;
         }

@@ -194,6 +194,8 @@ impl App {
             let imported = if res.is_ok() && !was_managed { old_emu.parent().map(kyty::import_data_from).unwrap_or(0) } else { 0 };
             post(move |app| {
                 app.kyty.busy = false;
+                // Installed (or not): "installs when you finish playing" no longer applies.
+                app.setting_notes.remove(&crate::settings::SId::KytyUpdate);
                 app.kyty.progress.clear();
                 app.set_status("", false);
                 match res {

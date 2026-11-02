@@ -53,6 +53,7 @@ impl App {
             post(move |app| match res {
                 Ok(rel) => {
                     app.shad.retry = false;
+                    app.shad.error.clear();
                     shad::mark_checked(&rel.tag);
                     let st = shad::load_state();
                     // Automatic updates may have been switched off while this check ran.
@@ -158,7 +159,9 @@ impl App {
                         }
                         app.shad.error = e.clone();
                         // A game waiting for it says why it didn't start.
-                        if let Some(id) = launch_after.or(app.shad.launch_after.take()).filter(|_| !quiet) {
+                        // One the player pressed Play on hears it even if the install was quiet.
+                        let pressed = app.shad.launch_after.take();
+                        if let Some(id) = launch_after.filter(|_| !quiet).or(pressed) {
                             app.note_game(&id, &format!("Couldn't install PS4 support: {e}"), true);
                         }
                         app.shad.launch_after = None;

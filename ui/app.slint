@@ -945,7 +945,7 @@ export component AppWindow inherits Window {
                         Rectangle { width: (10px * S.k); height: (10px * S.k); y: (21px * S.k); border-radius: (5px * S.k); background: Theme.ok; }
                         // Cut short, so the top bar never reaches the tabs.
                         Text { text: root.running.name; max-width: (320px * S.k); overflow: elide; font-size: (18px * S.k); font-weight: 600; color: Theme.text; vertical-alignment: center; }
-                        Text { text: root.running.time; font-size: (18px * S.k); color: Theme.text2; vertical-alignment: center; }
+                        Text { text: root.running.note != "" ? root.running.note : root.running.time; max-width: (420px * S.k); overflow: elide; font-size: (18px * S.k); color: root.running.note != "" ? Theme.warn : Theme.text2; vertical-alignment: center; }
                         for b[i] in ["Resume", "Stop"]: Rectangle {
                             y: (7px * S.k);
                             height: (38px * S.k);
@@ -1304,7 +1304,8 @@ export component AppWindow inherits Window {
                         spacing: (10px * S.k);
                         alignment: start;
                         if root.hub.download-note-warn: Image { source: Icons.alert; colorize: Theme.warn; width: (20px * S.k); height: (20px * S.k); y: (2px * S.k); }
-                        Text { text: root.hub.download-note; font-size: (19px * S.k); color: root.hub.download-note-warn ? Theme.warn : Theme.text2; overflow: elide; }
+                        // Wraps (two lines at most): what to do next is often at its end.
+                        Text { text: root.hub.download-note; width: (980px * S.k); wrap: word-wrap; max-height: (52px * S.k); overflow: elide; font-size: (19px * S.k); color: root.hub.download-note-warn ? Theme.warn : Theme.text2; }
                     }
                     Rectangle { height: (22px * S.k); }
                     // The game on each platform: how it should play here, how easy it is to get,

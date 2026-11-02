@@ -278,10 +278,19 @@ pub struct App {
 
     /// What a Settings row just did ("6 games found", "Couldn't connect"), shown in place of its
     /// hint until Settings closes; kind: 0 dim, 1 good, 2 bad. See `note_setting`.
-    pub setting_notes: HashMap<crate::settings::SId, (String, i32)>,
+    /// Notes on Settings rows: (text, kind, the row's name when noted, so a Wi-Fi network or a
+    /// device keeps its note as the list around it changes).
+    pub setting_notes: HashMap<crate::settings::SId, (String, i32, String)>,
     /// Something about one game (it crashed, it couldn't start), under its buttons on Home and in
     /// its Game Hub, by `game_key`; true: a problem. See `note_game`.
-    pub game_notes: HashMap<String, (String, bool)>,
+    /// Notes on games: (text, a problem, brief). Brief ones last only while that game is on
+    /// screen; the others until it's played again.
+    pub game_notes: HashMap<String, (String, bool, bool)>,
+    /// A note on the running game's pill in the top bar (Resume couldn't switch to it).
+    pub running_note: String,
+    /// A line for the Home screen's status that stays until the launcher restarts (AzrakOS was
+    /// installed: restart without the USB stick), shown whenever nothing else is.
+    pub sticky_status: String,
     /// The game whose trailer is playing (`game_key`), for a note if it fails partway.
     trailer_key: String,
     /// What pressing something on a download just did, on its row, by download key. See
@@ -385,6 +394,9 @@ thread_local! {
 }
 
 /// Run `f` with the app. If the app is busy (re-entrant callback), retry on the next loop turn.
+/// A note's text on one line (an error can carry line breaks).
+fn one_line(text: &str) -> String { text.split_whitespace().collect::<Vec<_>>().join(" ") }
+
 pub fn with_app(f: impl FnOnce(&mut App) + 'static) {
     let f = RefCell::new(Some(f));
     let done = APP.with(|a| match a.try_borrow_mut() {
@@ -598,6 +610,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         edit_index: -1,
         setting_notes: HashMap::new(),
         game_notes: HashMap::new(),
+        running_note: String::new(),
+        sticky_status: String::new(),
         trailer_key: String::new(),
         dl_notes: HashMap::new(),
         status: String::new(),
@@ -1542,7 +1556,7 @@ impl App {
     pub fn open_rating(&mut self, l: usize, after_play: bool) {
         if self.locals[l].l.title_id.is_empty() {
             let id = self.locals[l].l.id.clone();
-            return self.note_game(&id, "Can't rate this game: its folder has no title ID", true);
+            return self.note_game_brief(&id, "Can't rate this game: its folder has no title ID", true);
         }
         let mk = |id: &'static str, label: &str, icon: &'static str| ActionDef { id, label: label.into(), icon, primary: false, danger: false, round: false };
         let mut items = vec![
@@ -1595,7 +1609,7 @@ impl App {
                 if let Some(l) = app.locals.iter().position(|g| g.l.title_id == tid) {
                     let id = app.locals[l].l.id.clone();
                     let emulator = crate::platform::Platform::of_title_id(&tid).unwrap_or_default().emulator();
-                    app.note_game(&id, &format!("Rated: {} on Linux · it goes to {emulator} when you share your ratings in Settings", status.label()), false);
+                    app.note_game_brief(&id, &format!("Rated: {} on Linux · it goes to {emulator} when you share your ratings in Settings", status.label()), false);
                 }
             });
         });
@@ -1793,8 +1807,8 @@ impl App {
         }
         self.battery_tick();
         let running = match self.live.first() {
-            Some(s) => crate::RunningData { active: true, name: s.name.clone().into(), time: util::fmt_clock(util::now_secs() - s.since).into() },
-            None => crate::RunningData::default(),
+            Some(s) => crate::RunningData { active: true, name: s.name.clone().into(), time: util::fmt_clock(util::now_secs() - s.since).into(), note: self.running_note.clone().into() },
+            None => { self.running_note.clear(); crate::RunningData::default() }
         };
         if running.active || ui.get_running().active {
             ui.set_running(running);
@@ -2824,7 +2838,7 @@ impl App {
                 let others = t.game.map(|g| self.platform_releases(g).filter(|&i| !self.games[i].g.is_pkg()).count()).unwrap_or(0);
                 let tip = if others > 0 { "This game has another release that isn't a PKG: switch to it with the release selector." } else { "Look for a release of this game that is a folder, an archive or an exFAT image." };
                 let key = self.game_key(t);
-                self.note_game(&key, &format!("A PKG package: PS5 games install from extracted releases only. {tip}"), false);
+                self.note_game_brief(&key, &format!("A PKG package: PS5 games install from extracted releases only. {tip}"), false);
             }
             "install" => {
                 if let Some(job) = self.download_for_target(t) { self.install_download(&job.key); }
@@ -2847,7 +2861,7 @@ impl App {
                         open_url(&p.to_string_lossy());
                     } else {
                         let id = lg.id.clone();
-                        self.note_game(&id, "No log yet: play the game once to make one", false);
+                        self.note_game_brief(&id, "No log yet: play the game once to make one", false);
                     }
                 }
             }
@@ -2889,9 +2903,9 @@ impl App {
                     Ok(m) => {
                         let path = crate::pcgame::short_path(&m.launch, &m.alternatives.last().cloned().unwrap_or_default());
                         self.rescan_library();
-                        self.note_game(&game.id, &format!("Play now starts {path}"), false);
+                        self.note_game_brief(&game.id, &format!("Play now starts {path}"), false);
                     }
-                    Err(e) => self.note_game(&game.id, &format!("Couldn't change it: {e}"), true),
+                    Err(e) => self.note_game_brief(&game.id, &format!("Couldn't change it: {e}"), true),
                 }
             }
             _ => {}
@@ -2902,7 +2916,7 @@ impl App {
         let game = self.locals[l].l.clone();
         if let Some(s) = self.live.first() {
             let name = s.name.clone();
-            self.note_game(&game.id, &format!("{name} is running: stop it first, or Resume it from Home"), true);
+            self.note_game_brief(&game.id, &format!("{name} is running: stop it first, or Resume it from Home"), true);
             audio::play(Sound::Error);
             return;
         }
@@ -2948,11 +2962,8 @@ impl App {
     }
 
     pub fn resume_game(&mut self) {
-        if !self.sessions.resume() {
-            if let Some(id) = self.live.first().map(|s| s.game_id.clone()) {
-                self.note_game(&id, "Couldn't switch to it: its window wasn't found (Resume needs xdotool)", true);
-            }
-        }
+        // Said on the running game's pill, where Resume was pressed.
+        self.running_note = if self.sessions.resume() { String::new() } else { "Couldn't switch to it: its window wasn't found (Resume needs xdotool)".into() };
     }
 
     /// Play a game's official trailer inside the launcher.
@@ -2973,7 +2984,7 @@ impl App {
         });
         if let Err(e) = opened {
             let key = self.game_key(t);
-            return self.note_game(&key, &format!("Can't play the trailer: {e}"), true);
+            return self.note_game_brief(&key, &format!("Can't play the trailer: {e}"), true);
         }
         audio::play(Sound::Select);
         self.trailer_key = self.game_key(t);
@@ -3005,7 +3016,7 @@ impl App {
             if self.overlay == Overlay::Trailer { self.back(); }
             if let Err(e) = ended {
                 let key = self.trailer_key.clone();
-                self.note_game(&key, &format!("Can't play the trailer: {e}"), true);
+                self.note_game_brief(&key, &format!("Can't play the trailer: {e}"), true);
             }
             return;
         }
@@ -3251,7 +3262,8 @@ impl App {
     /// What a Settings row just did, in place of its hint until Settings closes. Results that
     /// arrive with Settings closed wait for the next time it's open.
     pub fn note_setting(&mut self, id: crate::settings::SId, text: &str, kind: i32) {
-        self.setting_notes.insert(id, (text.to_string(), kind));
+        let label = self.settings_ids.iter().position(|s| *s == id).and_then(|i| self.settings_rows.get(i)).map(|r| r.label.to_string()).unwrap_or_default();
+        self.setting_notes.insert(id, (text.to_string(), kind, label));
         if self.overlay == Overlay::Settings || self.stack.iter().any(|s| s.0 == Overlay::Settings) {
             self.refresh_settings();
         }
@@ -3260,11 +3272,28 @@ impl App {
     /// Something about one game under its buttons on Home and in its Game Hub, until it's
     /// played again or another note replaces it. `warn`: a problem (amber, with ⚠).
     pub fn note_game(&mut self, key: &str, text: &str, warn: bool) {
-        self.game_notes.insert(key.to_string(), (text.to_string(), warn));
+        self.game_notes.insert(key.to_string(), (one_line(text), warn, false));
+        self.push_game_notes();
+    }
+
+    /// A note about what was just pressed for a game (a trailer that can't play, a rating saved):
+    /// gone once another game is shown. It never covers a lasting problem (a crash's reason).
+    pub fn note_game_brief(&mut self, key: &str, text: &str, warn: bool) {
+        if self.game_notes.get(key).is_some_and(|(_, warn, brief)| *warn && !*brief) { return; }
+        self.game_notes.insert(key.to_string(), (one_line(text), warn, true));
+        self.push_game_notes();
+    }
+
+    fn push_game_notes(&mut self) {
         self.push_hero();
         if self.hub.is_some() {
             self.push_hub();
         }
+    }
+
+    /// Brief notes only for the game shown now.
+    pub fn keep_brief_notes_for(&mut self, key: &str) {
+        self.game_notes.retain(|k, (_, _, brief)| !*brief || k == key);
     }
 
     /// A game's key for its notes: an installed game's folder id, else its catalog id.
@@ -3274,6 +3303,9 @@ impl App {
 
     pub fn set_status(&mut self, text: &str, busy: bool) {
         self.boot_status(text);
+        // Nothing else to say: the line that stays (if any).
+        let sticky = self.sticky_status.clone();
+        let text = if text.is_empty() { sticky.as_str() } else { text };
         if self.status != text || self.status_busy != busy {
             self.status = text.to_string();
             self.status_busy = busy;
