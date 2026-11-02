@@ -1647,23 +1647,13 @@ export component AppWindow inherits Window {
                     padding-left: (24px * S.k); padding-right: (24px * S.k);
                     padding-top: (40px * S.k); padding-bottom: (32px * S.k);
                     spacing: (6px * S.k);
-                    HorizontalLayout {
-                        padding-left: (16px * S.k);
+                    // The launcher's version under the title, as its caption.
+                    VerticalLayout {
+                        padding-left: (18px * S.k);
                         padding-bottom: (22px * S.k);
-                        spacing: (12px * S.k);
-                        alignment: start;
-                        Rectangle {
-                            width: (26px * S.k); height: self.width; y: (10px * S.k);
-                            border-radius: self.width / 2; background: #ffffff24;
-                            Text { text: root.pad-hints ? "○" : "Esc"; font-size: root.pad-hints ? (13px * S.k) : (9px * S.k); color: #ff8a9a; }
-                            TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.settings, -1); } }
-                        }
-                        // The launcher's version under the title, as its caption.
-                        VerticalLayout {
-                            spacing: (2px * S.k);
-                            Text { text: "Settings"; font-size: (32px * S.t); font-weight: 600; color: Theme.text; }
-                            Text { text: root.settings-version; font-size: (15px * S.t); color: #9ba6c0; }
-                        }
+                        spacing: (2px * S.k);
+                        Text { text: "Settings"; font-size: (32px * S.t); font-weight: 600; color: Theme.text; }
+                        Text { text: root.settings-version; font-size: (15px * S.t); color: #9ba6c0; }
                     }
                     for sec[i] in root.settings-sections: Rectangle {
                         property <bool> chosen: root.settings-section == i;
@@ -1881,19 +1871,27 @@ export component AppWindow inherits Window {
                         height: (26px * S.k); y: parent.height - (36px * S.k) - self.height;
                         alignment: end;
                         spacing: (22px * S.k);
+                        // Back/Close can be clicked too: from the rows to the sections, else closed.
                         for h in [
-                            { glyph: root.pad-hints ? "✕" : "Enter", label: in-rows ? "Change" : "Open", tint: #8dbaff },
-                            { glyph: root.pad-hints ? "○" : "Esc", label: in-rows ? "Back" : "Close", tint: #ff8a9a },
-                        ]: HorizontalLayout {
-                            spacing: (8px * S.k);
-                            Rectangle {
-                                width: root.pad-hints ? (26px * S.k) : kc.preferred-width + (14px * S.k);
-                                height: (26px * S.k);
-                                border-radius: (13px * S.k);
-                                background: #ffffff24;
-                                kc := Text { text: h.glyph; font-size: root.pad-hints ? (13px * S.k) : (12px * S.k); color: root.pad-hints ? h.tint : #dfe4ef; font-weight: 600; }
+                            { glyph: root.pad-hints ? "✕" : "Enter", label: in-rows ? "Change" : "Open", tint: #8dbaff, back: false },
+                            { glyph: root.pad-hints ? "○" : "Esc", label: in-rows ? "Back" : "Close", tint: #ff8a9a, back: true },
+                        ]: Rectangle {
+                            width: hint-row.preferred-width;
+                            hint-row := HorizontalLayout {
+                                spacing: (8px * S.k);
+                                Rectangle {
+                                    width: root.pad-hints ? (26px * S.k) : kc.preferred-width + (14px * S.k);
+                                    height: (26px * S.k);
+                                    border-radius: (13px * S.k);
+                                    background: #ffffff24;
+                                    kc := Text { text: h.glyph; font-size: root.pad-hints ? (13px * S.k) : (12px * S.k); color: root.pad-hints ? h.tint : #dfe4ef; font-weight: 600; }
+                                }
+                                Text { text: h.label; font-size: (16px * S.t); color: #dfe4ef; vertical-alignment: center; }
                             }
-                            Text { text: h.label; font-size: (16px * S.t); color: #dfe4ef; vertical-alignment: center; }
+                            if h.back: TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { if (in-rows) { root.click(Zone.settings-nav, root.settings-section); } else { root.click(Zone.settings, -1); } }
+                            }
                         }
                     }
                 }
