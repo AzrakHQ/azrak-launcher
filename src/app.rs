@@ -11,7 +11,7 @@ use crate::library::{self, LocalGame};
 use crate::psn::{self, Info};
 use crate::sessions::{Session, Sessions};
 use crate::util::{self, norm};
-use crate::{AppWindow, ToastData};
+use crate::AppWindow;
 use slint::platform::Key;
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -265,7 +265,6 @@ pub struct App {
     pub grid_window: (usize, usize),
     pub grid_model: Rc<VecModel<crate::CardRow>>,
     pub tile_model: Rc<VecModel<crate::TileData>>,
-    pub toast_model: Rc<VecModel<ToastData>>,
 
     pub hub: Option<Target>,
     pub hub_actions: Vec<ActionDef>,
@@ -277,11 +276,17 @@ pub struct App {
     pub settings_rows: Vec<crate::SettingData>,
     pub edit_index: i32,
 
-    pub toasts: Vec<ToastData>,
-    pub toast_seq: i32,
-    /// A notification's action just opened something: clicks until then are the rest of a
-    /// double-click, not choices on the screen that came up under the pointer.
-    clicks_after: Option<std::time::Instant>,
+    /// What a Settings row just did ("6 games found", "Couldn't connect"), shown in place of its
+    /// hint until Settings closes; kind: 0 dim, 1 good, 2 bad. See `note_setting`.
+    pub setting_notes: HashMap<crate::settings::SId, (String, i32)>,
+    /// Something about one game (it crashed, it couldn't start), under its buttons on Home and in
+    /// its Game Hub, by `game_key`; true: a problem. See `note_game`.
+    pub game_notes: HashMap<String, (String, bool)>,
+    /// The game whose trailer is playing (`game_key`), for a note if it fails partway.
+    trailer_key: String,
+    /// What pressing something on a download just did, on its row, by download key. See
+    /// `note_download`.
+    pub dl_notes: HashMap<String, String>,
     pub status: String,
     pub status_busy: bool,
     pub catalog_updated: f64,
@@ -345,14 +350,10 @@ pub struct App {
     pub held_start: Option<(bool, bool)>,
     pub wj: crate::os::wifi_join::WifiJoin,
     pub sk: crate::search_keys::SearchKeys,
-    /// The laptop's battery as last read, and the lowest level already warned about.
+    /// The laptop's battery as last read.
     pub battery: Option<crate::battery::Battery>,
-    pub battery_warned: u8,
     battery_read: f64,
     pub power: crate::os::power::PowerAsk,
-    /// Notifications that arrived while a card (Join Wi-Fi, Restart now?) was open: they wait
-    /// for it to close instead of covering it.
-    held_toasts: Vec<ToastData>,
     /// This PC's processor, memory and graphics (read in the background at start).
     pub pc: Option<crate::pc::Reading>,
     pub pc_checking: bool,
@@ -587,7 +588,6 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         grid_window: (0, 0),
         grid_model: Rc::new(VecModel::default()),
         tile_model: Rc::new(VecModel::default()),
-        toast_model: Rc::new(VecModel::default()),
         hub: None,
         hub_actions: Vec::new(),
         hub_shots: Vec::new(),
@@ -596,9 +596,10 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         menu_actions: Vec::new(),
         settings_rows: Vec::new(),
         edit_index: -1,
-        toasts: Vec::new(),
-        toast_seq: 0,
-        clicks_after: None,
+        setting_notes: HashMap::new(),
+        game_notes: HashMap::new(),
+        trailer_key: String::new(),
+        dl_notes: HashMap::new(),
         status: String::new(),
         status_busy: false,
         catalog_updated: catalog.updated,
@@ -645,10 +646,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         wj: Default::default(),
         sk: Default::default(),
         battery: None,
-        battery_warned: 100,
         battery_read: 0.0,
         power: Default::default(),
-        held_toasts: Vec::new(),
         pc: None,
         pc_checking: false,
         boot: Default::default(),
@@ -675,7 +674,6 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
     }
     ui.set_grid_rows(ModelRc::from(app.grid_model.clone()));
     ui.set_tiles(ModelRc::from(app.tile_model.clone()));
-    ui.set_toasts(ModelRc::from(app.toast_model.clone()));
     ui.set_downloads(ModelRc::from(app.download_model.clone()));
     ui.set_setup_files(ModelRc::from(app.setup_model.clone()));
     app.set_catalog(catalog.games.clone());
@@ -739,9 +737,6 @@ impl App {
         }
         self.battery_read = now;
         let battery = crate::battery::read();
-        // Warn only when two readings in a row (10 s apart) say it's on battery: a charger can
-        // read as unplugged for a moment (seen on the test laptop), which isn't worth a notice.
-        let steady = battery.is_some_and(|b| b.plugged) || self.battery.is_some_and(|b| !b.plugged);
         if battery != self.battery {
             let ui = self.ui();
             ui.set_battery_shown(battery.is_some());
@@ -750,9 +745,6 @@ impl App {
                 ui.set_battery_plugged(b.plugged);
             }
             self.battery = battery;
-        }
-        if let Some((title, text)) = battery.filter(|_| steady).and_then(|b| crate::battery::notice(b, &mut self.battery_warned)) {
-            self.toast(title, &text, 2);
         }
     }
 
@@ -816,7 +808,6 @@ fn wire_callbacks(ui: &AppWindow) {
     ui.on_edit_done(|t, _| with_app(move |app| app.finish_edit(Some(t.to_string()))));
     ui.on_download_confirm(|| with_app(|app| app.confirm_download()));
     ui.on_download_action(|key, action| with_app(move |app| app.download_action(&key, &action)));
-    ui.on_toast_clicked(|id, action| with_app(move |app| app.toast_clicked(id, &action)));
     ui.on_trailer_action(|action| with_app(move |app| app.trailer_action(&action)));
     ui.on_download_close(|| with_app(|app| app.back()));
     ui.on_download_select(|i| with_app(move |app| app.select_download(i as usize, true)));
@@ -1306,11 +1297,10 @@ impl App {
                         app.restore_targets(&anchor);
                         app.push_all();
                         app.keep_grid_focus(&anchor);
-                        if !first && new > 0 {
-                            app.toast(&format!("{new} new release{} in the Library", if new == 1 { "" } else { "s" }),
-                                &format!("{} games · {} releases", app.library_total, app.games.len()), 1);
-                        } else if !first && by_hand {
-                            app.toast("No new releases", &format!("{} games · {} releases · seeders updated", app.library_total, app.games.len()), 1);
+                        // Asked for in Settings: the answer shows on that row.
+                        if !first && by_hand {
+                            let what = if new > 0 { format!("{new} new release{}", if new == 1 { "" } else { "s" }) } else { "No new releases".to_string() };
+                            app.note_setting(crate::settings::SId::Refresh, &format!("{what} · {} games · {} releases", app.library_total, app.games.len()), 1);
                         }
                         app.set_status("", false);
                         app.boot_catalog_done();
@@ -1318,8 +1308,9 @@ impl App {
                     }
                     Err(e) => {
                         app.set_status("", false);
-                        if by_hand || app.boot.active {
-                            app.toast("Couldn't refresh the catalog", &e, 2);
+                        // At start the welcome screen says so; asked for, the Settings row.
+                        if by_hand {
+                            app.note_setting(crate::settings::SId::Refresh, &format!("Couldn't refresh it: {e}"), 2);
                         }
                         if app.boot.active {
                             // Offline: don't hold the welcome screen for the catalog or artwork.
@@ -1528,8 +1519,6 @@ impl App {
 
     /// Refresh the community list in the background (at start and every 6 hours).
     pub fn compat_start(&mut self) {
-        // Now and then, remind about results that haven't been shared yet.
-        slint::Timer::single_shot(Duration::from_secs(20), || with_app(|app| app.remind_to_share()));
         let (_, age) = crate::compat::load();
         if age > crate::compat::REFRESH || self.compat.is_empty() {
             self.compat_fetch();
@@ -1545,24 +1534,11 @@ impl App {
         std::mem::forget(t);
     }
 
-    fn remind_to_share(&mut self) {
-        // Only results from earlier days: don't nag about a game rated a minute ago.
-        let day_ago = util::now_secs() - 24.0 * 3600.0;
-        let n = self.my_results.unshared().iter().filter(|(_, r)| r.rated < day_ago).count();
-        if n == 0 || self.boot.active || util::now_secs() - self.my_results.reminded < crate::results::REMIND_EVERY {
-            return;
-        }
-        self.my_results.reminded = util::now_secs();
-        self.my_results.save();
-        self.toast_action(&format!("You've rated {n} game{} you played", if n == 1 { "" } else { "s" }),
-            "Share your results with the emulator communities.", 0, "share", "Share");
-    }
-
     /// "How far did it get?": saves your result on this PC. `after_play` adds "Not now".
     pub fn open_rating(&mut self, l: usize, after_play: bool) {
         if self.locals[l].l.title_id.is_empty() {
-            self.toast("Can't rate this game", "Its folder has no title ID.", 2);
-            return;
+            let id = self.locals[l].l.id.clone();
+            return self.note_game(&id, "Can't rate this game: its folder has no title ID", true);
         }
         let mk = |id: &'static str, label: &str, icon: &'static str| ActionDef { id, label: label.into(), icon, primary: false, danger: false, round: false };
         let mut items = vec![
@@ -1612,8 +1588,11 @@ impl App {
                 if app.overlay == Overlay::Hub {
                     app.push_hub();
                 }
-                app.toast(&format!("Saved: {} on Linux", status.label()),
-                    &format!("It's shared with {} the next time you choose Settings → Share your game ratings.", crate::platform::Platform::of_title_id(&tid).unwrap_or_default().emulator()), 1);
+                if let Some(l) = app.locals.iter().position(|g| g.l.title_id == tid) {
+                    let id = app.locals[l].l.id.clone();
+                    let emulator = crate::platform::Platform::of_title_id(&tid).unwrap_or_default().emulator();
+                    app.note_game(&id, &format!("Rated: {} on Linux · it goes to {emulator} when you share your ratings in Settings", status.label()), false);
+                }
             });
         });
     }
@@ -1642,8 +1621,7 @@ impl App {
         let batch: Vec<(String, crate::results::MyResult)> = self.my_results.unshared().into_iter()
             .take(crate::results::BATCH).map(|(k, v)| (k.clone(), v.clone())).collect();
         if batch.is_empty() {
-            self.toast("Nothing new to share", "Rate a game from its Options menu after playing it.", 0);
-            return;
+            return self.note_setting(crate::settings::SId::Share, "Nothing new to share: rate a game from its Options menu after playing it", 0);
         }
         let now = util::now_secs();
         // The logs to attach, gathered in one folder named after each game, opened next to the forms.
@@ -1683,9 +1661,7 @@ impl App {
         if batch.iter().any(|(tid, _)| crate::platform::Platform::of_title_id(tid) == Some(crate::platform::Platform::Ps4)) {
             more.push_str(" shadPS4 only accepts reports for games dumped from a copy you own, unmodified.");
         }
-        self.toast(&format!("Opened {n} report{} in your browser", if n == 1 { "" } else { "s" }),
-            &format!("Check each one, drag in its log from the folder that opened (named after the game), and submit.{more}"), 1);
-        self.refresh_settings();
+        self.note_setting(crate::settings::SId::Share, &format!("Opened {n} report{} in your browser: check each one, drag in its log from the folder that opened (named after the game), and submit.{more}", if n == 1 { "" } else { "s" }), 1);
     }
 
     fn compat_fetch(&mut self) {
@@ -1732,7 +1708,6 @@ impl App {
         self.live = self.sessions.live();
         let after: Vec<u32> = self.live.iter().map(|s| s.pid).collect();
         for e in self.sessions.take_ended() {
-            let played = util::fmt_duration(e.played);
             let crashed = e.exit_code.filter(|c| *c != 0 && !e.stopped);
             // Exited cleanly but almost at once: most likely it couldn't start.
             let failed_to_start = crashed.is_none() && e.played < 5.0 && !e.stopped;
@@ -1744,27 +1719,24 @@ impl App {
                 if let Some(saved) = &saved {
                     self.crash_logs.insert(e.game_id.clone(), saved.clone());
                 }
-                let action = saved.as_ref().map(|p| format!("log:{}", p.display())).unwrap_or_default();
                 let platform = self.local_platform(&e.game_id);
                 let pc = platform == crate::platform::Platform::Pc;
                 let emulator = platform.emulator();
+                // On the game itself, so it doesn't need its name; one line in the Game Hub.
                 let what = match crashed {
                     Some(code) => {
                         crate::log!("{} crashed (exit {code}), log: {}", e.name, e.log.display());
                         audio::play(Sound::Error);
-                        (format!("{} stopped unexpectedly", e.name), if pc { format!("The game exited with code {code}.") } else { format!("{emulator} exited with code {code}.") })
+                        format!("Stopped unexpectedly · {} exited with code {code}", if pc { "the game" } else { emulator })
                     }
-                    None if pc => (format!("{} closed right after starting", e.name), "It may need something this PC doesn't have (Wine, a library).".into()),
-                    None => (format!("{} closed right after starting", e.name), format!("{emulator} may not support it yet.")),
+                    None if pc => "Closed right after starting · it may need something this PC doesn't have (Wine, a library)".into(),
+                    None => format!("Closed right after starting · {emulator} may not support it yet"),
                 };
-                let more = match (&saved, pc) {
-                    (Some(_), false) => format!(" Its log is saved for your next report to {emulator}."),
-                    _ => String::new(),
-                };
-                let button = if saved.is_some() { "See the log" } else { "" };
-                self.toast_game_action(&what.0, &format!("{}{more}", what.1), 2, &e.game_id, &action, button);
+                let more = if saved.is_some() && !pc { " · log in Options" } else { "" };
+                self.note_game(&e.game_id, &format!("{what}{more}"), true);
             } else {
-                self.toast_game(&e.name, &format!("Played for {played}"), 1, &e.game_id);
+                // Closed normally: "Closing…" goes (Home shows when it was last played).
+                self.game_notes.remove(&e.game_id);
             }
             // Ratings go to the emulators' community lists: not for PC games.
             if self.local_platform(&e.game_id) != crate::platform::Platform::Pc {
@@ -2028,9 +2000,6 @@ impl App {
     pub fn on_click(&mut self, zone: i32, idx: i32) {
         if self.boot.active {
             return self.boot_confirm();
-        }
-        if self.clicks_after.is_some_and(|t| std::time::Instant::now() < t) {
-            return;
         }
         if self.search_editing && zone != Z_SEARCH {
             self.stop_search_edit();
@@ -2607,11 +2576,13 @@ impl App {
             if self.overlay == Overlay::Settings && self.edit_index >= 0 {
                 self.finish_edit(None);
             }
+            if self.overlay == Overlay::Settings {
+                self.setting_notes.clear();
+            }
             let (ov, zone, idx) = self.stack.pop().unwrap_or((Overlay::None, if self.view == 0 { Z_ROW } else { Z_GRID }, 0));
             self.overlay = ov;
             self.ui().set_overlay(ov as i32);
             self.set_focus(zone, idx);
-            self.release_toasts();
             if ov == Overlay::None {
                 self.ui().set_hub_open(false);
                 self.hub = None;
@@ -2848,7 +2819,8 @@ impl App {
             "pkg_info" => {
                 let others = t.game.map(|g| self.platform_releases(g).filter(|&i| !self.games[i].g.is_pkg()).count()).unwrap_or(0);
                 let tip = if others > 0 { "This game has another release that isn't a PKG: switch to it with the release selector." } else { "Look for a release of this game that is a folder, an archive or an exFAT image." };
-                self.toast("This release is a PS5 PKG package", &format!("PS5 games install from extracted releases only, not PKG packages. {tip}"), 0);
+                let key = self.game_key(t);
+                self.note_game(&key, &format!("A PKG package: PS5 games install from extracted releases only. {tip}"), false);
             }
             "install" => {
                 if let Some(job) = self.download_for_target(t) { self.install_download(&job.key); }
@@ -2856,8 +2828,6 @@ impl App {
             "store" => {
                 if let Some(i) = self.target_info(t).filter(|i| !i.store.is_empty()) {
                     open_url(&i.store);
-                    let page = if self.target_platform(t) == crate::platform::Platform::Pc { "The Steam page" } else { "The PlayStation Store page" };
-                    self.toast("Opened in your browser", &format!("{page} is in your browser."), 1);
                 }
             }
             "folder" => {
@@ -2872,7 +2842,8 @@ impl App {
                     if p.is_file() {
                         open_url(&p.to_string_lossy());
                     } else {
-                        self.toast("No emulator log yet", "Play the game once to create one.", 0);
+                        let id = lg.id.clone();
+                        self.note_game(&id, "No log yet: play the game once to make one", false);
                     }
                 }
             }
@@ -2903,10 +2874,8 @@ impl App {
                 if platform == crate::platform::Platform::Pc {
                     let appid = t.game.and_then(|g| self.games[g].g.steam.as_ref()).map(|s| s.appid);
                     open_url(&appid.map(|a| format!("https://www.protondb.com/app/{a}")).unwrap_or_else(|| crate::compat::list_page(platform).into()));
-                    self.toast("Opened in your browser", "ProtonDB: how well it runs on Linux, reported by players.", 1);
                 } else {
                     open_url(crate::compat::list_page(platform));
-                    self.toast("Opened in your browser", &format!("The {} compatibility list is in your browser.", platform.emulator()), 1);
                 }
             }
             "start_with" => {
@@ -2914,10 +2883,11 @@ impl App {
                 let game = self.locals[l].l.clone();
                 match crate::pcgame::rotate_launch(&game.path) {
                     Ok(m) => {
-                        self.toast("Play now starts", &crate::pcgame::short_path(&m.launch, &m.alternatives.last().cloned().unwrap_or_default()), 1);
+                        let path = crate::pcgame::short_path(&m.launch, &m.alternatives.last().cloned().unwrap_or_default());
                         self.rescan_library();
+                        self.note_game(&game.id, &format!("Play now starts {path}"), false);
                     }
-                    Err(e) => self.toast("Couldn't change it", &e, 2),
+                    Err(e) => self.note_game(&game.id, &format!("Couldn't change it: {e}"), true),
                 }
             }
             _ => {}
@@ -2925,13 +2895,15 @@ impl App {
     }
 
     pub fn launch(&mut self, l: usize) {
+        let game = self.locals[l].l.clone();
         if let Some(s) = self.live.first() {
             let name = s.name.clone();
-            self.toast(&format!("{name} is already running"), "Stop it first, or choose Resume to go back to it.", 2);
+            self.note_game(&game.id, &format!("{name} is running: stop it first, or Resume it from Home"), true);
             audio::play(Sound::Error);
             return;
         }
-        let game = self.locals[l].l.clone();
+        // A note from the last time (it crashed, it couldn't start) is old news now.
+        self.game_notes.remove(&game.id);
         // PS4 games run on shadPS4, which is installed the first time one is played.
         if game.platform == crate::platform::Platform::Ps4 && !crate::shad::installed() {
             self.shad_install_then_launch(game.id.clone());
@@ -2951,7 +2923,7 @@ impl App {
             }
             Err(e) => {
                 audio::play(Sound::Error);
-                self.toast("Couldn't start the game", &e, 2);
+                self.note_game(&game.id, &format!("Couldn't start it: {e}"), true);
             }
         }
     }
@@ -2964,16 +2936,18 @@ impl App {
         if let Some(s) = s {
             audio::play(Sound::Back);
             let platform = self.local_platform(&s.game_id);
-            let sub = if platform == crate::platform::Platform::Pc { "Closing the game.".to_string() }
-                else { format!("Closing the game and saving {}'s caches.", platform.emulator()) };
-            self.toast_game(&format!("Stopping {}…", s.name), &sub, 0, &s.game_id.clone());
+            let what = if platform == crate::platform::Platform::Pc { "Closing it…".to_string() }
+                else { format!("Closing it and saving {}'s caches…", platform.emulator()) };
+            self.note_game(&s.game_id, &what, false);
             self.sessions.stop(s.pid);
         }
     }
 
     pub fn resume_game(&mut self) {
         if !self.sessions.resume() {
-            self.toast("Couldn't switch to the game", "Its window wasn't found. Resume needs xdotool installed.", 2);
+            if let Some(id) = self.live.first().map(|s| s.game_id.clone()) {
+                self.note_game(&id, "Couldn't switch to it: its window wasn't found (Resume needs xdotool)", true);
+            }
         }
     }
 
@@ -2994,10 +2968,11 @@ impl App {
             });
         });
         if let Err(e) = opened {
-            self.toast("Can't play the trailer", &e, 2);
-            return;
+            let key = self.game_key(t);
+            return self.note_game(&key, &format!("Can't play the trailer: {e}"), true);
         }
         audio::play(Sound::Select);
+        self.trailer_key = self.game_key(t);
         let ui = self.ui();
         ui.set_trailer_title(target_name(self, t).into());
         ui.set_trailer_progress(0.0);
@@ -3025,7 +3000,8 @@ impl App {
         if let Some(ended) = status.ended {
             if self.overlay == Overlay::Trailer { self.back(); }
             if let Err(e) = ended {
-                self.toast("Can't play the trailer", &e, 2);
+                let key = self.trailer_key.clone();
+                self.note_game(&key, &format!("Can't play the trailer: {e}"), true);
             }
             return;
         }
@@ -3258,143 +3234,30 @@ impl App {
         self.push_settings();
     }
 
-    // ------------------------------------------------------------------ toasts / status
+    // ------------------------------------------------------------------ notes / status
 
-    pub fn toast(&mut self, text: &str, sub: &str, kind: i32) {
-        self.toast_full(text, sub, kind, None, false);
-    }
-
-    /// Notification from the launcher itself (updates): its icon, and its name above the title.
-    pub fn toast_app(&mut self, text: &str, sub: &str, kind: i32) {
-        let mut t = toast_data(text, sub, kind);
-        (t.app, t.kicker) = (true, "AZRAK LAUNCHER".into());
-        self.notify(t);
-    }
-
-    /// Notification with a game's tile as its icon.
-    pub fn toast_game(&mut self, text: &str, sub: &str, kind: i32, game_id: &str) {
-        let img = self.game_tile(game_id);
-        self.toast_full(text, sub, kind, img, false);
-    }
-
-    fn game_tile(&mut self, game_id: &str) -> Option<slint::Image> {
-        self.locals.iter().position(|l| l.l.id == game_id)
-            .and_then(|l| self.tile_req(RowItem::Local(l)))
-            .and_then(|r| self.images.get(&r.key))
-    }
-
-    /// A notification that does `action` when clicked (see `toast_clicked`), with a button saying
-    /// what that is.
-    pub fn toast_action(&mut self, text: &str, sub: &str, kind: i32, action: &str, button: &str) {
-        self.toast_with(text, sub, kind, None, false, action, button);
-    }
-
-    pub fn toast_game_action(&mut self, text: &str, sub: &str, kind: i32, game_id: &str, action: &str, button: &str) {
-        let img = self.game_tile(game_id);
-        self.toast_with(text, sub, kind, img, false, action, button);
-    }
-
-    pub fn toast_full(&mut self, text: &str, sub: &str, kind: i32, image: Option<slint::Image>, app: bool) {
-        self.toast_with(text, sub, kind, image, app, "", "");
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn toast_with(&mut self, text: &str, sub: &str, kind: i32, image: Option<slint::Image>, app: bool, action: &str, button: &str) {
-        let mut t = toast_data(text, sub, kind);
-        (t.has_image, t.image, t.app, t.action, t.button) = (image.is_some(), image.unwrap_or_default(), app, action.into(), button.into());
-        self.notify(t);
-    }
-
-    /// News about the launcher's own update; clicking it goes to Settings → Updates → Azrak
-    /// Launcher, where it's installed or restarted into.
-    pub fn toast_app_update(&mut self, text: &str, sub: &str, kind: i32, button: &str) -> ToastData {
-        let mut t = toast_data(text, sub, kind);
-        (t.app, t.kicker, t.action, t.button) = (true, "AZRAK LAUNCHER".into(), "app-update".into(), button.into());
-        t
-    }
-
-    /// The new version is installed: one click from the button that starts it. (Ready while the
-    /// start screen is up, it's told when the Home screen shows: see `boot_finish`.)
-    pub fn toast_update_ready(&mut self, version: &str) {
-        if self.boot.active { return; }
-        let mut t = self.toast_app_update(&format!("Version {version} is ready"), "Restart the launcher to start using it.", 1, "Restart in Settings");
-        // Worth more than a glance: it stays a while.
-        t.life = 20_000;
-        self.notify(t);
-    }
-
-    /// Clicking a notification does its action (if it has one) and closes it; once, even if
-    /// it's clicked again while it glides away.
-    pub fn toast_clicked(&mut self, id: i32, action: &str) {
-        if !self.toasts.iter().any(|t| t.id == id && !t.leaving) {
-            return;
-        }
-        self.toast_dismiss(id);
-        if !action.is_empty() {
-            self.clicks_after = Some(std::time::Instant::now() + Duration::from_millis(500));
-        }
-        if let Some(path) = action.strip_prefix("log:") {
-            open_url(path);
-            return;
-        }
-        match action {
-            "downloads" => self.open_downloads(None),
-            "share" => self.open_share_setting(),
-            "this-pc" => self.open_setting(crate::settings::SId::ThisPc),
-            "app-update" => self.open_setting(crate::settings::SId::AppUpdate),
-            _ => {}
+    /// What a Settings row just did, in place of its hint until Settings closes. Results that
+    /// arrive with Settings closed wait for the next time it's open.
+    pub fn note_setting(&mut self, id: crate::settings::SId, text: &str, kind: i32) {
+        self.setting_notes.insert(id, (text.to_string(), kind));
+        if self.overlay == Overlay::Settings || self.stack.iter().any(|s| s.0 == Overlay::Settings) {
+            self.refresh_settings();
         }
     }
 
-    /// A card that asks something (Join Wi-Fi, Restart now?) is open.
-    pub fn modal_open(&self) -> bool {
-        matches!(self.overlay, Overlay::WifiJoin | Overlay::Power)
-    }
-
-    /// Show the notifications held while a card was open.
-    fn release_toasts(&mut self) {
-        if !self.modal_open() {
-            for t in std::mem::take(&mut self.held_toasts) {
-                self.notify(t);
-            }
+    /// Something about one game under its buttons on Home and in its Game Hub, until it's
+    /// played again or another note replaces it. `warn`: a problem (amber, with ⚠).
+    pub fn note_game(&mut self, key: &str, text: &str, warn: bool) {
+        self.game_notes.insert(key.to_string(), (text.to_string(), warn));
+        self.push_hero();
+        if self.hub.is_some() {
+            self.push_hub();
         }
     }
 
-    pub fn notify(&mut self, mut t: ToastData) {
-        // A card is a question being answered: news can wait until it closes, errors can't.
-        if self.modal_open() && t.kind != 2 {
-            self.held_toasts.push(t);
-            return;
-        }
-        self.toast_seq += 1;
-        let id = self.toast_seq;
-        t.id = id;
-        if t.life == 0 {
-            // Long enough to read: ~4 s plus reading time for the message; errors stay longer.
-            let chars = (t.text.chars().count() + t.sub.chars().count()) as i32;
-            t.life = (3500 + chars * 45).clamp(4000, 10000).max(if t.kind == 2 { 8000 } else { 0 });
-        }
-        let life = t.life as u64;
-        self.toasts.push(t);
-        // Three at most: the oldest makes room.
-        if let Some(oldest) = self.toasts.iter().filter(|t| !t.leaving).nth(3).and(self.toasts.iter().find(|t| !t.leaving)).map(|t| t.id) {
-            self.toast_dismiss(oldest);
-        }
-        self.push_toasts();
-        slint::Timer::single_shot(Duration::from_millis(life), move || with_app(move |app| app.toast_dismiss(id)));
-    }
-
-    /// Glide a notification away, then drop it.
-    pub fn toast_dismiss(&mut self, id: i32) {
-        let Some(t) = self.toasts.iter_mut().find(|t| t.id == id && !t.leaving) else { return };
-        t.leaving = true;
-        self.push_toasts();
-        slint::Timer::single_shot(Duration::from_millis(320), move || {
-            with_app(move |app| {
-                app.toasts.retain(|t| t.id != id);
-                app.push_toasts();
-            })
-        });
+    /// A game's key for its notes: an installed game's folder id, else its catalog id.
+    pub fn game_key(&self, t: Target) -> String {
+        t.local.map(|l| self.locals[l].l.id.clone()).or_else(|| t.game.map(|g| format!("catalog:{}", self.games[g].g.id))).unwrap_or_default()
     }
 
     pub fn set_status(&mut self, text: &str, busy: bool) {
@@ -3420,11 +3283,6 @@ pub fn open_url(url: &str) {
 
 pub fn target_name(app: &App, t: Target) -> String {
     t.local.map(|l| app.locals[l].name.clone()).or_else(|| t.game.map(|g| app.games[g].name.clone())).unwrap_or_default()
-}
-
-/// A notification's text, with nothing else yet (see `App::notify`).
-pub fn toast_data(text: &str, sub: &str, kind: i32) -> ToastData {
-    ToastData { text: text.into(), sub: sub.into(), kind, ..Default::default() }
 }
 
 pub fn model<T: Clone + 'static>(v: Vec<T>) -> ModelRc<T> {

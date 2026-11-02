@@ -30,8 +30,11 @@ pub struct OsInstall {
     pub progress: f32,
     pub step: String,
     pub end: Option<InstallEvent>,
-    /// "Later" after installing while the launcher sets itself up: its toast waits for Home.
+    /// "Later" after installing while the launcher sets itself up: saying so waits for Home.
     pub tell_installed: bool,
+    /// What pressing something just did ("A game is running"), as the small line until the
+    /// next press.
+    pub said: String,
 }
 
 impl App {
@@ -63,7 +66,7 @@ impl App {
                     Ok(d) => app.osi.disks = d,
                     Err(e) => {
                         app.osi.disks.clear();
-                        app.toast("Couldn't list the disks", &e, 2);
+                        app.osi.said = format!("Couldn't list the disks: {e}");
                     }
                 }
                 app.osi.sel = first_choice(&app.osi.disks);
@@ -159,7 +162,7 @@ impl App {
 
     pub fn osi_tell_installed(&mut self) {
         self.osi.tell_installed = false;
-        self.toast("AzrakOS is installed", "Restart without the USB stick to start it.", 1);
+        self.note_setting(crate::settings::SId::InstallOs, "Installed: restart without the USB stick to start it", 1);
     }
 
     fn osi_back(&mut self) {
@@ -180,6 +183,7 @@ impl App {
     }
 
     fn osi_choose(&mut self, i: usize) {
+        self.osi.said.clear();
         match self.osi.phase {
             Phase::Intro => {
                 if i == 0 {
@@ -217,7 +221,8 @@ impl App {
             Phase::Done => {
                 if i == 0 {
                     if let Err(e) = system::restart() {
-                        self.toast("Couldn't restart", &e, 2);
+                        self.osi.said = format!("Couldn't restart: {e}");
+                        self.osi_push();
                     }
                 } else {
                     self.osi_later();
@@ -236,8 +241,8 @@ impl App {
     fn osi_start(&mut self) {
         let Some(disk) = self.osi.disk.clone() else { return };
         if !self.live.is_empty() {
-            self.toast("A game is running", "Close it first, then install.", 2);
-            return;
+            self.osi.said = "A game is running: close it first, then install".into();
+            return self.osi_push();
         }
         audio::play(Sound::Start);
         crate::log!("installing AzrakOS on {}", disk.path);
@@ -333,6 +338,9 @@ impl App {
         ui.set_osi_text_warn(text_warn);
         ui.set_osi_mok(mok);
         ui.set_osi_note(note.into());
+        if !s.said.is_empty() {
+            small = s.said.clone();
+        }
         ui.set_osi_small(small.into());
         ui.set_osi_sel(s.sel as i32);
         ui.set_osi_progress(s.progress);

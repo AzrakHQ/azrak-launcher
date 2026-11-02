@@ -61,8 +61,6 @@ impl App {
                         // A background first install that fails (offline) retries quietly later.
                         let quiet = !manual && !shad::installed();
                         app.shad_install(rel, None, quiet, manual);
-                    } else if manual {
-                        app.toast("shadPS4 is up to date", &format!("You have the latest release, {}.", shad::pretty(&rel.tag)), 1);
                     }
                     app.refresh_settings();
                 }
@@ -72,7 +70,8 @@ impl App {
                         app.net_down = true;
                     }
                     if manual {
-                        app.toast("Couldn't check for shadPS4 updates", &e, 2);
+                        app.shad.error = format!("Update check failed: {e}");
+                        app.refresh_settings();
                     }
                 }
             });
@@ -81,7 +80,8 @@ impl App {
 
     /// PS4 games need shadPS4: download it now, then start the game.
     pub fn shad_install_then_launch(&mut self, game_id: String) {
-        self.toast("Getting PS4 support", "It downloads once (about 35 MB), then your game starts.", 0);
+        // Its progress shows in the status line.
+        self.note_game(&game_id, "Getting PS4 support first (once, about 35 MB), then it starts", false);
         self.shad.launch_after = Some(game_id);
         if self.shad.busy {
             return;
@@ -97,11 +97,12 @@ impl App {
                         app.shad_install(rel, after, false, true);
                     }
                     Err(e) => {
-                        app.shad.launch_after = None;
                         if crate::util::is_network_error(&e) {
                             app.net_down = true;
                         }
-                        app.toast("Couldn't get shadPS4", &format!("{e}. Check your connection and try again."), 2);
+                        if let Some(id) = app.shad.launch_after.take() {
+                            app.note_game(&id, &format!("Couldn't get PS4 support: {e}. Check your connection and try again."), true);
+                        }
                     }
                 }
             });
@@ -123,7 +124,6 @@ impl App {
         self.shad.error.clear();
         self.shad.progress = "Starting download…".into();
         self.refresh_settings();
-        let updating = shad::installed();
         std::thread::spawn(move || {
             let last = std::sync::Mutex::new(String::new());
             let res = shad::install(&rel, &|p, _| {
@@ -142,12 +142,7 @@ impl App {
                 app.set_status("", false);
                 match res {
                     Ok(()) => {
-                        // What it means for the player; the version is in Settings → Updates.
-                        if updating {
-                            app.toast("PS4 support updated", "Version details are in Settings → Updates.", 1);
-                        } else {
-                            app.toast("PS4 games are ready to play", "", 1);
-                        }
+                        // The version shows in Settings → Updates; a game waiting for it starts.
                         if let Some(id) = launch_after.or(app.shad.launch_after.take()) {
                             app.shad.launch_after = None;
                             if let Some(l) = app.locals.iter().position(|g| g.l.id == id) {
@@ -162,10 +157,11 @@ impl App {
                             app.shad.retry = true;
                         }
                         app.shad.error = e.clone();
-                        app.shad.launch_after = None;
-                        if !quiet {
-                            app.toast("Couldn't install shadPS4", &e, 2);
+                        // A game waiting for it says why it didn't start.
+                        if let Some(id) = launch_after.or(app.shad.launch_after.take()).filter(|_| !quiet) {
+                            app.note_game(&id, &format!("Couldn't install PS4 support: {e}"), true);
                         }
+                        app.shad.launch_after = None;
                     }
                 }
                 app.refresh_settings();
@@ -186,8 +182,8 @@ impl App {
 
     pub fn shad_rollback(&mut self) {
         match shad::rollback() {
-            Ok(tag) => self.toast("shadPS4 rolled back", &format!("PS4 games now run on {}.", shad::pretty(&tag)), 1),
-            Err(e) => self.toast("Can't roll back shadPS4", &e, 2),
+            Ok(tag) => self.note_setting(crate::settings::SId::ShadUpdate, &format!("Rolled back to {}", shad::pretty(&tag)), 1),
+            Err(e) => self.note_setting(crate::settings::SId::ShadUpdate, &format!("Couldn't roll back: {e}"), 2),
         }
         self.refresh_settings();
     }

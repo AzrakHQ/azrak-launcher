@@ -7,7 +7,7 @@ use crate::config::{PRESENT_MODES, RESOLUTIONS};
 use crate::util;
 use crate::{SettingData, SettingSection};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum SId {
     Header,
     // System (AzrakOS only; see os/system_ui.rs)
@@ -350,6 +350,12 @@ impl App {
         self.settings_sections = titles.iter().map(|t| self.section_info(t)).collect();
         self.settings_headers = titles;
         self.settings_section = self.settings_section.min(self.settings_sections.len() - 1);
+        // What a row just did, in place of its hint (see App::note_setting).
+        for (id, r) in rows.iter_mut() {
+            if let Some((note, kind)) = self.setting_notes.get(id) {
+                (r.hint, r.hint_kind) = (note.into(), *kind);
+            }
+        }
         self.settings_ids = rows.iter().map(|(id, _)| *id).collect();
         self.settings_rows = rows.into_iter().map(|(_, r)| r).collect();
     }
@@ -502,11 +508,6 @@ impl App {
         ui.set_settings_sub(s.sub);
     }
 
-    /// Open Settings with "Share your results with KytyPS5" selected.
-    pub fn open_share_setting(&mut self) {
-        self.open_setting(SId::Share);
-    }
-
     /// Open Settings with this row selected.
     pub fn open_setting(&mut self, id: SId) {
         self.open_settings();
@@ -624,19 +625,16 @@ impl App {
                 let on = dir > 0;
                 let vpn = { let c = self.cfg.lock().unwrap(); on.then(|| c.vpn_interface.clone()) };
                 if let Err(error) = self.downloads.set_vpn(vpn) {
-                    self.toast("VPN setting unavailable", &error.to_string(), 2);
+                    self.note_setting(SId::VpnOnly, &format!("Couldn't change it: {error}"), 2);
                     return;
                 }
                 self.save_cfg(|c| c.vpn_only = on);
-                if on && crate::vpn::active(&self.cfg.lock().unwrap().vpn_interface).is_none() {
-                    self.toast("Downloads wait for your VPN", "They start as soon as it's connected.", 0);
-                }
                 self.push_downloads();
             }
             SId::SeedCompleted => {
                 let on = dir > 0;
                 if let Err(error) = self.downloads.set_seed_after_download(on) {
-                    self.toast("Seeding setting unavailable", &error.to_string(), 2);
+                    self.note_setting(SId::SeedCompleted, &format!("Couldn't change it: {error}"), 2);
                     return;
                 }
                 self.save_cfg(|c| c.seed_after_download = on);
@@ -747,8 +745,7 @@ impl App {
                 audio::play(Sound::Select);
                 self.rescan_library();
                 let n = self.locals.len();
-                self.toast("Installed games rescanned", &format!("{n} game{} found.", if n == 1 { "" } else { "s" }), 1);
-                self.refresh_settings();
+                self.note_setting(SId::Rescan, &format!("{} found", plural(n, "game")), 1);
             }
             SId::Quit => {
                 crate::app::quit("Settings → Quit Azrak Launcher");
@@ -762,12 +759,12 @@ impl App {
                 let saved = crate::vpn::nm_saved();
                 if let Some(v) = saved.iter().find(|v| v.active) {
                     let name = v.name.clone();
-                    self.vpn_task("Disconnecting…", move || crate::vpn::nm_down(&name).map(|_| ("VPN disconnected".to_string(), name)));
+                    self.vpn_task(SId::Vpn, "Disconnecting…", move || crate::vpn::nm_down(&name));
                 } else if crate::vpn::active("").is_some() {
-                    self.toast("Connected by your VPN app", "Switch it off there.", 0);
+                    self.note_setting(SId::Vpn, "Connected by your VPN app: switch it off there", 0);
                 } else if let Some(v) = saved.first() {
                     let name = v.name.clone();
-                    self.vpn_task("Connecting…", move || crate::vpn::nm_up(&name).map(|_| ("VPN connected".to_string(), name)));
+                    self.vpn_task(SId::Vpn, "Connecting…", move || crate::vpn::nm_up(&name));
                 } else {
                     self.vpn_add(i);
                 }
@@ -793,32 +790,31 @@ impl App {
         match id {
             SId::Emulator => {
                 self.save_cfg(|c| c.emulator = t);
+                // The row's hint says whether it's runnable (Found, or Nothing runnable at this path).
                 self.kyty_refresh_version();
-                let ok = self.cfg.lock().unwrap().emulator_ok();
-                if ok { self.toast("Emulator path saved", "Games will start with this KytyPS5.", 1) } else { self.toast("Emulator not found", "There's no runnable kyty_emulator at that path.", 2) }
             }
             SId::Dirs => {
                 let dirs: Vec<String> = t.split([';', '\n']).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
                 self.save_cfg(|c| c.game_dirs = dirs);
                 self.rescan_library();
                 let n = self.locals.len();
-                self.toast("Installed games rescanned", &format!("{n} game{} found.", if n == 1 { "" } else { "s" }), 1);
+                self.note_setting(SId::Dirs, &format!("{} found", plural(n, "installed game")), 1);
             }
             SId::Extra => self.save_cfg(|c| c.extra_args = t),
             SId::VpnAdd if !t.is_empty() => {
                 let file = util::expand_home(&t);
-                self.vpn_task("Adding…", move || crate::vpn::nm_import(&file).map(|name| ("VPN added and connected".to_string(), name)));
+                self.vpn_task(SId::VpnAdd, "Adding…", move || crate::vpn::nm_import(&file).map(|_| ()));
             }
             SId::DownloadDir => {
                 if t.is_empty() || !util::expand_home(&t).is_absolute() {
-                    self.toast("Invalid download folder", "Use an absolute path or ~/Downloads/PS5.", 2);
+                    self.note_setting(SId::DownloadDir, "Not changed: use a full path, like ~/Downloads/PS5", 2);
                 } else {
                     self.save_cfg(|c| c.download_dir = t);
                 }
             }
             SId::InstallDir => {
                 if t.is_empty() || !util::expand_home(&t).is_absolute() {
-                    self.toast("Invalid installation folder", "Use an absolute path or ~/Games/PS5.", 2);
+                    self.note_setting(SId::InstallDir, "Not changed: use a full path, like ~/Games/PS5", 2);
                 } else { self.save_cfg(|c| c.install_dir = t); }
             }
             _ => {}
@@ -870,16 +866,16 @@ impl App {
             ui.set_edit_index(i as i32);
             return;
         }
-        self.vpn_task("Choose the file…", || match crate::vpn::choose_file() {
-            Ok(Some(file)) => crate::vpn::nm_import(&file).map(|name| ("VPN added and connected".to_string(), name)),
-            Ok(None) => Ok((String::new(), String::new())),
+        self.vpn_task(SId::VpnAdd, "Choose the file…", || match crate::vpn::choose_file() {
+            Ok(Some(file)) => crate::vpn::nm_import(&file).map(|_| ()),
+            Ok(None) => Ok(()),
             Err(()) => Err("There's no file dialog on this PC".into()),
         });
     }
 
-    /// Run a NetworkManager step off the UI thread. `job` returns (toast title, VPN name), or an
-    /// empty title for nothing to report (a cancelled dialog).
-    fn vpn_task(&mut self, busy: &str, job: impl FnOnce() -> Result<(String, String), String> + Send + 'static) {
+    /// Run a NetworkManager step off the UI thread. Done, the VPN rows show the new state; an
+    /// error shows on row `id`.
+    fn vpn_task(&mut self, id: SId, busy: &str, job: impl FnOnce() -> Result<(), String> + Send + 'static) {
         self.vpn_busy = busy.into();
         self.refresh_settings();
         std::thread::spawn(move || {
@@ -887,13 +883,9 @@ impl App {
             let _ = slint::invoke_from_event_loop(move || {
                 with_app(move |app| {
                     app.vpn_busy.clear();
-                    match result {
-                        Ok((title, _)) if title.is_empty() => {}
-                        Ok((title, name)) => app.toast(&title, &name, 1),
-                        Err(error) => {
-                            app.toast("VPN didn't change", &error, 2);
-                            audio::play(Sound::Error);
-                        }
+                    if let Err(error) = result {
+                        app.note_setting(id, &format!("Didn't change: {error}"), 2);
+                        audio::play(Sound::Error);
                     }
                     if app.overlay == Overlay::Settings {
                         app.refresh_settings();
@@ -908,10 +900,10 @@ impl App {
     pub fn move_to_monitor(&mut self, name: &str) {
         let label = if name.is_empty() { "the primary display".to_string() } else { name.to_string() };
         if !self.live.is_empty() {
-            self.toast(&format!("Moves to {label} next time"), "The launcher can't restart while a game is running.", 0);
+            self.note_setting(SId::Display, &format!("Moves to {label} after your game: the launcher can't restart while one is running"), 0);
             return;
         }
-        self.toast(&format!("Moving to {label}…"), "The launcher restarts on that display.", 0);
+        self.note_setting(SId::Display, &format!("Moving to {label}: the launcher restarts there"), 0);
         slint::Timer::single_shot(std::time::Duration::from_millis(600), || with_app(|app| app.app_restart()));
     }
 }

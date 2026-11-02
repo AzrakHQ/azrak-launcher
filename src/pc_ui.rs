@@ -56,31 +56,11 @@ impl App {
             Overlay::Settings => self.refresh_settings(),
             _ => {}
         }
-        self.pc_notice();
     }
 
     /// This PC's verdict for a platform's games (worked out once per reading of the PC).
     pub fn pc_verdict(&self, platform: Platform) -> Option<&Verdict> {
         self.pc.as_ref()?.verdict(platform)
-    }
-
-    /// Once per PC: say so when a console's games can't start here, before anyone downloads one.
-    fn pc_notice(&mut self) {
-        let Some(summary) = self.pc.as_ref().map(|pc| pc.specs().summary()) else { return };
-        let blocked: Vec<(Platform, Verdict)> = [Platform::Ps5, Platform::Ps4].into_iter()
-            .filter_map(|p| self.pc_verdict(p).filter(|v| matches!(v, Verdict::No(_))).map(|v| (p, v.clone())))
-            .collect();
-        if blocked.is_empty() || self.cfg.lock().unwrap().pc_noticed == summary {
-            return;
-        }
-        let (title, why) = match &blocked[..] {
-            [(p, v)] => (format!("This PC can't run {} games", p.label()), explain(v, *p)),
-            [(_, v), ..] => ("This PC can't run games yet".to_string(), explain(v, Platform::Ps5)),
-            [] => return,
-        };
-        self.toast_with(&title, &format!("{why}."), 2, None, false, "this-pc", "This PC's details");
-        self.cfg.lock().unwrap().pc_noticed = summary;
-        self.cfg.lock().unwrap().save();
     }
 
     /// The Hub's line about this PC, under its verdict: "This PC: PS5 games should run well".

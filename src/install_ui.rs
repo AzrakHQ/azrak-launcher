@@ -81,12 +81,13 @@ impl App {
             let _ = self.installer.forget(key);
             self.install_failures.remove(key);
             crate::audio::play(crate::audio::Sound::Select);
-            return self.toast("Waiting to install", "It installs by itself once the game installing now is done.", 1);
+            // Its row says "Waiting to install".
+            return self.push_downloads();
         }
         match self.start_install(key, to) {
             Ok(()) => { crate::audio::play(crate::audio::Sound::Select); self.push_installs(); }
+            // Its row says "Couldn't install" and why.
             Err(error) => {
-                self.toast("Couldn't install", &format!("{error:#}"), 2);
                 self.install_failures.insert(key.into(), format!("{error:#}"));
                 self.downloads.set_install_to(key, None);
             }
@@ -109,9 +110,9 @@ impl App {
         let destination = job.install_to.clone().unwrap();
         if let Err(error) = self.start_install(&job.key, destination) {
             self.install_failures.insert(job.key.clone(), format!("{error:#}"));
-            // It waits for Install by hand from now on (not tried again at every start).
+            // It waits for Install by hand from now on (not tried again at every start); the
+            // ring and its row say so.
             self.downloads.set_install_to(&job.key, None);
-            self.toast_action("Couldn't install", &job.name, 2, "downloads", "See why");
         } else {
             self.push_installs();
         }
@@ -136,10 +137,8 @@ impl App {
                         register = true;
                     }
                 }
-                if previous.is_some() { self.toast("Installation complete", &format!("{} · ready in your game library", record.name), 1); }
-            } else if previous.is_some() && record.state == installer::State::Failed {
-                self.toast("Installation stopped", &format!("{} · open Downloads for details", record.name), 2);
             }
+            // A failed one: the ring and its row say so.
         }
         self.install_states.retain(|key, _| records.iter().any(|record| &record.key == key));
         if register { self.rescan_library(); }

@@ -6,6 +6,7 @@
 use crate::app::*;
 use crate::audio::{self, Sound};
 use crate::os::system;
+use crate::settings::SId;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Power {
@@ -13,6 +14,15 @@ pub enum Power {
     ShutDown,
     /// Restart into the downloaded system update.
     Update,
+}
+
+/// The Settings row that asks for it.
+fn power_row(what: Power) -> SId {
+    match what {
+        Power::Restart => SId::Restart,
+        Power::ShutDown => SId::ShutDown,
+        Power::Update => SId::SystemUpdate,
+    }
 }
 
 #[derive(Default)]
@@ -34,8 +44,7 @@ impl App {
     /// is saved: the card doesn't open while one runs.
     pub fn power_ask(&mut self, what: Power) {
         if !self.live.is_empty() {
-            self.toast("A game is running", "Close it first, so its progress is saved.", 2);
-            return;
+            return self.note_setting(power_row(what), "A game is running: close it first, so its progress is saved", 2);
         }
         audio::play(Sound::Select);
         let next = self.sys.update.as_ref().and_then(|u| u.staged.clone()).unwrap_or_default();
@@ -100,7 +109,8 @@ impl App {
         if self.overlay == Overlay::Power {
             self.back();
         }
-        self.toast(if restart { "Couldn't restart" } else { "Couldn't shut down" }, why, 2);
+        let (id, what) = if restart { (SId::Restart, "Couldn't restart") } else { (SId::ShutDown, "Couldn't shut down") };
+        self.note_setting(id, &format!("{what}: {why}"), 2);
     }
 
     fn power_push(&self) {

@@ -35,12 +35,8 @@ pub struct Results {
     pub games: BTreeMap<String, MyResult>,
     /// Games whose rating prompt was skipped, with the KytyPS5 build: not asked again on it.
     pub skipped: BTreeMap<String, String>,
-    /// Last "you have results to share" reminder.
-    pub reminded: f64,
 }
 
-/// Remind about unshared results at most this often.
-pub const REMIND_EVERY: f64 = 7.0 * 24.0 * 3600.0;
 /// Reports opened in one go; the rest wait for the next batch.
 pub const BATCH: usize = 10;
 /// Saved game logs kept on disk (oldest removed first).

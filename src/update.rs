@@ -202,16 +202,10 @@ impl App {
                 match res {
                     Ok(rel) => {
                         app.upd.latest = Some(rel.clone());
-                        if app.app_update_available() {
-                            let auto = app.cfg.lock().unwrap().app_auto_update;
-                            if auto || manual {
-                                app.app_update_install(rel);
-                            } else {
-                                let t = app.toast_app_update("Update available", &format!("Azrak Launcher {} is out.", rel.version), 0, "Update in Settings");
-                                app.notify(t);
-                            }
-                        } else if manual {
-                            app.toast_app("You're up to date", &format!("You have the latest version, {}.", current_version()), 1);
+                        // Otherwise Settings says it: "Update to …" on the row and "1 ready"
+                        // beside Updates, or "Up to date".
+                        if app.app_update_available() && (manual || app.cfg.lock().unwrap().app_auto_update) {
+                            app.app_update_install(rel);
                         }
                     }
                     Err(e) => {
@@ -220,7 +214,6 @@ impl App {
                         // shows errors only for a check you asked for.
                         if manual {
                             app.upd.error = format!("Update check failed: {e}");
-                            app.toast_app("Couldn't check for updates", &e, 2);
                         }
                     }
                 }
@@ -238,8 +231,6 @@ impl App {
             Err(e) => {
                 crate::log!("launcher update {} available, not installed: {e}", rel.version);
                 self.upd.error = format!("Can't update automatically: {e}");
-                let t = self.toast_app_update("Update available", &format!("Azrak Launcher {} can't install automatically: {e}.", rel.version), 0, "See in Settings");
-                self.notify(t);
                 self.kyty_refresh_settings();
                 return;
             }
@@ -270,13 +261,10 @@ impl App {
                     Ok(()) => {
                         app.upd.installed = Some(rel.version.clone());
                         crate::log!("launcher update {} installed", rel.version);
-                        app.toast_update_ready(&rel.version);
                     }
                     Err(e) => {
                         crate::log!("launcher update failed: {e}");
                         app.upd.error = format!("Update failed: {e}");
-                        let t = app.toast_app_update("Update failed", &e, 2, "See in Settings");
-                        app.notify(t);
                     }
                 }
                 app.kyty_refresh_settings();
@@ -287,7 +275,7 @@ impl App {
     /// Start the new version in place of this one (keeps the same window position/flags).
     pub fn app_restart(&mut self) {
         if !self.live.is_empty() {
-            self.toast_app("Finish your game first", "The launcher can restart once no game is running.", 0);
+            self.note_setting(crate::settings::SId::AppUpdate, "Finish your game first: the launcher can restart once no game is running", 0);
             return;
         }
         let Ok(exe) = std::env::current_exe() else { return };
@@ -312,7 +300,7 @@ impl App {
         self.downloads = crate::downloads::Manager::load(seed, vpn);
         self.installer = crate::installer::Manager::load();
         self.push_downloads();
-        self.toast_app("Couldn't restart", &err.to_string(), 2);
+        self.note_setting(crate::settings::SId::AppUpdate, &format!("Couldn't restart: {err}"), 2);
     }
 }
 

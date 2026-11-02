@@ -193,7 +193,7 @@ impl App {
                 if self.sys.wifi_open {
                     self.sys_task(SId::Internet, "Looking for Wi-Fi…", |app, list: Result<Vec<Wifi>, String>| match list {
                         Ok(list) => app.sys.wifi = list,
-                        Err(e) => app.toast("Wi-Fi isn't available", &e, 2),
+                        Err(e) => app.note_setting(SId::Internet, &format!("Wi-Fi isn't available: {e}"), 2),
                     }, system::wifi_list);
                 }
             }
@@ -230,7 +230,7 @@ impl App {
                 self.sys_task(SId::BtPair, "Searching…", |app, found: Vec<Device>| {
                     app.sys.scan_tick.stop();
                     if found.is_empty() {
-                        app.toast("Nothing found", "Put the controller in pairing mode, then search again.", 0);
+                        app.note_setting(SId::BtPair, "Nothing found: put the controller in pairing mode, then search again", 0);
                     }
                     app.sys.found = found;
                 }, || system::bt_scan(15));
@@ -244,7 +244,6 @@ impl App {
                 self.sys_task(SId::BtFound(i), "Pairing…", move |app, r: Result<(), String>| {
                     match r {
                         Ok(()) => {
-                            app.toast("Paired", &d.name, 1);
                             app.sys.found.retain(|f| f != &d);
                             // Listed (and selected) at once: its row in "Found" is gone.
                             if !app.sys.paired.iter().any(|(p, _)| p.address == d.address) {
@@ -257,7 +256,7 @@ impl App {
                                 }
                             }
                         }
-                        Err(e) => app.toast("Couldn't pair", &e, 2),
+                        Err(e) => app.note_setting(SId::BtFound(i), &format!("Couldn't pair: {e}"), 2),
                     }
                     app.sys_changed();
                 }, move || system::bt_pair(&address));
@@ -273,7 +272,7 @@ impl App {
                     self.sys.forget = None;
                     let address = d.address.clone();
                     self.sys_task(SId::BtDevice(i as u16), "Forgetting…", move |app, r: Result<(), String>| {
-                        if let Err(e) = r { app.toast("Couldn't forget it", &e, 2) } else { app.toast("Forgotten", &d.name, 1) }
+                        if let Err(e) = r { app.note_setting(SId::BtDevice(i as u16), &format!("Couldn't forget it: {e}"), 2) }
                         app.sys_changed();
                     }, move || system::bt_remove(&address));
                 } else if !on {
@@ -281,12 +280,9 @@ impl App {
                     // second press forgets it, as the hint says.
                     let address = d.address.clone();
                     self.sys_task(SId::BtDevice(i as u16), "Connecting…", move |app, r: Result<(), String>| {
-                        match r {
-                            Ok(()) => app.toast("Connected", &d.name, 1),
-                            Err(_) => {
-                                app.toast("Couldn't connect", &format!("Turn {} on and press it again, or press again now to forget it.", d.name), 2);
-                                app.sys_forget_soon(i);
-                            }
+                        // Its row says "Connected", or "Press again to forget it".
+                        if r.is_err() {
+                            app.sys_forget_soon(i);
                         }
                         app.sys_changed();
                     }, move || system::bt_connect(&address));
@@ -329,14 +325,12 @@ impl App {
         let n = self.sys.outputs.len() as i32;
         let next = (self.sys.output.map_or(0, |i| i as i32 + dir)).rem_euclid(n) as usize;
         if let Err(e) = system::set_output(&self.sys.outputs[next].name) {
-            self.toast("Sound output didn't change", &e, 2);
+            self.note_setting(SId::SoundOutput, &format!("Didn't change: {e}"), 2);
             return true;
         }
+        // The row names where sound goes now.
         self.sys.output = Some(next);
-        // Say where it went (a TV's speakers and a headset can both be silent for other
-        // reasons); stepping through several outputs leaves one notification, the latest.
-        self.toasts.retain(|t| !t.text.starts_with(SOUND_NOW));
-        self.toast(&format!("{SOUND_NOW} {}", self.sys.outputs[next].label), "", 1);
+        self.setting_notes.remove(&SId::SoundOutput);
         crate::audio::play(crate::audio::Sound::Move);
         self.refresh_settings();
         true
@@ -357,8 +351,8 @@ impl App {
         self.sys_task(SId::WifiNet(i), "Connecting…", move |app, r: Result<(), String>| {
             match r {
                 Ok(()) => app.wifi_joined(&w.ssid),
-                Err(e) => app.toast("Couldn't connect", &if e.contains("Secrets were required") || e.contains("password") {
-                    "Check the password and try again.".to_string() } else { e }, 2),
+                Err(e) => app.note_setting(SId::WifiNet(i), &if e.contains("Secrets were required") || e.contains("password") {
+                    "Couldn't connect: check the password and try again".to_string() } else { format!("Couldn't connect: {e}") }, 2),
             }
             app.sys_changed();
         }, move || system::wifi_connect(&ssid, None));
@@ -368,7 +362,6 @@ impl App {
     /// for the next reading, and select the Internet row, which now names it. The list closes,
     /// so the selection must not stay where the network was.
     pub fn wifi_joined(&mut self, ssid: &str) {
-        self.toast("Connected", ssid, 1);
         for w in &mut self.sys.wifi {
             w.in_use = w.ssid == ssid;
         }
@@ -414,7 +407,6 @@ fn saved_wifi(ssid: &str) -> bool {
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.replace("\\:", ":").strip_suffix(":802-11-wireless") == Some(ssid)))
 }
 
-const SOUND_NOW: &str = "Sound now plays through";
 
 /// Networks listed before "More networks…".
 const WIFI_SHOWN: usize = 6;

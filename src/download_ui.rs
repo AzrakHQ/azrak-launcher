@@ -301,9 +301,9 @@ impl App {
         let install = self.installer.snapshot().into_iter().find(|record| record.key == key);
         // Nothing that changes the download while it's being installed from.
         let touches = !matches!(action, "folder" | "cancel_install" | "play_install" | "vpn" | "stop_seed" | "share" | "choose");
+        self.dl_notes.remove(key);
         if touches && install.as_ref().is_some_and(|record| record.state.active()) {
-            self.toast("Installation in progress", "Cancel the installation first.", 0);
-            return self.push_downloads();
+            return self.note_download(key, "It's installing: cancel the installation first");
         }
         match action {
             "folder" => {
@@ -312,21 +312,21 @@ impl App {
             }
             "install" => self.install_download(key),
             "cancel_install" => {
-                if let Err(error) = self.installer.cancel(key) { self.toast("Installation unavailable", &error.to_string(), 2); }
+                if let Err(error) = self.installer.cancel(key) { self.dl_notes.insert(key.into(), format!("Couldn't cancel it: {error}")); }
             }
             "play_install" => {
                 self.push_installs();
                 if let Some(path) = install.as_ref().filter(|record| record.state == Install::Installed).and_then(|record| record.path.as_ref()) {
                     if let Some(local) = self.locals.iter().position(|game| &game.l.path == path) {
                         self.run_action("play", Target { game: self.locals[local].cat, local: Some(local) });
-                    } else { self.toast("Game folder unavailable", "The installed folder is missing; check Game folders in Settings.", 2); }
+                    } else { self.note_download(key, "Its folder is missing: check Game folders in Settings"); }
                 }
                 return;
             }
             "vpn" => { self.open_setting(crate::settings::SId::VpnOnly); return; }
             "delete" => return self.open_delete(key),
             "discard" => {
-                if let Err(error) = self.downloads.discard(key) { self.toast("Transfer unavailable", &error.to_string(), 2); }
+                if let Err(error) = self.downloads.discard(key) { self.dl_notes.insert(key.into(), format!("Couldn't do that: {error}")); }
                 else { audio::play(Sound::Select); }
             }
             "choose" => {
@@ -336,28 +336,29 @@ impl App {
                 return;
             }
             _ => {
-                if let Err(error) = self.downloads.action(key, action) { self.toast("Transfer unavailable", &error.to_string(), 2); }
+                if let Err(error) = self.downloads.action(key, action) { self.dl_notes.insert(key.into(), format!("Couldn't do that: {error}")); }
                 else { audio::play(Sound::Select); }
             }
         }
         self.push_downloads();
     }
 
+    /// What pressing something on a download just did, on its row until the next press there.
+    pub fn note_download(&mut self, key: &str, text: &str) {
+        self.dl_notes.insert(key.to_string(), text.to_string());
+        self.push_downloads();
+    }
+
     pub fn push_downloads(&mut self) {
         let jobs = self.downloads.snapshot();
+        self.dl_notes.retain(|key, _| jobs.iter().any(|job| &job.key == key));
         let installs = self.installer.snapshot();
         let mut changed = false;
         for job in &jobs {
             let old = self.download_states.insert(job.key.clone(), job.state);
             changed |= old != Some(job.state);
-            if old.is_some_and(|old| old != job.state) {
-                if job.state == State::Complete {
-                    if job.install_to.is_some() { self.toast_action("Download complete", &format!("{} · it installs by itself", job.name), 1, "downloads", "Show"); }
-                    else { self.toast_action("Download complete", &job.name, 1, "downloads", "Install from Downloads"); }
-                } else if job.state == State::Failed && matches!(old, Some(State::Checking | State::Downloading | State::Paused)) {
-                    self.toast_action("Download stopped", &job.name, 2, "downloads", "See why");
-                }
-            }
+            // A finished one installs by itself (or waits on its row); a stopped one turns the
+            // ring amber.
             let speeds = self.dl_speeds.entry(job.key.clone()).or_default();
             if job.state == State::Downloading {
                 speeds.push_back(job.speed as f32);
@@ -443,7 +444,8 @@ impl App {
                 big: d.big.clone().into(), big_unit: d.unit.clone().into(),
                 stats: ModelRc::new(VecModel::from(d.stats.iter().map(|(v, l)| DlStat { value: v.clone().into(), label: l.clone().into() }).collect::<Vec<_>>())),
                 spark: if d.spark { self.dl_speeds.get(&job.key).map(spark_path).unwrap_or_default() } else { String::new() }.into(),
-                note: d.note.clone().into(),
+                // What pressing something on it just did, else what it needs.
+                note: self.dl_notes.get(&job.key).cloned().unwrap_or_else(|| d.note.clone()).into(),
                 dl_frac: d.dl, inst_frac: d.inst, ready: d.ready, dl_label: d.dl_label.clone().into(), inst_label: d.inst_label.clone().into(), bar_kind: d.bar,
                 actions: ModelRc::new(VecModel::from(actions)),
                 line: d.line.clone().into(), tile_frac: d.tile, working: d.working,
@@ -562,15 +564,14 @@ impl App {
         let choice = usize::try_from(index).ok().and_then(|i| ids.get(i).copied()).unwrap_or("cancel");
         let name = self.downloads.job(&key).map(|job| job.name).unwrap_or_default();
         // It may have started installing while the dialog was open.
+        self.dl_notes.remove(&key);
         if choice != "cancel" && self.installer.snapshot().iter().any(|r| r.key == key && r.state.active()) {
-            self.toast("Installation in progress", "Cancel the installation before deleting it.", 0);
-            return self.push_downloads();
+            return self.note_download(&key, "It's installing: cancel the installation before deleting it");
         }
         // Before anything goes: the download's folder must be its own to delete.
         if matches!(choice, "both" | "download") {
             if let Err(error) = self.downloads.check_delete(&key) {
-                self.toast("Couldn't delete it", &format!("{error:#}"), 2);
-                return self.push_downloads();
+                return self.note_download(&key, &format!("Couldn't delete it: {error:#}"));
             }
         }
         if matches!(choice, "both" | "game") {
@@ -578,8 +579,7 @@ impl App {
             let path = self.installer.snapshot().into_iter().find(|r| r.key == key).and_then(|r| r.path);
             let running = path.as_ref().and_then(|p| self.locals.iter().position(|l| &l.l.path == p)).is_some_and(|l| self.session_for_local(l).is_some());
             if running {
-                self.toast("Quit the game first", &format!("{name} is running."), 2);
-                return self.push_downloads();
+                return self.note_download(&key, "Quit the game first: it's running");
             }
         }
         if choice == "cancel" { audio::play(Sound::Back); return self.push_downloads(); }
@@ -594,14 +594,12 @@ impl App {
         };
         if let Err(error) = queued {
             self.downloads.set_install_to(&key, install_to);
-            self.toast("Couldn't delete it", &format!("{error:#}"), 2);
-            return self.push_downloads();
+            return self.note_download(&key, &format!("Couldn't delete it: {error:#}"));
         }
         // Both: the game goes once the download is gone (the worker can still refuse it).
         if choice == "both" {
             self.pending_uninstall = Some((key.clone(), name.clone(), install_to));
             audio::play(Sound::Select);
-            self.toast(&name, "Deleting its download, then the game", 1);
             self.dl_btn = -1;
             return self.push_downloads();
         }
@@ -613,8 +611,7 @@ impl App {
                 }
                 Err(error) => {
                     self.downloads.set_install_to(&key, install_to);
-                    self.toast("Couldn't delete the game", &format!("{error:#}"), 2);
-                    return self.push_downloads();
+                    return self.note_download(&key, &format!("Couldn't delete the game: {error:#}"));
                 }
             }
         }
@@ -624,10 +621,7 @@ impl App {
             self.install_failures.remove(&key);
         }
         audio::play(Sound::Select);
-        // The download itself goes a moment later (the worker deletes it).
-        let what = match choice { "game" => "The game is deleted; its download stays",
-            "download" => "Its download is being deleted", _ => "Removed from Downloads; every file is kept" };
-        self.toast(&name, what, 1);
+        // Its row changes (or goes a moment later, once the worker has deleted the download).
         self.dl_btn = -1;
         self.push_downloads();
     }
@@ -641,22 +635,28 @@ impl App {
                 self.pending_uninstall = None;
                 // Started meanwhile: it stays (never deleted under a running game).
                 let path = self.installer.snapshot().into_iter().find(|r| r.key == key).and_then(|r| r.path);
-                if path.as_ref().and_then(|p| self.locals.iter().position(|l| &l.l.path == p)).is_some_and(|l| self.session_for_local(l).is_some()) {
-                    return self.toast("Its download is deleted; the game is running, so it stays", &name, 2);
+                // The download's row is gone: what happened to the game shows on the game.
+                let local = path.as_ref().and_then(|p| self.locals.iter().position(|l| &l.l.path == p));
+                let note = |app: &mut App, text: &str| if let Some(l) = local { let id = app.locals[l].l.id.clone(); app.note_game(&id, text, true) };
+                if local.is_some_and(|l| self.session_for_local(l).is_some()) {
+                    crate::log!("{name}: download deleted; the game is running, so it stays");
+                    return note(self, "Its download is deleted; the game was running, so it stays");
                 }
                 match self.installer.uninstall(&key) {
                     Ok(_) => {
                         self.install_states.remove(&key);
                         self.rescan_library();
-                        self.toast(&name, "The game and its download are deleted", 1);
                     }
-                    Err(error) => self.toast("Its download is deleted, but the game couldn't be", &format!("{error:#}"), 2),
+                    Err(error) => {
+                        crate::log!("{name}: download deleted, game not: {error:#}");
+                        note(self, &format!("Its download is deleted, but the game couldn't be: {error:#}"));
+                    }
                 }
             }
             Some(job) if job.error.starts_with(crate::downloads::NOT_DELETED) => {
                 self.pending_uninstall = None;
                 self.downloads.set_install_to(&key, install_to);
-                self.toast("Couldn't delete its download, so the game stays", &job.error, 2);
+                self.note_download(&key, &format!("Couldn't delete its download, so the game stays: {}", job.error));
             }
             Some(_) => {}
         }

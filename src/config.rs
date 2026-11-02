@@ -34,8 +34,6 @@ pub struct Config {
     pub vpn_only: bool,
     /// The VPN's network interface to use ("" = any connected VPN).
     pub vpn_interface: String,
-    /// The PC (its specs summary) last warned about games that can't run on it.
-    pub pc_noticed: String,
     /// Library searches that found something, newest first (shown before typing on the
     /// on-screen keyboard).
     pub recent_searches: Vec<String>,
@@ -64,7 +62,6 @@ impl Default for Config {
             app_auto_update: true,
             vpn_only: false,
             vpn_interface: String::new(),
-            pc_noticed: String::new(),
             recent_searches: Vec::new(),
         }
     }

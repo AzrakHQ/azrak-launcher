@@ -439,6 +439,9 @@ impl App {
                         platform => format!("Installed locally. Launches with the {} emulator.", platform.emulator()),
                     });
                 h.desc = truncate(&desc, 260).into();
+                if let Some((note, warn)) = self.game_notes.get(&self.game_key(t)) {
+                    (h.note, h.note_warn) = (note.into(), *warn);
+                }
                 self.hero_actions = self.actions_for(t, false);
             }
         }
@@ -1218,7 +1221,8 @@ impl App {
             h.verdict_kind = outlook.kind();
             h.verdict_detail = self.verdict_detail(t).into();
         }
-        if let Some((note, warn)) = self.download_note(t) {
+        // Something about this game (it crashed, it couldn't start) comes before what Download means.
+        if let Some((note, warn)) = self.game_notes.get(&self.game_key(t)).cloned().or_else(|| self.download_note(t)) {
             h.download_note = note.into();
             h.download_note_warn = warn;
         }
@@ -1407,25 +1411,6 @@ impl App {
         ui.set_launch_name(self.locals[l].name.clone().into());
         ui.set_launch_bg(bgi.unwrap_or_default());
         ui.set_launch_icon(ici.unwrap_or_default());
-    }
-
-    /// Row by row, so the cards already showing keep their place and their animations.
-    pub fn push_toasts(&mut self) {
-        let m = &self.toast_model;
-        let mut row = 0;
-        while row < m.row_count() {
-            let shown = m.row_data(row);
-            match self.toasts.iter().find(|t| shown.as_ref().is_some_and(|s| s.id == t.id)) {
-                Some(t) => {
-                    if shown.as_ref() != Some(t) { m.set_row_data(row, t.clone()); }
-                    row += 1;
-                }
-                None => { m.remove(row); }
-            }
-        }
-        for t in &self.toasts {
-            if !m.iter().any(|shown| shown.id == t.id) { m.push(t.clone()); }
-        }
     }
 }
 
