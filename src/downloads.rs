@@ -1067,6 +1067,8 @@ impl Worker {
             if let Some(session) = &self.session {
                 // Snapshot only after pause has stopped piece writes; delete never removes payload.
                 // rqbit rejects pause() for already Paused/Error handles. They still need deletion.
+                // Stopped while it was verifying: its numbers are the check's, not progress.
+                let checking = matches!(handle.stats().state, TorrentStatsState::Initializing { .. });
                 pause_error = if matches!(handle.stats().state, TorrentStatsState::Live | TorrentStatsState::Initializing { .. }) {
                     session.pause(&handle).await.err()
                 } else { None };
@@ -1075,7 +1077,7 @@ impl Worker {
                 if state == State::Paused && stats.finished { state = State::Complete; }
                 self.update(key, |job| {
                     // Error/None engine states report zero progress even for a previously verified seed.
-                    if (job.state != State::Complete || stats.finished) && counts(&stats) {
+                    if (job.state != State::Complete || stats.finished) && counts(&stats) && !checking && job.check_total == 0 {
                         job.done = stats.progress_bytes; job.total = stats.total_bytes;
                     }
                 });
@@ -1314,7 +1316,9 @@ impl Worker {
             }).unwrap_or_default();
             let newly_complete = stats.finished && !was_complete;
             self.update(&key, |job| {
-                if (!was_complete || stats.finished) && counts(&stats) { job.done = stats.progress_bytes; job.total = stats.total_bytes; }
+                // Right after a check (paused mid-way), the numbers are still the check's.
+                let after_check = job.check_total > 0 && !matches!(stats.state, TorrentStatsState::Live);
+                if (!was_complete || stats.finished) && counts(&stats) && !after_check { job.done = stats.progress_bytes; job.total = stats.total_bytes; }
                 let checking = matches!(stats.state, TorrentStatsState::Initializing { .. });
                 (job.checked, job.check_total) = if checking { (stats.progress_bytes, stats.total_bytes) } else { (0, 0) };
                 job.state = state;

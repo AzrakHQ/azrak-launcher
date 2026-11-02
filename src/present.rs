@@ -80,13 +80,8 @@ impl App {
     /// The frosted copy of an image that has arrived. Made once, in the background (the glass is
     /// plain tint until then); the last few used are kept.
     pub fn frost_of(&mut self, key: &str) -> Option<Image> {
-        if let Some(i) = self.frost.iter().position(|(k, _)| k == key) {
-            let entry = self.frost.remove(i);
-            let img = entry.1.clone();
-            self.frost.push(entry);
-            return Some(img);
-        }
-        if !self.frost_pending.contains(key) {
+        if let Some(img) = self.frost_cached(key) { return Some(img); }
+        if !self.frost_pending.contains(key) && !self.frost_failed.contains(key) {
             if let Some(buf) = self.images.get(key).and_then(|img| img.to_rgba8()) {
                 self.frost_pending.insert(key.to_string());
                 let key = key.to_string();
@@ -99,15 +94,28 @@ impl App {
         None
     }
 
+    /// A blur made already (the last used are kept), without making one.
+    fn frost_cached(&mut self, key: &str) -> Option<Image> {
+        let i = self.frost.iter().position(|(k, _)| k == key)?;
+        let entry = self.frost.remove(i);
+        let img = entry.1.clone();
+        self.frost.push(entry);
+        Some(img)
+    }
+
     fn frost_done(&mut self, key: String, buf: Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>) {
-        // One that can't be made stays pending: never tried again.
-        let Some(buf) = buf else { return };
         self.frost_pending.remove(&key);
+        // One that can't be made is never tried again (and its art goes without glass).
+        let Some(buf) = buf else {
+            self.frost_failed.insert(key);
+            return self.push_glass(false);
+        };
         if self.frost.len() >= 16 { self.frost.remove(0); }
         self.frost.push((key, Image::from_rgba8(buf)));
         // The top bar's and Settings' glass (only the glass: rebuilding Settings' rows would
-        // restart one being typed in).
-        self.push_glass();
+        // restart one being typed in). Only from blurs made already: starting one for the art
+        // shown now would chain a blur for every tile passed.
+        self.push_glass(false);
         match self.overlay {
             Overlay::Downloads => self.push_downloads(),
             Overlay::Setup => self.push_setup(),
@@ -566,19 +574,21 @@ impl App {
     /// the art has stayed a moment (moving along a row doesn't blur every tile's art on the way).
     pub fn bg_changed(&mut self) {
         let key = self.bg_key.clone();
-        if self.view != 0 || self.frost.iter().any(|(k, _)| *k == key) { return self.push_glass(); }
+        if self.view != 0 || self.frost.iter().any(|(k, _)| *k == key) { return self.push_glass(true); }
         slint::Timer::single_shot(std::time::Duration::from_millis(400), move || with_app(move |app| {
-            if app.bg_key == key { app.push_glass(); }
+            if app.bg_key == key { app.push_glass(true); }
         }));
     }
 
     /// The glass over the art: the art behind it, blurred (none over the dimmed Library).
     /// `Err` while its blur is still being made: the glass shown stays until it's ready (no
     /// flash of a solid pill in between).
-    pub fn bg_glass(&mut self) -> Result<Option<Image>, ()> {
+    /// `make`: start its blur if there isn't one yet.
+    pub fn bg_glass(&mut self, make: bool) -> Result<Option<Image>, ()> {
         if self.view != 0 { return Ok(None); }
         let key = self.bg_key.clone();
-        match self.frost_of(&key) {
+        let found = if make { self.frost_of(&key) } else { self.frost_cached(&key) };
+        match found {
             Some(img) => Ok(Some(img)),
             None if self.frost_pending.contains(&key) => Err(()),
             None => Ok(None),
@@ -586,9 +596,9 @@ impl App {
     }
 
     /// Every glass on screen: the top bar's, and Settings' while it's open.
-    fn push_glass(&mut self) {
-        self.push_bar_glass();
-        if self.overlay == Overlay::Settings { self.push_settings_glass(); }
+    fn push_glass(&mut self, make: bool) {
+        self.push_bar_glass(make);
+        if self.overlay == Overlay::Settings { self.push_settings_glass(make); }
     }
 
     fn apply_bg(&mut self, key: String, img: Image) {

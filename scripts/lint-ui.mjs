@@ -6,7 +6,7 @@
 //
 // Usage: node scripts/lint-ui.mjs [files…]   (default: ui/*.slint). Exit 1 on problems.
 // A line ending in `// ui-lint: allow (reason)` is skipped.
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -125,13 +125,24 @@ export function lint(text) {
         }
       }
     }
+    // A fixed-height column holds all its lines (spacing aside).
+    if (el.type === 'VerticalLayout' && el.props.height) {
+      const box = length(el.props.height.value);
+      const texts = el.children.filter(c => c.type === 'Text' && c.props['font-size']).map(c => length(c.props['font-size'].value)).filter(Boolean);
+      if (box && texts.length > 1) {
+        const need = texts.reduce((sum, f) => sum + f.px * LINE * (f.scale === 't' && box.scale === 'k' ? T_OVER_K : 1), 0);
+        if (need > box.px + 0.5 && !allowed(el.props.height.line)) {
+          problems.push({ line: el.props.height.line, message: `a column of ${texts.length} lines needs about ${need.toFixed(0)}px, but it is ${box.px}px (S.${box.scale})` });
+        }
+      }
+    }
     el.children.forEach(visit);
   };
   visit(parse(text));
   return problems;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   const files = process.argv.slice(2).length ? process.argv.slice(2)
     : readdirSync(join(root, 'ui')).filter(f => f.endsWith('.slint')).map(f => join(root, 'ui', f));
   let count = 0;

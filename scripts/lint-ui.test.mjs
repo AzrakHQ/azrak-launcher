@@ -31,6 +31,7 @@ test('comments before a property and padding inside the box are understood', () 
   assert.equal(lint('HorizontalLayout { height: (40px * S.k); Text { font-size: (25px * S.k); } }').length, 0);
   assert.equal(lint('Rectangle { height: (40px * S.k); HorizontalLayout { padding: (10px * S.k); Text { font-size: (25px * S.k); } } }').length, 1);
   assert.equal(lint('Rectangle { height: (40px * S.k); VerticalLayout { animate y { duration: 1ms; } Text { font-size: (36px * S.k); } } }').length, 1);
+  assert.equal(lint('VerticalLayout { height: (40px * S.k); Text { font-size: (20px * S.k); } Text { font-size: (20px * S.k); } }').length, 1);
 });
 
 test('a column shares its height out, wrapped text grows, and allow skips a line', () => {

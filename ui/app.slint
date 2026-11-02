@@ -1057,7 +1057,8 @@ export component AppWindow inherits Window {
                         padding-right: (8px * S.k);
                         spacing: (12px * S.k);
                         Rectangle { width: (10px * S.k); height: (10px * S.k); y: (21px * S.k); border-radius: (5px * S.k); background: Theme.ok; }
-                        Text { text: root.running.name; font-size: (18px * S.k); font-weight: 600; color: Theme.text; vertical-alignment: center; }
+                        // Cut short, so the top bar never reaches the tabs.
+                        Text { text: root.running.name; max-width: (320px * S.k); overflow: elide; font-size: (18px * S.k); font-weight: 600; color: Theme.text; vertical-alignment: center; }
                         Text { text: root.running.time; font-size: (18px * S.k); color: Theme.text2; vertical-alignment: center; }
                         for b[i] in ["Resume", "Stop"]: Rectangle {
                             y: (7px * S.k);
@@ -1120,9 +1121,10 @@ export component AppWindow inherits Window {
                                 // As wide as the label with every digit a 0, so the numbers changing
                                 // don't move the ring.
                                 if root.ring-kind > 0: Rectangle {
-                                    width: max(ring-text.preferred-width, ring-sizer.preferred-width);
+                                    width: min((380px * S.k), max(ring-text.preferred-width, ring-sizer.preferred-width));
                                     ring-text := Text {
                                         x: 0; text: root.ring-label;
+                                        width: min(self.preferred-width, (380px * S.k)); overflow: elide;
                                         font-size: (22px * S.k); font-weight: 600;
                                         color: dl.f ? #05070f : #f5f7fb;
                                         vertical-alignment: center;

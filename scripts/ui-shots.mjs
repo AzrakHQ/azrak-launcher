@@ -162,11 +162,11 @@ for (const [name] of steps) {
 }
 
 // Against the approved screenshots: more than a sliver changed (the clock alone is allowed).
-let changed = 0, compared = 0;
+let changed = 0, compared = 0, approved = 0;
 for (const [w, h] of sizes) for (const [name] of steps) {
   const shot = join(out, `${w}x${h}`, `${name}.png`), ok = join(golden, `${w}x${h}`, `${name}.png`);
   if (!existsSync(shot)) { changed++; console.log(`missing: ${w}x${h}/${name}`); continue; }
-  if (flag('--approve')) { mkdirSync(dirname(ok), { recursive: true }); cpSync(shot, ok); continue; }
+  if (flag('--approve')) { mkdirSync(dirname(ok), { recursive: true }); cpSync(shot, ok); approved++; continue; }
   if (!existsSync(ok)) continue;
   compared++;
   const r = run('compare', ['-metric', 'AE', '-fuzz', '6%', ok, shot, shot.replace(/\.png$/, '.diff.png')]);
@@ -180,7 +180,7 @@ for (const [w, h] of sizes) for (const [name] of steps) {
     console.log(`changed: ${w}x${h}/${name} (${(100 * pixels / (w * h)).toFixed(2)}% of pixels)`);
   } else rmSync(shot.replace(/\.png$/, '.diff.png'), { force: true });
 }
-console.log(flag('--approve') ? `approved ${sizes.length * steps.length} screenshots` : compared
+console.log(flag('--approve') ? `approved ${approved} screenshots` : compared
   ? `${changed} of ${compared} screens changed since they were approved` : 'nothing approved yet: look at the sheets, then run with --approve');
 console.log(`sheets: ${join(out, 'sheets')}`);
 process.exit(changed ? 1 : 0);

@@ -433,8 +433,8 @@ impl App {
     }
 
     /// The glass behind the sheet: the art behind it, blurred (none over the dimmed Library).
-    pub fn push_settings_glass(&mut self) {
-        let Ok(glass) = self.bg_glass() else { return };
+    pub fn push_settings_glass(&mut self, make: bool) {
+        let Ok(glass) = self.bg_glass(make) else { return };
         let ui = self.ui();
         ui.set_settings_has_glass(glass.is_some());
         ui.set_settings_glass(glass.unwrap_or_default());
@@ -512,7 +512,7 @@ impl App {
 
     pub fn push_settings(&mut self) {
         let footer: Vec<SettingData> = self.settings_footer().into_iter().map(|i| self.settings_rows[i].clone()).collect();
-        self.push_settings_glass();
+        self.push_settings_glass(true);
         let ui = self.ui();
         ui.set_settings(model(self.settings_rows.clone()));
         ui.set_settings_sections(model(self.settings_sections.clone()));

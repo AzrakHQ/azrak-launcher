@@ -228,6 +228,8 @@ pub struct App {
     /// Least recently used first.
     pub frost: Vec<(String, slint::Image)>,
     pub frost_pending: HashSet<String>,
+    /// Art whose blur couldn't be made: never tried again.
+    pub frost_failed: HashSet<String>,
     pub live: Vec<Session>,
     pub images: images::Store,
     pub monitors: Vec<Monitor>,
@@ -549,6 +551,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         dl_keys: HashSet::new(),
         frost: Vec::new(),
         frost_pending: HashSet::new(),
+        frost_failed: HashSet::new(),
         dl_delete: None,
         dl_delete_sel: 0,
         live: Vec::new(),

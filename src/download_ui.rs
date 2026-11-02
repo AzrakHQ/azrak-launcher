@@ -116,7 +116,8 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
         State::Checking | State::Downloading => {
             // Resuming: the engine verifies what's on disk before downloading the rest (once it
             // reports the check; until then it looks as it did).
-            let verifying = job.state == State::Checking && job.check_total > 0;
+            // A new download has nothing on disk to verify: it looks like downloading.
+            let verifying = job.state == State::Checking && job.check_total > 0 && job.done > 0;
             d.status = if verifying { "Verifying what's already downloaded".into() } else { "Downloading".into() };
             if verifying { d.dl_label = "Verifying".into(); (d.kind, d.bar) = (4, 4); }
             let checked = if job.check_total > 0 { (job.checked as f32 / job.check_total as f32).min(1.0) } else { 0.0 };
@@ -688,7 +689,7 @@ impl App {
             (3, if unseen.len() > 1 { format!("{} need you", unseen.len()) } else { what.to_string() }, job.progress())
         } else if !active.is_empty() {
             // One that's verifying shows how far the check is.
-            let verifying = active.len() == 1 && active[0].state == State::Checking && active[0].check_total > 0;
+            let verifying = active.len() == 1 && active[0].state == State::Checking && active[0].check_total > 0 && active[0].done > 0;
             let (done, total) = active.iter().fold((0u64, 0u64), |(d, t), job| if verifying { (d + job.checked, t + job.check_total) } else { (d + job.done, t + job.total) });
             let frac = if total > 0 { (done as f32 / total as f32).min(1.0) } else { 0.0 };
             let pct = pct(frac);
@@ -717,8 +718,8 @@ impl App {
 
     /// The top bar's glass: the art behind it, blurred (none over the dimmed Library). Also when
     /// the art changes, so it never shows the one before.
-    pub fn push_bar_glass(&mut self) {
-        let Ok(glass) = self.bg_glass() else { return };
+    pub fn push_bar_glass(&mut self, make: bool) {
+        let Ok(glass) = self.bg_glass(make) else { return };
         let ui = self.ui();
         ui.set_bar_has_glass(glass.is_some());
         ui.set_bar_glass(glass.unwrap_or_default());
