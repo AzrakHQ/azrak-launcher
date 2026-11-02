@@ -7,6 +7,7 @@ use crate::audio::{self, Sound};
 use crate::downloads::{self, Problem, State};
 use crate::util;
 use slint::Model;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Focus { Row(usize), ChangeDownload, ChangeInstall, Go, Cancel }
@@ -30,6 +31,20 @@ pub struct Setup {
     /// Which folder is being typed: 1 download, 2 install.
     pub edit: i32,
     pub begun: bool,
+    /// Each folder's drive, looked up at most every few seconds (a slow drive mustn't stall
+    /// the panel, which is drawn every second).
+    drives: std::cell::RefCell<Vec<(PathBuf, std::time::Instant, Option<downloads::Drive>)>>,
+}
+
+impl Setup {
+    fn drive(&self, path: &Path) -> Option<downloads::Drive> {
+        let mut drives = self.drives.borrow_mut();
+        drives.retain(|(_, at, _)| at.elapsed() < std::time::Duration::from_secs(5));
+        if let Some((_, _, drive)) = drives.iter().find(|(p, _, _)| p == path) { return drive.clone(); }
+        let drive = downloads::drive(path);
+        drives.push((path.to_path_buf(), std::time::Instant::now(), drive.clone()));
+        drive
+    }
 }
 
 /// "21.6 GB", "84 MB", "2 KB", "0 KB".
@@ -78,7 +93,7 @@ impl App {
         };
         if let Some(old) = looked_up.filter(|old| key.as_ref() != Some(old)) { let _ = self.downloads.discard(&old); }
         self.setup = Some(Setup { key, platform, created, entries: vec![], on: vec![], error, begin_error: String::new(),
-            focus: Focus::Cancel, moved: false, edit: 0, begun: false });
+            focus: Focus::Cancel, moved: false, edit: 0, begun: false, drives: Default::default() });
         self.setup_model.set_vec(vec![]);
         let ui = self.ui();
         ui.set_setup_title(name.into());
@@ -149,8 +164,8 @@ impl App {
         let known = view.state == 1;
         let need = if known { total } else { 0 };
         let mut short = None;
-        let dl_drive = dl_path.is_absolute().then(|| downloads::drive(&dl_path)).flatten();
-        let inst_drive = inst_path.is_absolute().then(|| downloads::drive(&inst_path)).flatten();
+        let dl_drive = dl_path.is_absolute().then(|| setup.drive(&dl_path)).flatten();
+        let inst_drive = inst_path.is_absolute().then(|| setup.drive(&inst_path)).flatten();
         view.dl = match &dl_drive {
             None => ("Use a full folder path, like ~/Downloads".into(), 0.0, true),
             Some(d) if !known => (format!("{} free on {}", size_label(d.free), d.mount.display()), 0.0, false),

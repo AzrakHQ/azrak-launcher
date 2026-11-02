@@ -471,7 +471,7 @@ impl Source {
                 self.walk(&child, &path, cancel)?;
                 // A folder the engine made only for files left out isn't the game's.
                 let inside = format!("{path}/");
-                let left_out = self.plan.entries.len() == before && self.skip.iter().any(|skipped| skipped.starts_with(&inside));
+                let left_out = self.plan.entries.len() == before && self.skip.range(inside.clone()..).next().is_some_and(|skipped| skipped.starts_with(&inside));
                 if !left_out { self.plan.add(Entry::file(path.clone(), true, 0))?; }
             } else if self.skip.contains(&path) {
                 continue;

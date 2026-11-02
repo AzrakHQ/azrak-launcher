@@ -148,7 +148,8 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             // Why it isn't sharing (its files changed, say); an install problem says more below.
             if !sharing { d.note = job.error.clone(); }
             let failed = match install {
-                Some(record) if record.state == Install::Failed => Some(record.error.clone()),
+                // The latest attempt's reason (one that couldn't even start is newer than the record).
+                Some(record) if record.state == Install::Failed => Some(failure.cloned().unwrap_or_else(|| record.error.clone())),
                 None => failure.cloned(),
                 _ => None,
             };
@@ -267,7 +268,10 @@ impl App {
                 match to {
                     Some(to) => match self.start_install(key, &to) {
                         Ok(()) => { audio::play(Sound::Select); self.push_installs(); }
-                        Err(error) => { self.install_failures.insert(key.into(), format!("{error:#}")); }
+                        Err(error) => {
+                            self.toast("Couldn't install", &format!("{error:#}"), 2);
+                            self.install_failures.insert(key.into(), format!("{error:#}"));
+                        }
                     },
                     None => self.prepare_install(key),
                 }

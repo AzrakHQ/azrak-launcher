@@ -147,7 +147,7 @@ impl Default for Policy {
     }
 }
 
-enum Command { Prepare(Job), Begin { key: String, base: PathBuf, selected: Vec<usize>, install_to: Option<PathBuf> }, Discard(String), Start(String), Pause(String), Cancel(String), Remove(String), Delete(String), Save, StopSeed(String), Seed(String), SetSeedAfterDownload(bool), SetVpn(Option<String>), Shutdown }
+enum Command { Prepare(Job), Begin { key: String, base: PathBuf, selected: Vec<usize>, install_to: Option<PathBuf> }, Discard(Job), Start(String), Pause(String), Cancel(String), Remove(String), Delete(String), Save, StopSeed(String), Seed(String), SetSeedAfterDownload(bool), SetVpn(Option<String>), Shutdown }
 
 const VPN_WAIT: &str = "Waiting for your VPN: downloads only run through it (Settings → Downloads)";
 const FILES_CHANGED: &str = "The downloaded files were moved, changed or deleted, so this download can't seed. Remove it, or download it again.";
@@ -252,8 +252,17 @@ impl Manager {
 
     /// Forget a download that never started (the player closed the Download & install panel):
     /// stop looking it up and remove it, with its still-empty folder.
+    /// It leaves the list at once, so pressing Download again starts afresh.
     pub fn discard(&self, key: &str) -> Result<()> {
-        self.tx.try_send(Command::Discard(key.into())).context("Download worker is busy or unavailable")
+        let mut jobs = self.jobs.lock().unwrap();
+        let Some(index) = jobs.iter().position(|job| job.key == key && unstarted(job)) else { return Ok(()) };
+        let job = jobs.remove(index);
+        if let Err(error) = self.tx.try_send(Command::Discard(job)) {
+            let Command::Discard(job) = error.into_inner() else { unreachable!() };
+            jobs.insert(index, job);
+            bail!("Download worker is busy or unavailable");
+        }
+        Ok(())
     }
 
     pub fn action(&self, key: &str, action: &str) -> Result<()> {
@@ -513,6 +522,7 @@ fn restore_entries(store: &Path, job: &mut Job) {
             let _ = std::fs::remove_file(store.join(format!("{}.torrent", job.key)));
             job.state = State::Failed;
             job.error = "Its file list couldn't be read. Retry looks it up again.".into();
+            job.problem = Problem::Other;
         }
     }
 }
@@ -525,6 +535,17 @@ fn counts(stats: &librqbit::TorrentStats, job: &Job) -> bool {
         TorrentStatsState::Initializing { .. } => job.selected.is_none(),
         TorrentStatsState::Error => false,
     }
+}
+
+/// A download that never started: nothing downloaded, so closing the panel forgets it.
+fn unstarted(job: &Job) -> bool {
+    let state = match job.state {
+        State::Resolving | State::Ready | State::Failed => true,
+        // Paused before its file list arrived (nothing else has no size).
+        State::Paused => job.total == 0,
+        _ => false,
+    };
+    state && job.done == 0
 }
 
 /// A copy of a download without its file list (it can be long), for the UI.
@@ -746,7 +767,7 @@ impl Worker {
         // The player can still choose another folder in the panel, so one that can't be used
         // doesn't stop the lookup (it writes nothing); starting the download checks it again.
         let folder = owned_folder(&job).unwrap_or_else(|_| job.folder.clone());
-        self.update(key, |job| { job.folder = folder.clone(); job.state = State::Resolving; job.error.clear(); });
+        self.update(key, |job| { job.folder = folder.clone(); job.state = State::Resolving; job.error.clear(); job.problem = Problem::Other; });
         self.persist();
         let session = self.session().await?;
         let initial_peers = self.policy.initial_peers.clone();
@@ -994,7 +1015,10 @@ impl Worker {
         if let Err(error) = started {
             // Back to choosing, saying why: another folder (or fewer files) may work.
             if folder != job.folder { remove_unused(&folder, key); }
-            self.update(key, |j| { j.state = State::Ready; j.folder = job.folder.clone(); j.error = shown(&error); j.clear_runtime(); });
+            self.update(key, |j| {
+                j.state = State::Ready; j.folder = job.folder.clone(); j.total = job.total; j.install_to = job.install_to.clone();
+                j.error = shown(&error); j.clear_runtime();
+            });
             self.persist();
             return Ok(());
         }
@@ -1007,17 +1031,17 @@ impl Worker {
     }
 
     /// Forget a download that never started, and the empty folder looking it up made.
+    #[cfg(test)]
     async fn discard(&mut self, key: &str) -> Result<()> {
-        let Some(job) = self.job(key) else { return Ok(()) };
-        let unstarted = match job.state {
-            State::Resolving | State::Ready | State::Failed => true,
-            // Paused before its file list arrived (nothing else has no size).
-            State::Paused => job.total == 0,
-            _ => false,
-        };
-        if !unstarted || job.done > 0 { return Ok(()); }
-        self.stop_job(key, State::Cancelled).await?;
+        let Some(job) = self.job(key).filter(unstarted) else { return Ok(()) };
         self.jobs.lock().unwrap().retain(|job| job.key != key);
+        self.forget(job).await
+    }
+
+    /// Clean up after a discarded download (already out of the list): stop looking it up.
+    async fn forget(&mut self, job: Job) -> Result<()> {
+        let key = job.key.as_str();
+        self.stop_job(key, State::Cancelled).await?;
         let _ = std::fs::remove_file(self.store.join(format!("{key}.torrent")));
         remove_unused(&job.folder, key);
         self.peers.remove(key);
@@ -1115,7 +1139,7 @@ impl Worker {
                             let result = self.begin(&key, &base, selected, install_to).await;
                             Some((key, result))
                         },
-                        Some(Command::Discard(key)) => Some((key.clone(), self.discard(&key).await)),
+                        Some(Command::Discard(job)) => { let key = job.key.clone(); Some((key, self.forget(job).await)) },
                         Some(Command::Start(key)) => Some((key.clone(), self.start(&key).await)),
                         Some(Command::Pause(key)) => {
                             self.update(&key, |job| job.waiting_vpn = false);
@@ -2073,13 +2097,14 @@ mod tests {
         let key = manager.prepare(4, "Two files", &torrent.as_magnet().to_string(), temp.path().join("dl"), crate::platform::Platform::Ps4).unwrap();
         let ready = rt.block_on(wait_job(&manager, &key, |job| job.state == State::Ready));
         manager.discard(&key).unwrap();
+        assert!(manager.snapshot().is_empty(), "it leaves the list at once");
+        // The worker cleans up after it: its empty folder and saved torrent go.
+        let torrent = store.join(format!("{key}.torrent"));
         rt.block_on(async {
             tokio::time::timeout(Duration::from_secs(10), async {
-                while !manager.snapshot().is_empty() { tokio::time::sleep(Duration::from_millis(25)).await; }
-            }).await.expect("discarded");
+                while ready.folder.exists() || torrent.exists() { tokio::time::sleep(Duration::from_millis(25)).await; }
+            }).await.expect("cleaned up");
         });
-        assert!(!ready.folder.exists());
-        assert!(!store.join(format!("{key}.torrent")).exists());
         manager.shutdown();
     }
 
