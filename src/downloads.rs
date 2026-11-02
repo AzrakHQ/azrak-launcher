@@ -22,6 +22,33 @@ const MAX_JOBS: usize = 32;
 const MAX_METADATA: u64 = 16 * 1024 * 1024;
 pub const MARKER: &str = ".azrak-owned";
 
+/// Why a lookup stopped, for the Download & install panel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Problem {
+    /// Anything else (a folder, the engine): its message says.
+    #[default]
+    Other,
+    /// Nobody answered in time: nobody shares it now, or this PC is offline.
+    NoAnswer,
+    /// The release itself: it can't be installed, or its torrent is unsafe.
+    Release,
+}
+
+/// Marks a lookup error as the release's own problem; reads as the error itself.
+#[derive(Debug)]
+struct ReleaseProblem(anyhow::Error);
+impl std::fmt::Display for ReleaseProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
+}
+impl std::error::Error for ReleaseProblem {}
+
+#[derive(Debug)]
+struct NoAnswer;
+impl std::fmt::Display for NoAnswer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("Metadata lookup timed out; no reachable peers. Retry later.") }
+}
+impl std::error::Error for NoAnswer {}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum State { Resolving, Ready, Checking, Downloading, Paused, Complete, Failed, Cancelled }
 
@@ -57,6 +84,8 @@ pub struct Job {
     /// The player pressed Share again while sharing is off in Settings: it shares until Stop
     /// sharing (or the setting is turned off), across restarts.
     #[serde(default)] pub shared_by_hand: bool,
+    /// What kind of problem stopped it (with `error`).
+    #[serde(default)] pub problem: Problem,
     /// What it's for: a download the launcher couldn't install stops once its file list is known.
     #[serde(default)] pub platform: Option<crate::platform::Platform>,
     /// Every file in the torrent, in its order, while the player chooses what to download.
@@ -154,12 +183,12 @@ impl Manager {
 
     /// Every download, without the file lists being chosen from (`entries`), which can be long.
     pub fn snapshot(&self) -> Vec<Job> {
-        self.jobs.lock().unwrap().iter_mut().map(|job| {
-            let entries = std::mem::take(&mut job.entries);
-            let copy = job.clone();
-            job.entries = entries;
-            copy
-        }).collect()
+        self.jobs.lock().unwrap().iter_mut().map(light).collect()
+    }
+
+    /// One download (without its file list).
+    pub fn job(&self, key: &str) -> Option<Job> {
+        self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key).map(light)
     }
 
     /// The file list of a download whose files are being chosen.
@@ -192,7 +221,7 @@ impl Manager {
             folder: base.join(format!("torrent-{key}")), key: key.clone(), topic,
             name: name.chars().filter(|c| !c.is_control()).take(200).collect(), magnet,
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false, shared_by_hand: false,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
             platform: Some(platform), entries: vec![], selected: None, install_to: None, added: crate::util::now_secs() as u64,
         };
         self.tx.try_send(Command::Prepare(job.clone())).context("Download worker is busy or unavailable")?;
@@ -438,6 +467,14 @@ fn inspect_metadata(bytes: &[u8], key: &str, folder: &Path) -> Result<(u64, Vec<
     Ok((total, files))
 }
 
+/// A copy of a download without its file list (it can be long), for the UI.
+fn light(job: &mut Job) -> Job {
+    let entries = std::mem::take(&mut job.entries);
+    let copy = job.clone();
+    job.entries = entries;
+    copy
+}
+
 /// Which files of a torrent are downloaded (`selected`: `None` for every file), one lookup each.
 fn chosen(selected: Option<&[usize]>) -> impl Fn(usize) -> bool {
     let set: Option<HashSet<usize>> = selected.map(|selected| selected.iter().copied().collect());
@@ -553,7 +590,7 @@ impl Worker {
             .unwrap().replace_all(&error.to_string(), "[network URL]").chars().take(500).collect::<String>();
         self.update(key, |job| {
             if job.state != State::Complete { job.state = State::Failed; }
-            job.error = message; job.clear_runtime();
+            job.error = message; job.problem = Problem::Other; job.clear_runtime();
         });
         self.persist();
     }
@@ -659,7 +696,7 @@ impl Worker {
                         list_only: true, output_folder: Some(folder.to_string_lossy().into_owned()),
                         initial_peers: Some(initial_peers), ..Default::default()
                     }),
-                )).await.context("Metadata lookup timed out; no reachable peers. Retry later.")??;
+                )).await.map_err(|_| anyhow::Error::new(NoAnswer))??;
                 let AddTorrentResponse::ListOnly(response) = response else { bail!("Unexpected metadata response"); };
                 Ok(Resolved { key: key.clone(), bytes: response.torrent_bytes.to_vec(), peers: response.seen_peers })
         });
@@ -678,19 +715,28 @@ impl Worker {
             Ok((_, result)) => result,
             Err(_) => Err(anyhow::anyhow!("Metadata lookup task stopped unexpectedly; retry")),
         };
-        if let Err(error) = resolved.and_then(|resolved| self.resolved(resolved)) { self.fail(&key, error); }
+        if let Err(error) = resolved.and_then(|resolved| self.resolved(resolved)) {
+            let problem = if error.is::<NoAnswer>() { Problem::NoAnswer } else if error.is::<ReleaseProblem>() { Problem::Release } else { Problem::Other };
+            self.fail(&key, error);
+            self.update(&key, |job| job.problem = problem);
+            self.persist();
+        }
     }
     fn resolved(&mut self, resolved: Resolved) -> Result<()> {
         let job = self.job(&resolved.key).context("Missing transfer")?;
         if job.state != State::Resolving { return Ok(()); }
-        let (total, files) = inspect_metadata(&resolved.bytes, &job.key, &job.folder)?;
-        // Nothing is downloaded yet: a release the launcher couldn't install stops here.
-        if let Some(why) = job.platform.and_then(|platform| crate::package::unsupported(platform, &files)) {
-            bail!("Azrak can't install this release: {why}. Nothing was downloaded; choose another release of this game.");
-        }
-        let entries: Vec<Entry> = files.into_iter()
-            .map(|(path, size)| Entry { blocked: blocked(job.platform, &path), path, size }).collect();
-        ensure!(entries.iter().any(|entry| !entry.blocked), "Nothing in this release can be downloaded: it only holds programs a console game never needs.");
+        let checked = (|| -> Result<(u64, Vec<Entry>)> {
+            let (total, files) = inspect_metadata(&resolved.bytes, &job.key, &job.folder)?;
+            // Nothing is downloaded yet: a release the launcher couldn't install stops here.
+            if let Some(why) = job.platform.and_then(|platform| crate::package::unsupported(platform, &files)) {
+                bail!("Azrak can't install this release: {why}. Nothing was downloaded; choose another release of this game.");
+            }
+            let entries: Vec<Entry> = files.into_iter()
+                .map(|(path, size)| Entry { blocked: blocked(job.platform, &path), path, size }).collect();
+            ensure!(entries.iter().any(|entry| !entry.blocked), "Nothing in this release can be downloaded: it only holds programs a console game never needs.");
+            Ok((total, entries))
+        })();
+        let (total, entries) = checked.map_err(|error| anyhow::Error::new(ReleaseProblem(error)))?;
         // Saved only once it passed every check: Retry downloads only what was saved.
         secure_write(&self.store.join(format!("{}.torrent", job.key)), &resolved.bytes)?;
         self.peers.insert(job.key.clone(), resolved.peers);
@@ -874,7 +920,8 @@ impl Worker {
     async fn begin(&mut self, key: &str, base: &Path, selected: Vec<usize>, install_to: Option<PathBuf>) -> Result<()> {
         let job = self.job(key).context("Missing transfer")?;
         if job.state != State::Ready { return Ok(()); }
-        let folder = base.join(format!("torrent-{key}"));
+        // The lookup's folder is canonical: the same folder reached another way is the same.
+        let folder = base.canonicalize().unwrap_or_else(|_| base.to_path_buf()).join(format!("torrent-{key}"));
         if folder != job.folder {
             // Looking it up made an empty folder where downloads went by default: not there now.
             remove_unused(&job.folder, key);
@@ -892,10 +939,10 @@ impl Worker {
     /// Forget a download that never started, and the empty folder looking it up made.
     async fn discard(&mut self, key: &str) -> Result<()> {
         let Some(job) = self.job(key) else { return Ok(()) };
-        // Paused: still being looked up when the VPN went (or wasn't there yet).
         let unstarted = match job.state {
             State::Resolving | State::Ready | State::Failed => true,
-            State::Paused => job.selected.is_none() && job.entries.is_empty() && job.install_to.is_none(),
+            // Paused before its file list arrived (nothing else has no size).
+            State::Paused => job.total == 0,
             _ => false,
         };
         if !unstarted || job.done > 0 { return Ok(()); }
@@ -1100,7 +1147,7 @@ mod tests {
             key: key.into(), topic: 0, name: "Generated public-domain fixture".into(),
             magnet: format!("magnet:?xt=urn:btih:{key}"), folder: base.join(format!("torrent-{key}")),
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false, shared_by_hand: false,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
             platform: None, entries: vec![], selected: None, install_to: None, added: 0,
         }
     }
@@ -1929,9 +1976,9 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let mut waiting = job(temp.path(), &"a".repeat(40));
         (waiting.state, waiting.waiting_vpn) = (State::Paused, true);
-        // Paused after its files were chosen: a real download, never forgotten this way.
+        // Paused once its file list was known (it has a size): a real download, never forgotten this way.
         let mut chosen = job(temp.path(), &"b".repeat(40));
-        (chosen.state, chosen.selected) = (State::Paused, Some(vec![0]));
+        (chosen.state, chosen.total) = (State::Paused, 10);
         let jobs = Arc::new(Mutex::new(vec![waiting.clone(), chosen.clone()]));
         let mut worker = Worker::new(temp.path().join("store"), jobs.clone(), Policy { local_only: true, ..Default::default() });
         rt.block_on(worker.discard(&waiting.key)).unwrap();

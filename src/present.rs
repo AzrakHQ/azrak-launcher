@@ -100,8 +100,9 @@ impl App {
     }
 
     fn frost_done(&mut self, key: String, buf: Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>) {
-        self.frost_pending.remove(&key);
+        // One that can't be made stays pending: never tried again.
         let Some(buf) = buf else { return };
+        self.frost_pending.remove(&key);
         if self.frost.len() >= 16 { self.frost.remove(0); }
         self.frost.push((key, Image::from_rgba8(buf)));
         match self.overlay {

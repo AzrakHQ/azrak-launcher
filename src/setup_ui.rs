@@ -4,7 +4,7 @@
 //! installs by itself when it's done. Closing the panel forgets a download that never started.
 use crate::app::*;
 use crate::audio::{self, Sound};
-use crate::downloads::{self, State};
+use crate::downloads::{self, Problem, State};
 use crate::util;
 use slint::Model;
 
@@ -106,7 +106,7 @@ impl App {
 
     fn setup_view(&self) -> Option<View> {
         let setup = self.setup.as_ref()?;
-        let job = setup.key.as_ref().and_then(|key| self.downloads.snapshot().into_iter().find(|job| &job.key == key));
+        let job = setup.key.as_ref().and_then(|key| self.downloads.job(key));
         let ui = self.ui();
         let total: u64 = setup.entries.iter().zip(&setup.on).filter(|(_, on)| **on).map(|(e, _)| e.size).sum();
         let picked = setup.on.iter().filter(|on| **on).count();
@@ -115,22 +115,18 @@ impl App {
             notice: String::new(), notice_kind: 0, go_label: "Getting the file list…".into(), go_enabled: false,
             dl: (String::new(), 0.0, false), inst: (String::new(), 0.0, false) };
         let failed = |title: &str, message: &str| (title.to_string(), message.to_string());
-        let error = if !setup.error.is_empty() { Some(setup.error.clone()) }
-            else { job.as_ref().filter(|job| job.state == State::Failed && setup.entries.is_empty()).map(|job| job.error.clone()) };
-        if let Some(error) = error {
-            // The release itself is the problem (it can't be installed, or its torrent is unsafe),
-            // or else the file list just didn't arrive (nobody answered, or this PC is offline).
-            const RELEASE: [&str; 9] = ["Azrak can't install", "Nothing in this release", "Torrent", "Unsafe", "Invalid", "Symlink",
-                "Duplicate", "Conflicting", "Metadata info hash"];
-            // Nothing could be looked up at all (too many downloads, say): only its reason helps.
-            let release = RELEASE.iter().any(|start| error.starts_with(start));
-            let (title, message) = if setup.key.is_none() {
+        // No problem kind: nothing could be looked up at all (too many downloads, say).
+        let error = if !setup.error.is_empty() { Some((setup.error.clone(), None)) }
+            else { job.as_ref().filter(|job| job.state == State::Failed && setup.entries.is_empty()).map(|job| (job.error.clone(), Some(job.problem))) };
+        if let Some((error, problem)) = error {
+            let retry = matches!(problem, Some(Problem::NoAnswer | Problem::Other));
+            let (title, message) = if problem.is_none() {
                 view.go_label = "Can't download right now".into();
                 failed("This release can't be looked up", &error)
-            } else if !release {
+            } else if retry {
                 view.go_label = "Keep trying".into();
                 view.go_enabled = true;
-                if error.starts_with("Metadata lookup") {
+                if problem == Some(Problem::NoAnswer) {
                     failed("The file list didn't arrive", "No other player answered, or this PC is offline. Keep trying, or close and pick a release with more players in the Game Hub.")
                 } else {
                     failed("The file list didn't arrive", &error)
@@ -142,7 +138,7 @@ impl App {
                 view.go_label = "Can't download this release".into();
                 failed("This release can't be downloaded", &error)
             };
-            view.state = if setup.key.is_some() && !release { 2 } else { 3 };
+            view.state = if retry { 2 } else { 3 };
             view.message_title = title;
             view.message = message;
         } else if !setup.entries.is_empty() {
@@ -215,7 +211,7 @@ impl App {
         // The file list arrived: every file the player can choose starts ticked.
         if let Some(setup) = self.setup.as_mut() {
             if setup.entries.is_empty() {
-                let job = setup.key.as_ref().and_then(|key| self.downloads.snapshot().into_iter().find(|job| &job.key == key));
+                let job = setup.key.as_ref().and_then(|key| self.downloads.job(key));
                 let entries = job.as_ref().filter(|job| job.state == State::Ready).map(|job| self.downloads.entries(&job.key)).unwrap_or_default();
                 if let Some(job) = job.filter(|_| !entries.is_empty()) {
                     let mut on: Vec<bool> = entries.iter().map(|e| !e.blocked).collect();

@@ -117,7 +117,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                 d.stats.push(("By itself".into(), "Resumes".into()));
                 d.line = "Waiting for your VPN".into();
                 // Still being looked up when the VPN went: nothing to keep, so Cancel forgets it.
-                let cancel = if job.selected.is_none() && job.install_to.is_none() && job.done == 0 { "discard" } else { "cancel" };
+                let cancel = if job.total == 0 && job.done == 0 { "discard" } else { "cancel" };
                 d.actions = vec![("vpn", "VPN settings", "gear"), (cancel, "Cancel", "close")];
             } else {
                 d.status = "Paused".into();
@@ -312,7 +312,6 @@ impl App {
     }
 
     pub fn push_downloads(&mut self) {
-        self.auto_install();
         let jobs = self.downloads.snapshot();
         let installs = self.installer.snapshot();
         let mut changed = false;
@@ -498,7 +497,7 @@ impl App {
 
     /// Delete asks what to delete: only what this download has.
     fn open_delete(&mut self, key: &str) {
-        let Some(job) = self.downloads.snapshot().into_iter().find(|job| job.key == key) else { return };
+        let Some(job) = self.downloads.job(key) else { return };
         let installed = self.installer.snapshot().into_iter().any(|r| r.key == key && r.state == Install::Installed);
         let files = job.folder.is_dir();
         let mut ids = vec![];
@@ -514,7 +513,7 @@ impl App {
 
     fn delete_choices(&self) -> Vec<crate::DlChoice> {
         let Some((key, ids)) = &self.dl_delete else { return vec![] };
-        let job = self.downloads.snapshot().into_iter().find(|job| &job.key == key);
+        let job = self.downloads.job(key);
         let install = self.installer.snapshot().into_iter().find(|r| &r.key == key);
         let dl = job.as_ref().map_or(0, |job| job.done.max(if job.state == State::Complete { job.total } else { 0 }));
         let game = install.as_ref().map_or(0, |r| r.total);
@@ -537,15 +536,11 @@ impl App {
     pub fn delete_choose(&mut self, index: i32) {
         let Some((key, ids)) = self.dl_delete.take() else { return };
         let choice = usize::try_from(index).ok().and_then(|i| ids.get(i).copied()).unwrap_or("cancel");
-        let name = self.downloads.snapshot().into_iter().find(|job| job.key == key).map(|job| job.name).unwrap_or_default();
+        let name = self.downloads.job(&key).map(|job| job.name).unwrap_or_default();
         // It may have started installing while the dialog was open.
         if choice != "cancel" && self.installer.snapshot().iter().any(|r| r.key == key && r.state.active()) {
             self.toast("Installation in progress", "Cancel the installation before deleting it.", 0);
             return self.push_downloads();
-        }
-        if choice != "cancel" {
-            // First, so the install queue never installs it while (or after) it's deleted.
-            let _ = self.downloads.no_install(&key);
         }
         if matches!(choice, "both" | "game") {
             // Never under a running game.
@@ -555,6 +550,8 @@ impl App {
                 self.toast("Quit the game first", &format!("{name} is running."), 2);
                 return self.push_downloads();
             }
+            // First, so the install queue never reinstalls it while (or after) it's deleted.
+            let _ = self.downloads.no_install(&key);
             match self.installer.uninstall(&key) {
                 Ok(_) => {
                     self.install_states.remove(&key);
@@ -574,6 +571,8 @@ impl App {
         };
         match result {
             Ok(()) => {
+                // Gone from the install queue at once (the worker removes it a moment later).
+                if matches!(choice, "download" | "forget") { let _ = self.downloads.no_install(&key); }
                 audio::play(Sound::Select);
                 let what = match choice { "both" => "The game and its download are deleted", "game" => "The game is deleted; its download stays",
                     "download" => "The download is deleted", _ => "Removed from Downloads; every file is kept" };

@@ -1761,6 +1761,7 @@ impl App {
 
     pub fn tick(&mut self) {
         self.push_installs();
+        self.auto_install();
         self.push_downloads();
         if self.overlay == Overlay::Settings && self.edit_index < 0 && self.vpn_seen != crate::settings::vpn_signature() {
             self.refresh_settings();

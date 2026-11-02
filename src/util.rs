@@ -51,9 +51,9 @@ pub fn cache_dir() -> PathBuf {
 /// What a folder is renamed to while it's deleted in the background (games, downloads): hidden,
 /// and finished at the next start if the launcher closed first.
 pub fn deleting_name(key: &str) -> String {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-    format!("{DELETING}{key}-{nanos}")
+    format!("{DELETING}{key}-{}", now_nanos())
 }
+fn now_nanos() -> u128 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()) }
 const DELETING: &str = ".azrak-deleting-";
 
 /// The background deletes still going (one folder per line), so the next start finishes them
@@ -77,6 +77,8 @@ pub fn delete_in_background(doomed: PathBuf, remove: impl FnOnce() -> anyhow::Re
     note_delete(&doomed, true);
     std::thread::spawn(move || match remove() {
         Ok(()) => note_delete(&doomed, false),
+        // Finished by someone else (the start-up sweep) is finished too.
+        Err(_) if std::fs::symlink_metadata(&doomed).is_err() => note_delete(&doomed, false),
         Err(error) => crate::log!("deleting {} failed: {error:#}", doomed.display()),
     });
 }
@@ -87,13 +89,16 @@ pub fn delete_in_background(doomed: PathBuf, remove: impl FnOnce() -> anyhow::Re
 pub fn finish_deletes(dirs: Vec<PathBuf>) {
     use std::os::unix::fs::MetadataExt;
     let noted: Vec<PathBuf> = std::fs::read_to_string(config_dir().join("deleting.txt")).unwrap_or_default().lines().map(PathBuf::from).collect();
+    // Deletes started from now on are this run's own, going already.
+    let started = now_nanos();
     std::thread::spawn(move || {
         let mut found: Vec<PathBuf> = dirs.iter().filter_map(|dir| std::fs::read_dir(dir).ok()).flatten().flatten().map(|e| e.path()).collect();
         found.extend(noted.iter().cloned());
         found.sort();
         found.dedup();
         for path in found {
-            let ours = path.file_name().is_some_and(|name| name.to_string_lossy().starts_with(DELETING))
+            let earlier = path.file_name().and_then(|name| name.to_string_lossy().rsplit('-').next()?.parse::<u128>().ok()).is_none_or(|at| at < started);
+            let ours = earlier && path.file_name().is_some_and(|name| name.to_string_lossy().starts_with(DELETING))
                 && std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir() && m.uid() == unsafe { libc::geteuid() });
             if ours {
                 if let Err(error) = std::fs::remove_dir_all(&path) { crate::log!("deleting {} failed: {error}", path.display()); continue; }

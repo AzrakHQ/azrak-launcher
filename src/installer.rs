@@ -173,26 +173,37 @@ impl Manager {
         ensure!(path.is_absolute() && path.components().count() >= 3 && Some(&path) != home.as_ref()
             && path.components().all(|c| matches!(c, Component::RootDir | Component::Normal(_))),
             "Refusing to delete {}", path.display());
+        // The game, then its update beside it (`<game>-patch`, see place_update) if it has one.
+        // Its DLC stays: shadPS4's add-on folder is shared, and add-ons there are never replaced.
+        let mut patch = path.file_name().context("No folder name")?.to_os_string();
+        patch.push("-patch");
+        let hide = |folder: &Path| -> Result<()> {
+            let parent = Dir::absolute(folder.parent().context("No parent folder")?, false)?;
+            let leaf = component(folder.file_name().context("No folder name")?.as_bytes())?;
+            // Hidden, so the library never lists it while it goes.
+            let doomed = crate::util::deleting_name(key);
+            let hidden = component(doomed.as_bytes())?;
+            let r = unsafe { libc::renameat2(parent.0.as_raw_fd(), leaf.as_ptr(), parent.0.as_raw_fd(), hidden.as_ptr(), libc::RENAME_NOREPLACE) };
+            ensure!(r == 0, "Delete {}: {}", folder.display(), std::io::Error::last_os_error());
+            crate::util::delete_in_background(folder.with_file_name(&doomed), move || {
+                remove_contents(&parent.child(doomed.as_bytes(), false)?, 0)?;
+                let r = unsafe { libc::unlinkat(parent.0.as_raw_fd(), hidden.as_ptr(), libc::AT_REMOVEDIR) };
+                ensure!(r == 0, "{}", std::io::Error::last_os_error());
+                Ok(())
+            });
+            Ok(())
+        };
         match fs::symlink_metadata(&path) {
             Ok(meta) => {
                 ensure!(meta.is_dir() && !meta.file_type().is_symlink(), "{} isn't the installed game's folder", path.display());
-                let parent = Dir::absolute(path.parent().context("No parent folder")?, false)?;
-                let leaf = component(path.file_name().context("No folder name")?.as_bytes())?;
-                // Hidden, so the library never lists it while it goes.
-                let doomed = crate::util::deleting_name(key);
-                let hidden = component(doomed.as_bytes())?;
-                let r = unsafe { libc::renameat2(parent.0.as_raw_fd(), leaf.as_ptr(), parent.0.as_raw_fd(), hidden.as_ptr(), libc::RENAME_NOREPLACE) };
-                ensure!(r == 0, "Delete {}: {}", path.display(), std::io::Error::last_os_error());
-                let full = path.with_file_name(&doomed);
-                crate::util::delete_in_background(full, move || {
-                    remove_contents(&parent.child(doomed.as_bytes(), false)?, 0)?;
-                    let r = unsafe { libc::unlinkat(parent.0.as_raw_fd(), hidden.as_ptr(), libc::AT_REMOVEDIR) };
-                    ensure!(r == 0, "{}", std::io::Error::last_os_error());
-                    Ok(())
-                });
+                hide(&path)?;
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
+        }
+        let patch = path.with_file_name(patch);
+        if fs::symlink_metadata(&patch).is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink()) {
+            if let Err(e) = hide(&patch) { crate::log!("The update beside {} wasn't deleted: {e:#}", path.display()); }
         }
         jobs.retain(|j| j.key != key);
         self.core.save(&jobs)?;
@@ -1458,13 +1469,16 @@ mod uninstall_tests {
         fs::write(&outside, b"keep me").unwrap();
         std::os::unix::fs::symlink(&outside, game.join("sce_sys").join("link")).unwrap();
         std::os::unix::fs::symlink(temp.path(), game.join("dir-link")).unwrap();
+        let patch = temp.path().join("library").join("PPSA00001-patch");
+        fs::create_dir_all(&patch).unwrap();
+        fs::write(patch.join("eboot.bin"), b"update").unwrap();
         let store = temp.path().join("installs");
         save_records(&store, &[Record { key: "k".repeat(40), topic: 1, name: "Game".into(), state: State::Installed, done: 1, total: 1,
             error: String::new(), path: Some(game.clone()), title_id: "PPSA00001".into() }]).unwrap();
         let manager = Manager::at(store.clone());
         assert!(manager.uninstall("other").is_err());
         assert_eq!(manager.uninstall(&"k".repeat(40)).unwrap(), game);
-        assert!(!game.exists());
+        assert!(!game.exists() && !patch.exists(), "the game and its update");
         // Deleted in the background: wait for the library folder to empty.
         let library = temp.path().join("library");
         let start = std::time::Instant::now();
