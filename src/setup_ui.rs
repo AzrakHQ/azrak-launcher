@@ -19,6 +19,8 @@ pub struct Setup {
     /// Whether this panel made the transfer (closing it then forgets the transfer).
     pub created: bool,
     pub entries: Vec<downloads::Entry>,
+    /// Each entry's number in the torrent (padding files aren't shown, so they differ).
+    pub indices: Vec<usize>,
     /// Ticked files, one per entry.
     pub on: Vec<bool>,
     /// Why it couldn't be looked up.
@@ -92,7 +94,7 @@ impl App {
             },
         };
         if let Some(old) = looked_up.filter(|old| key.as_ref() != Some(old)) { let _ = self.downloads.discard(&old); }
-        self.setup = Some(Setup { key, platform, created, entries: vec![], on: vec![], error, begin_error: String::new(),
+        self.setup = Some(Setup { key, platform, created, entries: vec![], indices: vec![], on: vec![], error, begin_error: String::new(),
             focus: Focus::Cancel, moved: false, edit: 0, begun: false, drives: Default::default() });
         self.setup_model.set_vec(vec![]);
         let ui = self.ui();
@@ -179,7 +181,7 @@ impl App {
             Some(d) if !known => (format!("{} free on {}", size_label(d.free), d.mount.display()), 0.0, false),
             Some(d) => {
                 // On the same drive as the download, the download takes its space first.
-                let same = dl_drive.as_ref().is_some_and(|dl| dl.dev == d.dev);
+                let same = dl_drive.as_ref().is_some_and(|dl| dl.shares(d));
                 let free = if same { d.free.saturating_sub(need) } else { d.free };
                 if need > free && short.is_none() { short = Some((d.mount.clone(), need - free, "the installed game", "install to another drive")); }
                 let after = if same { " after the download" } else { "" };
@@ -233,14 +235,11 @@ impl App {
                 let job = setup.key.as_ref().and_then(|key| self.downloads.job(key));
                 let entries = job.as_ref().filter(|job| job.state == State::Ready).map(|job| self.downloads.entries(&job.key)).unwrap_or_default();
                 if let Some(job) = job.filter(|_| !entries.is_empty()) {
-                    let mut on: Vec<bool> = entries.iter().map(|e| !e.blocked).collect();
-                    if let Some(selected) = &job.selected {
-                        let mut picked = vec![false; on.len()];
-                        for &i in selected { if let Some(p) = picked.get_mut(i) { *p = true; } }
-                        on.iter_mut().zip(picked).for_each(|(on, picked)| *on &= picked);
-                    }
-                    setup.on = on;
-                    setup.entries = entries;
+                    let mut picked = vec![job.selected.is_none(); entries.len()];
+                    for &i in job.selected.iter().flatten() { if let Some(p) = picked.get_mut(i) { *p = true; } }
+                    let shown: Vec<(usize, downloads::Entry)> = entries.into_iter().enumerate().filter(|(_, e)| !e.padding).collect();
+                    setup.on = shown.iter().map(|(i, e)| !e.blocked && picked[*i]).collect();
+                    (setup.indices, setup.entries) = shown.into_iter().unzip();
                     // Why it couldn't start last time, until the player changes something.
                     setup.begin_error = job.error.clone();
                 }
@@ -400,7 +399,8 @@ impl App {
             self.push_setup();
             return;
         }
-        let selected: Vec<usize> = self.setup.as_ref().unwrap().on.iter().enumerate().filter(|(_, on)| **on).map(|(i, _)| i).collect();
+        let setup = self.setup.as_ref().unwrap();
+        let selected: Vec<usize> = setup.on.iter().zip(&setup.indices).filter(|(on, _)| **on).map(|(_, &i)| i).collect();
         let ui = self.ui();
         let (download_dir, install_dir) = (ui.get_setup_dl_path().trim().to_string(), ui.get_setup_inst_path().trim().to_string());
         match self.downloads.begin(&key, util::expand_home(&download_dir), selected, Some(util::expand_home(&install_dir))) {

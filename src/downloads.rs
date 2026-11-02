@@ -108,6 +108,9 @@ pub struct Entry {
     /// Left out for safety: a program a console game never needs (a Windows .exe in a PS4
     /// release). It can't be chosen.
     #[serde(default)] pub blocked: bool,
+    /// A BEP 47 padding file: only there to align pieces. Never downloaded (the engine doesn't
+    /// make them) or shown; it counts only for the torrent's file numbers.
+    #[serde(default)] pub padding: bool,
 }
 
 impl Job {
@@ -202,7 +205,7 @@ impl Manager {
     pub fn left_out(&self, key: &str) -> Result<std::collections::BTreeSet<String>> {
         let selected = self.jobs.lock().unwrap().iter().find(|job| job.key == key).map(|job| job.selected.clone()).context("Transfer not found")?;
         let Some(selected) = selected.as_deref() else { return Ok(Default::default()) };
-        let (_, files) = inspect_metadata(&read_torrent(&self.store, key)?, key, None)?;
+        let (_, files, _) = inspect_metadata(&read_torrent(&self.store, key)?, key, None)?;
         let chosen = chosen(Some(selected));
         Ok(files.into_iter().enumerate().filter(|(i, _)| !chosen(*i)).map(|(_, (path, _))| path).collect())
     }
@@ -247,8 +250,9 @@ impl Manager {
     /// at once, so the install queue can't pick it up in between; the worker saves it.
     pub fn set_install_to(&self, key: &str, to: Option<PathBuf>) -> Result<()> {
         if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key) { job.install_to = to; }
-        // Waits for room rather than leaving it unsaved (a deleted game mustn't reinstall).
-        self.tx.blocking_send(Command::Save).context("Download worker is unavailable")
+        // Saved by the worker now, or with its next save (it saves on quitting too).
+        let _ = self.tx.try_send(Command::Save);
+        Ok(())
     }
 
     /// Forget a download that never started (the player closed the Download & install panel):
@@ -468,13 +472,15 @@ fn check_path(folder: &Path, relative: &Path) -> Result<()> {
 /// The torrent's total size and its files (paths inside the download, with sizes).
 /// A torrent's size and files, refusing unsafe ones. With `folder`, also what's already on disk
 /// where it would write (without, it only reads the torrent: for listing its files).
-fn inspect_metadata(bytes: &[u8], key: &str, folder: Option<&Path>) -> Result<(u64, Vec<(String, u64)>)> {
+/// Also which files are padding (in the same order).
+fn inspect_metadata(bytes: &[u8], key: &str, folder: Option<&Path>) -> Result<(u64, Vec<(String, u64)>, Vec<bool>)> {
     ensure!(bytes.len() as u64 <= MAX_METADATA, "Torrent metadata is too large");
     let meta = librqbit::torrent_from_bytes(bytes).context("Invalid torrent metadata")?;
     ensure!(meta.info_hash.as_string() == key, "Metadata info hash does not match the magnet");
     let info = meta.info.data.validate().context("Unsafe torrent metadata")?;
     let mut total = 0u64;
     let mut files = Vec::new();
+    let mut padding = Vec::new();
     let mut paths = std::collections::BTreeSet::new();
     for file in info.iter_file_details() {
         ensure!(files.len() < 10_000, "Torrent contains too many files");
@@ -484,15 +490,16 @@ fn inspect_metadata(bytes: &[u8], key: &str, folder: Option<&Path>) -> Result<(u
         let path = file.filename.to_pathbuf();
         match folder { Some(folder) => check_path(folder, &path)?, None => check_names(&path)? }
         ensure!(paths.insert(path.clone()), "Duplicate torrent file path");
-        total = total.checked_add(file.len).context("Torrent size overflow")?;
+        if !file.attrs().padding { total = total.checked_add(file.len).context("Torrent size overflow")?; }
         ensure!(total <= i64::MAX as u64, "Torrent is too large");
         files.push((components.join("/"), file.len));
+        padding.push(file.attrs().padding);
     }
     for path in &paths {
         ensure!(!path.ancestors().skip(1).any(|parent| paths.contains(parent)), "Conflicting torrent file paths");
     }
     ensure!(total > 0, "Torrent is empty");
-    Ok((total, files))
+    Ok((total, files, padding))
 }
 
 /// A download's saved torrent (from its lookup).
@@ -505,8 +512,8 @@ fn read_torrent(store: &Path, key: &str) -> Result<Vec<u8>> {
 }
 
 /// A torrent's files as the player chooses from them.
-fn entries_of(platform: Option<crate::platform::Platform>, files: Vec<(String, u64)>) -> Vec<Entry> {
-    files.into_iter().map(|(path, size)| Entry { blocked: blocked(platform, &path), path, size }).collect()
+fn entries_of(platform: Option<crate::platform::Platform>, files: Vec<(String, u64)>, padding: Vec<bool>) -> Vec<Entry> {
+    files.into_iter().zip(padding).map(|((path, size), padding)| Entry { blocked: padding || blocked(platform, &path), padding, path, size }).collect()
 }
 
 /// An error as the player sees it. Engine errors can contain tracker/magnet URLs: redacted.
@@ -520,8 +527,8 @@ fn shown(error: &anyhow::Error) -> String {
 /// out); one whose list can't be read is looked up again on Retry.
 fn restore_entries(store: &Path, job: &mut Job) {
     let read = || -> Result<Vec<Entry>> {
-        let (_, files) = inspect_metadata(&read_torrent(store, &job.key)?, &job.key, None)?;
-        Ok(entries_of(job.platform, files))
+        let (_, files, padding) = inspect_metadata(&read_torrent(store, &job.key)?, &job.key, None)?;
+        Ok(entries_of(job.platform, files, padding))
     };
     match read() {
         Ok(entries) if entries.iter().any(|entry| !entry.blocked) => {
@@ -587,7 +594,7 @@ fn payload_present(bytes: &[u8], folder: &Path, selected: Option<&[usize]>) -> R
     let meta = librqbit::torrent_from_bytes(bytes).context("Invalid torrent metadata")?;
     let info = meta.info.data.validate().context("Unsafe torrent metadata")?;
     let chosen = chosen(selected);
-    for (_, file) in info.iter_file_details().enumerate().filter(|(i, _)| chosen(*i)) {
+    for (_, file) in info.iter_file_details().enumerate().filter(|(i, file)| chosen(*i) && !file.attrs().padding) {
         let found = std::fs::symlink_metadata(folder.join(file.filename.to_pathbuf())).ok();
         ensure!(found.is_some_and(|m| m.is_file() && m.len() == file.len), FILES_CHANGED);
     }
@@ -600,7 +607,7 @@ fn required_space(bytes: &[u8], folder: &Path, selected: Option<&[usize]>) -> Re
     let info = meta.info.data.validate()?;
     let mut required = 0u64;
     let chosen = chosen(selected);
-    for (_, file) in info.iter_file_details().enumerate().filter(|(i, _)| chosen(*i)) {
+    for (_, file) in info.iter_file_details().enumerate().filter(|(i, file)| chosen(*i) && !file.attrs().padding) {
         let path = file.filename.to_pathbuf();
         check_path(folder, &path)?;
         let allocated = match std::fs::symlink_metadata(folder.join(path)) {
@@ -613,13 +620,26 @@ fn required_space(bytes: &[u8], folder: &Path, selected: Option<&[usize]>) -> Re
     Ok(required)
 }
 
-fn available_space(folder: &Path) -> Result<u64> {
+fn available_space(folder: &Path) -> Result<u64> { Ok(space(folder)?.0) }
+
+/// A folder's filesystem: free space and whole size.
+fn space(folder: &Path) -> Result<(u64, u64)> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(folder.as_os_str().as_bytes())?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     ensure!(unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } == 0, "Cannot check destination free space");
     let stat = unsafe { stat.assume_init() };
-    Ok((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+    Ok(((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64), (stat.f_blocks as u64).saturating_mul(stat.f_frsize as u64)))
+}
+
+/// Free space where `path` is (or would be: the nearest folder that exists).
+pub fn free_space(path: &Path) -> Option<u64> {
+    available_space(path.ancestors().find(|p| p.is_dir())?).ok()
+}
+
+impl Drive {
+    /// The same filesystem: one's download takes the other's free space.
+    pub fn shares(&self, other: &Drive) -> bool { self.dev == other.dev || (self.size == other.size && self.free == other.free) }
 }
 
 /// The drive a folder is on (or would be on: the folder needn't exist yet).
@@ -628,6 +648,8 @@ pub struct Drive {
     pub free: u64,
     /// Which filesystem: two folders on the same one share its free space.
     pub dev: u64,
+    /// Its whole size: subvolumes of one pool (btrfs) differ in `dev` but not in size or free space.
+    pub size: u64,
     /// Where it's mounted ("/home", "/mnt/games"), for saying which drive.
     pub mount: PathBuf,
 }
@@ -640,7 +662,8 @@ pub fn drive(path: &Path) -> Option<Drive> {
     let mount = existing.ancestors()
         .take_while(|p| std::fs::metadata(p).is_ok_and(|m| m.dev() == dev))
         .last().unwrap_or(existing).to_path_buf();
-    Some(Drive { free: available_space(existing).ok()?, dev, mount })
+    let (free, size) = space(existing).ok()?;
+    Some(Drive { free, dev, size, mount })
 }
 
 
@@ -816,12 +839,12 @@ impl Worker {
         if job.state != State::Resolving { return Ok(()); }
         let checked = (|| -> Result<(u64, Vec<Entry>)> {
             // The folder may still change (and is checked when it starts): only the release here.
-            let (total, files) = inspect_metadata(&resolved.bytes, &job.key, None)?;
+            let (total, files, padding) = inspect_metadata(&resolved.bytes, &job.key, None)?;
             // Nothing is downloaded yet: a release the launcher couldn't install stops here.
-            if let Some(why) = job.platform.and_then(|platform| crate::package::unsupported(platform, &files)) {
+            if let Some(why) = job.platform.and_then(|platform| crate::package::unsupported(platform, &files.iter().zip(&padding).filter(|(_, pad)| !**pad).map(|(file, _)| file.clone()).collect::<Vec<_>>())) {
                 bail!("Azrak can't install this release: {why}. Nothing was downloaded; choose another release of this game.");
             }
-            let entries = entries_of(job.platform, files);
+            let entries = entries_of(job.platform, files, padding);
             ensure!(entries.iter().any(|entry| !entry.blocked), "Nothing in this release can be downloaded: it only holds programs a console game never needs.");
             Ok((total, entries))
         })();
@@ -850,7 +873,7 @@ impl Worker {
             if !self.store.join(format!("{key}.torrent")).is_file() { return self.resolve(key).await; }
             let bytes = read_torrent(&self.store, key)?;
             let folder = owned_folder(&job)?;
-            let (total, files) = inspect_metadata(&bytes, key, Some(&folder))?;
+            let (total, files, _) = inspect_metadata(&bytes, key, Some(&folder))?;
             let selected = job.selected.as_deref();
             let chosen = chosen(selected);
             let total = if selected.is_some() { files.iter().enumerate().filter(|(i, _)| chosen(*i)).map(|(_, f)| f.1).sum() } else { total };
@@ -1024,7 +1047,7 @@ impl Worker {
         // Without its saved torrent, starting would look it up again and forget the choice.
         let started = match self.job(key).map(|job| owned_folder(&job)) {
             Some(Err(error)) => Err(error),
-            _ if !self.store.join(format!("{key}.torrent")).is_file() => Err(anyhow::anyhow!("Its file list is gone. Close this and press Download again.")),
+            _ if !self.store.join(format!("{key}.torrent")).is_file() => Err(anyhow::anyhow!("Its file list is gone. Remove it from Downloads, then press Download again.")),
             _ => self.start(key).await,
         };
         if let Err(error) = started {
@@ -1066,18 +1089,15 @@ impl Worker {
         let present = std::fs::symlink_metadata(&job.folder).is_ok();
         let own = job.folder.file_name().is_some_and(|name| name == format!("torrent-{key}").as_str()) && check_owned(&job.folder, key).is_ok();
         ensure!(!present || own, "Refusing to delete {}: it isn't this download's own folder", job.folder.display());
+        // Hidden first (a seed keeps its open files meanwhile), so a rename that fails leaves it
+        // sharing as it was; then stopped, and deleted in the background so other transfers never
+        // wait for it. remove_dir_all removes links, never what they point to.
+        let doomed = job.folder.with_file_name(crate::util::deleting_name(key));
+        if present { std::fs::rename(&job.folder, &doomed).with_context(|| format!("Delete {}", job.folder.display()))?; }
         self.stop_job(key, job.state).await?;
-        match std::fs::symlink_metadata(&job.folder) {
-            Ok(_) => {
-                // Hidden at once, deleted in the background so other transfers never wait for it.
-                // remove_dir_all removes links, never what they point to.
-                let doomed = job.folder.with_file_name(crate::util::deleting_name(key));
-                std::fs::rename(&job.folder, &doomed).with_context(|| format!("Delete {}", job.folder.display()))?;
-                let gone = doomed.clone();
-                crate::util::delete_in_background(doomed, move || Ok(std::fs::remove_dir_all(&gone)?));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+        if present {
+            let gone = doomed.clone();
+            crate::util::delete_in_background(doomed, move || Ok(std::fs::remove_dir_all(&gone)?));
         }
         self.remove(key).await
     }
@@ -2163,11 +2183,44 @@ mod tests {
     }
 
     #[test]
+    fn padding_files_are_never_chosen_shown_or_expected_on_disk() {
+        let temp = tempfile::tempdir().unwrap();
+        // Game/a.pkg, a BEP 47 padding file, Game/b.pkg.
+        let mut info = b"d5:filesl".to_vec();
+        for (path, pad) in [(&["Game", "a.pkg"][..], false), (&[".pad", "0"][..], true), (&["Game", "b.pkg"][..], false)] {
+            info.push(b'd');
+            if pad { info.extend_from_slice(b"4:attr"); bstring(&mut info, b"p"); }
+            info.extend_from_slice(b"6:lengthi65536e4:pathl");
+            for part in path { bstring(&mut info, part.as_bytes()); }
+            info.extend_from_slice(b"ee");
+        }
+        info.extend_from_slice(b"e4:name7:fixture12:piece lengthi65536e6:pieces");
+        bstring(&mut info, &[0; 60]);
+        info.push(b'e');
+        let key = sha1_smol::Sha1::from(&info).digest().to_string();
+        let mut bytes = b"d4:info".to_vec(); bytes.extend(info); bytes.push(b'e');
+        let (total, _, padding) = inspect_metadata(&bytes, &key, None).unwrap();
+        assert_eq!((total, padding), (2 * 65536, vec![false, true, false]), "padding isn't counted");
+        let mut job = job(temp.path(), &key); job.platform = Some(crate::platform::Platform::Ps4);
+        let folder = job.folder.clone();
+        let mut worker = Worker::new(temp.path().join("store"), Arc::new(Mutex::new(vec![job])), Policy { local_only: true, ..Default::default() });
+        worker.resolved(Resolved { key: key.clone(), bytes: bytes.clone(), peers: vec![] }).unwrap();
+        let job = worker.job(&key).unwrap();
+        assert_eq!(job.selected, Some(vec![0, 2]), "never chosen");
+        assert!(job.entries[1].padding && job.entries[1].blocked);
+        // The engine never makes it: a finished download without it is all there.
+        std::fs::create_dir_all(folder.join("Game")).unwrap();
+        for name in ["a.pkg", "b.pkg"] { std::fs::write(folder.join("Game").join(name), vec![0; 65536]).unwrap(); }
+        payload_present(&bytes, &folder, None).unwrap();
+        payload_present(&bytes, &folder, Some(&[0, 2])).unwrap();
+    }
+
+    #[test]
     fn older_launchers_can_still_read_the_manifest() {
         // v1.22 and before require every field they know, `files` included.
         let temp = tempfile::tempdir().unwrap();
         let mut j = job(temp.path(), &"e".repeat(40));
-        j.entries = vec![Entry { path: "a.pkg".into(), size: 1, blocked: false }];
+        j.entries = vec![Entry { path: "a.pkg".into(), size: 1, blocked: false, padding: false }];
         j.selected = Some(vec![0]);
         let saved = serde_json::to_value(&Manifest { schema: 1, jobs: vec![j] }).unwrap();
         let job = &saved["jobs"][0];

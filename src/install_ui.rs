@@ -54,8 +54,7 @@ impl App {
 
     /// Install a finished download into `destination` (a folder).
     pub fn start_install(&mut self, key: &str, destination: std::path::PathBuf) -> anyhow::Result<()> {
-        let job = self.downloads.snapshot().into_iter().find(|job| job.key == key && job.state == downloads::State::Complete)
-            .context("The download isn't finished")?;
+        let job = self.downloads.job(key).filter(|job| job.state == downloads::State::Complete).context("The download isn't finished")?;
         let ids = self.games.iter().find(|game| game.g.id == job.topic).map(|game| {
             std::iter::once(game.g.title_id.clone()).chain(game.g.title_ids.clone())
                 .filter(|id| crate::psn::valid_title_id(id)).collect()
@@ -89,6 +88,8 @@ impl App {
         let destination = job.install_to.clone().unwrap();
         if let Err(error) = self.start_install(&job.key, destination) {
             self.install_failures.insert(job.key.clone(), format!("{error:#}"));
+            // It waits for Install by hand from now on (not tried again at every start).
+            let _ = self.downloads.set_install_to(&job.key, None);
             self.toast_action("Couldn't install", &job.name, 2, "downloads", "See why");
         } else {
             self.push_installs();

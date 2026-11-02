@@ -514,7 +514,7 @@ unsafe fn vulkan_devices() -> Vec<Probed> {
 
 /// Free space where games go, in GiB (the nearest existing folder).
 pub fn free_gb(dir: &Path) -> Option<f64> {
-    crate::downloads::drive(dir).map(|drive| drive.free as f64 / (1u64 << 30) as f64)
+    crate::downloads::free_space(dir).map(|free| free as f64 / (1u64 << 30) as f64)
 }
 
 #[cfg(test)]
