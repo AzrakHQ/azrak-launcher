@@ -202,6 +202,9 @@ pub struct App {
     pub chosen_dirs: Option<(String, String, String)>,
     /// The same, for a download that couldn't start with them: its panel opens with them again.
     pub tried_dirs: Option<(String, String, String)>,
+    /// "Delete the game and its download": the game goes once its download is really gone
+    /// (download key, name, where it was set to install).
+    pub pending_uninstall: Option<(String, String, Option<std::path::PathBuf>)>,
     pub download_states: HashMap<String, crate::downloads::State>,
     pub download_model: Rc<VecModel<crate::DownloadData>>,
     /// The Download & install panel, while it's open.
@@ -525,6 +528,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         install_failures: HashMap::new(),
         chosen_dirs: None,
         tried_dirs: None,
+        pending_uninstall: None,
         download_states: HashMap::new(),
         download_model: Rc::new(VecModel::default()),
         setup: None,
@@ -1771,6 +1775,7 @@ impl App {
 
     pub fn tick(&mut self) {
         self.settle_chosen_dirs();
+        self.settle_pending_uninstall();
         self.push_installs();
         self.auto_install();
         self.push_downloads();

@@ -79,7 +79,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             d.status = "Getting the file list".into();
             d.line = "Getting the file list".into();
             // Looked up again after it had started: cancelling keeps what it has.
-            d.actions = vec![(if job.done == 0 { "discard" } else { "cancel" }, "Cancel", "close")];
+            d.actions = vec![(if job.total == 0 && job.done == 0 { "discard" } else { "cancel" }, "Cancel", "close")];
         }
         State::Ready => {
             (d.group, d.kind) = (1, 1);
@@ -574,16 +574,23 @@ impl App {
             self.toast("Couldn't delete it", &format!("{error:#}"), 2);
             return self.push_downloads();
         }
-        if matches!(choice, "both" | "game") {
+        // Both: the game goes once the download is gone (the worker can still refuse it).
+        if choice == "both" {
+            self.pending_uninstall = Some((key.clone(), name.clone(), install_to));
+            audio::play(Sound::Select);
+            self.toast(&name, "Deleting its download, then the game", 1);
+            self.dl_btn = -1;
+            return self.push_downloads();
+        }
+        if choice == "game" {
             match self.installer.uninstall(&key) {
                 Ok(_) => {
                     self.install_states.remove(&key);
                     self.rescan_library();
                 }
                 Err(error) => {
-                    if choice == "game" { self.downloads.set_install_to(&key, install_to); }
-                    let also = if choice == "both" { " Its download is being deleted." } else { "" };
-                    self.toast("Couldn't delete the game", &format!("{error:#}.{also}"), 2);
+                    self.downloads.set_install_to(&key, install_to);
+                    self.toast("Couldn't delete the game", &format!("{error:#}"), 2);
                     return self.push_downloads();
                 }
             }
@@ -595,11 +602,41 @@ impl App {
         }
         audio::play(Sound::Select);
         // The download itself goes a moment later (the worker deletes it).
-        let what = match choice { "both" => "The game is deleted, and its download is going", "game" => "The game is deleted; its download stays",
+        let what = match choice { "game" => "The game is deleted; its download stays",
             "download" => "Its download is being deleted", _ => "Removed from Downloads; every file is kept" };
         self.toast(&name, what, 1);
         self.dl_btn = -1;
         self.push_downloads();
+    }
+
+    /// "Delete the game and its download", second half: once the worker has deleted the download,
+    /// the game goes; if it refused, the game stays (and installs by itself again as before).
+    pub fn settle_pending_uninstall(&mut self) {
+        let Some((key, name, install_to)) = self.pending_uninstall.clone() else { return };
+        match self.downloads.job(&key) {
+            None => {
+                self.pending_uninstall = None;
+                // Started meanwhile: it stays (never deleted under a running game).
+                let path = self.installer.snapshot().into_iter().find(|r| r.key == key).and_then(|r| r.path);
+                if path.as_ref().and_then(|p| self.locals.iter().position(|l| &l.l.path == p)).is_some_and(|l| self.session_for_local(l).is_some()) {
+                    return self.toast("Its download is deleted; the game is running, so it stays", &name, 2);
+                }
+                match self.installer.uninstall(&key) {
+                    Ok(_) => {
+                        self.install_states.remove(&key);
+                        self.rescan_library();
+                        self.toast(&name, "The game and its download are deleted", 1);
+                    }
+                    Err(error) => self.toast("Its download is deleted, but the game couldn't be", &format!("{error:#}"), 2),
+                }
+            }
+            Some(job) if !job.error.is_empty() => {
+                self.pending_uninstall = None;
+                self.downloads.set_install_to(&key, install_to);
+                self.toast("Couldn't delete its download, so the game stays", &job.error, 2);
+            }
+            Some(_) => {}
+        }
     }
 
     pub fn act_downloads(&mut self, action: Act) {

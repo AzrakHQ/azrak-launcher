@@ -324,8 +324,8 @@ impl Manager {
     pub fn action(&self, key: &str, action: &str) -> Result<()> {
         if action == "delete" { self.check_delete(key)?; }
         if matches!(action, "delete" | "remove") { self.unreadable.lock().unwrap().remove(key); }
-        let jobs = self.jobs.lock().unwrap();
-        let job = jobs.iter().find(|job| job.key == key).context("Transfer not found")?;
+        let mut jobs = self.jobs.lock().unwrap();
+        let job = jobs.iter_mut().find(|job| job.key == key).context("Transfer not found")?;
         let command = match action {
             "start" if job.state == State::Ready => Command::Start(key.into()),
             "resume" if job.state == State::Paused => Command::Start(key.into()),
@@ -339,7 +339,10 @@ impl Manager {
             "share" if job.state == State::Complete && !job.seeding && !job.verifying => Command::Seed(key.into()),
             _ => return Ok(()),
         };
-        self.tx.try_send(command).context("Download worker is busy or unavailable")
+        self.tx.try_send(command).context("Download worker is busy or unavailable")?;
+        // A refused delete writes why: an older note mustn't read as that.
+        if action == "delete" { job.error.clear(); }
+        Ok(())
     }
 
     /// Changes future completion behavior; enabling never starts a restored/stopped torrent.
@@ -475,6 +478,11 @@ fn check_owned(folder: &Path, key: &str) -> Result<()> {
     ensure!(std::fs::read_to_string(folder.join(MARKER)).ok().as_deref() == Some(key),
         "Refusing to overwrite an existing folder not owned by this transfer");
     Ok(())
+}
+
+/// The same folder, however each path reaches it (one that doesn't exist is no other's).
+fn same_folder(a: &Path, b: &Path) -> bool {
+    a == b || a.canonicalize().ok().is_some_and(|a| b.canonicalize().ok() == Some(a))
 }
 
 /// Remove a transfer folder that holds nothing but its ownership marker. Anything else in it
@@ -670,9 +678,10 @@ fn counts(stats: &librqbit::TorrentStats, job: &Job) -> bool {
 /// A download that never started: nothing downloaded, so closing the panel forgets it.
 fn unstarted(job: &Job) -> bool {
     let state = match job.state {
-        State::Resolving | State::Ready | State::Failed => true,
-        // Paused before its file list arrived (nothing else has no size).
-        State::Paused => job.total == 0,
+        State::Ready => true,
+        // Before its file list arrived (only that has no size; one looked up again after it
+        // started keeps its size).
+        State::Resolving | State::Failed | State::Paused => job.total == 0,
         _ => false,
     };
     state && job.done == 0 && !job.starting
@@ -720,8 +729,15 @@ fn required_space(bytes: &[u8], folder: &Path, selected: Option<&[usize]>) -> Re
     let info = meta.info.data.validate()?;
     let mut required = 0u64;
     let chosen = chosen(selected);
-    let files: Vec<(u64, bool, bool)> = info.iter_file_details().enumerate().map(|(i, file)| (file.len, chosen(i), file.attrs().padding)).collect();
-    required = required.checked_add(spill(&files, info.lengths().default_piece_length() as u64)).context("Torrent size overflow")?;
+    // A left-out file already holds what it got written (resuming): only the rest is needed.
+    let held = |path: std::path::PathBuf| std::fs::symlink_metadata(folder.join(path)).map_or(0, |m| m.blocks().saturating_mul(512));
+    let piece = info.lengths().default_piece_length() as u64;
+    let files: Vec<(u64, bool, bool)> = info.iter_file_details().enumerate().map(|(i, file)| {
+        let (chosen, padding) = (chosen(i), file.attrs().padding);
+        let len = if chosen || padding { file.len } else { file.len.min(2 * piece).saturating_sub(held(file.filename.to_pathbuf())) };
+        (len, chosen, padding)
+    }).collect();
+    required = required.checked_add(spill(&files, piece)).context("Torrent size overflow")?;
     for (_, file) in info.iter_file_details().enumerate().filter(|(i, file)| chosen(*i) && !file.attrs().padding) {
         let path = file.filename.to_pathbuf();
         check_path(folder, &path)?;
@@ -1203,7 +1219,7 @@ impl Worker {
         };
         if let Err(error) = started {
             // Back to choosing, saying why: another folder (or fewer files) may work.
-            if folder != job.folder { remove_unused(&folder, key); }
+            if !same_folder(&folder, &job.folder) { remove_unused(&folder, key); }
             for dir in &made { let _ = std::fs::remove_dir(dir); }
             self.update(key, |j| {
                 j.state = State::Ready; j.starting = false; j.folder = job.folder.clone(); j.total = job.total; j.install_to = job.install_to.clone();
@@ -1214,7 +1230,7 @@ impl Worker {
         }
         // Started (or waiting for the VPN). Looking it up made an empty folder where downloads
         // went by default: not there now. The file list was only for choosing.
-        if folder != job.folder { remove_unused(&job.folder, key); }
+        if !same_folder(&folder, &job.folder) { remove_unused(&job.folder, key); }
         self.update(key, |j| { j.entries = vec![]; j.starting = false; if all { j.selected = None; } });
         self.persist();
         Ok(())
@@ -1226,13 +1242,14 @@ impl Worker {
         let key = job.key.as_str();
         // Download pressed again meanwhile: the new lookup has this key (and may use what's here).
         if self.job(key).is_some() { return Ok(()); }
-        self.stop_job(key, State::Cancelled).await?;
+        // Cleaned up all the same if stopping fails (nothing else would, it's off the list).
+        let stopped = self.stop_job(key, State::Cancelled).await;
         let _ = std::fs::remove_file(self.store.join(format!("{key}.torrent")));
         remove_unused(&job.folder, key);
         self.peers.remove(key);
         self.persist();
         self.stop_idle_session().await;
-        Ok(())
+        stopped
     }
 
     /// Delete a download's files (its own folder, checked by the marker inside it), then forget it.

@@ -130,7 +130,8 @@ impl App {
         let Some((key, download_dir, install_dir)) = self.chosen_dirs.clone() else { return };
         match self.downloads.job(&key) {
             Some(job) if job.state == State::Ready && job.starting => return,
-            Some(job) if matches!(job.state, State::Checking | State::Downloading | State::Paused | State::Complete) => {
+            // Under way (however it goes on): it used them.
+            Some(job) if job.state != State::Ready => {
                 let mut cfg = self.cfg.lock().unwrap();
                 (cfg.download_dir, cfg.install_dir) = (download_dir, install_dir);
                 cfg.save();
