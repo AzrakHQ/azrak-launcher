@@ -117,7 +117,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                 d.stats.push(("By itself".into(), "Resumes".into()));
                 d.line = "Waiting for your VPN".into();
                 // Still being looked up when the VPN went: nothing to keep, so Cancel forgets it.
-                let cancel = if job.selected.is_none() && job.entries.is_empty() && job.done == 0 { "discard" } else { "cancel" };
+                let cancel = if job.selected.is_none() && job.entries.is_empty() && job.install_to.is_none() && job.done == 0 { "discard" } else { "cancel" };
                 d.actions = vec![("vpn", "VPN settings", "gear"), (cancel, "Cancel", "close")];
             } else {
                 d.status = "Paused".into();

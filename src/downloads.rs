@@ -14,7 +14,7 @@ use std::num::NonZeroU32;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, Id, JoinError, JoinSet};
 
@@ -54,6 +54,9 @@ pub struct Job {
     /// Stopped because "download only through a VPN" is on and the VPN isn't connected;
     /// resumes by itself when it is.
     #[serde(default)] pub waiting_vpn: bool,
+    /// The player pressed Share again while sharing is off in Settings: it shares until Stop
+    /// sharing (or the setting is turned off), across restarts.
+    #[serde(default)] pub shared_by_hand: bool,
     /// What it's for: a download the launcher couldn't install stops once its file list is known.
     #[serde(default)] pub platform: Option<crate::platform::Platform>,
     /// Every file in the torrent, in its order, while the player chooses what to download.
@@ -123,6 +126,7 @@ pub struct Manager {
     jobs: Arc<Mutex<Vec<Job>>>,
     tx: mpsc::Sender<Command>,
     thread: Option<std::thread::JoinHandle<()>>,
+    store: PathBuf,
 }
 
 impl Manager {
@@ -136,20 +140,35 @@ impl Manager {
         let jobs = Arc::new(Mutex::new(jobs));
         let (tx, rx) = mpsc::channel(64);
         let shared = jobs.clone();
+        let worker_store = store.clone();
         let thread = std::thread::Builder::new().name("torrent-worker".into()).spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build() {
                 Ok(runtime) => runtime,
                 Err(error) => { crate::log!("Could not create download runtime: {error}"); return; }
             };
-            runtime.block_on(Worker::new(store, shared, policy).run(rx));
+            runtime.block_on(Worker::new(worker_store, shared, policy).run(rx));
             runtime.shutdown_timeout(Duration::from_secs(2));
         }).expect("could not create download worker");
-        Self { jobs, tx, thread: Some(thread) }
+        Self { jobs, tx, thread: Some(thread), store }
     }
 
     pub fn snapshot(&self) -> Vec<Job> { self.jobs.lock().unwrap().clone() }
 
-    /// Called only after the user confirms metadata lookup and its network behavior.
+    /// The files of a download the player left out (paths inside its folder).
+    pub fn left_out(&self, key: &str) -> Result<std::collections::BTreeSet<String>> {
+        let job = self.jobs.lock().unwrap().iter().find(|job| job.key == key).cloned().context("Transfer not found")?;
+        let Some(selected) = job.selected.as_deref() else { return Ok(Default::default()) };
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(self.store.join(format!("{key}.torrent"))).context("Torrent metadata is missing")?
+            .take(MAX_METADATA + 1).read_to_end(&mut bytes)?;
+        let (_, files) = inspect_metadata(&bytes, key, &job.folder)?;
+        let chosen = chosen(Some(selected));
+        Ok(files.into_iter().enumerate().filter(|(i, _)| !chosen(*i)).map(|(_, (path, _))| path).collect())
+    }
+
+    /// Look a release up (its file list), when the player presses Download: the panel says
+    /// whether it goes through a VPN while the list arrives.
     pub fn prepare(&self, topic: i64, name: &str, magnet: &str, base: PathBuf, platform: crate::platform::Platform) -> Result<String> {
         let (key, magnet) = normalize_magnet(magnet)?;
         ensure!(base.is_absolute(), "Choose an absolute download folder (or a ~/ path)");
@@ -160,7 +179,7 @@ impl Manager {
             folder: base.join(format!("torrent-{key}")), key: key.clone(), topic,
             name: name.chars().filter(|c| !c.is_control()).take(200).collect(), magnet,
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false, shared_by_hand: false,
             platform: Some(platform), entries: vec![], selected: None, install_to: None, added: crate::util::now_secs() as u64,
         };
         self.tx.try_send(Command::Prepare(job.clone())).context("Download worker is busy or unavailable")?;
@@ -178,6 +197,9 @@ impl Manager {
         ensure!(job.state == State::Ready, "This download has already started");
         ensure!(!selected.is_empty(), "Choose at least one file");
         ensure!(selected.iter().all(|&i| job.entries.get(i).is_some_and(|entry| !entry.blocked)), "That file can't be downloaded");
+        let mut selected = selected;
+        selected.sort_unstable();
+        selected.dedup();
         self.tx.try_send(Command::Begin { key: key.into(), base, selected, install_to }).context("Download worker is busy or unavailable")
     }
 
@@ -493,14 +515,13 @@ struct Worker {
     /// Completed downloads added paused while their files are checked, before seeding again.
     reseeding: std::collections::HashSet<String>,
     /// Completed downloads the player chose to share again, setting or not (until Stop sharing).
-    by_hand: std::collections::HashSet<String>,
     /// The VPN interface the current session is bound to.
     bound: Option<String>,
 }
 
 impl Worker {
     fn new(store: PathBuf, jobs: Arc<Mutex<Vec<Job>>>, policy: Policy) -> Self {
-        Self { store, jobs, policy, session: None, handles: HashMap::new(), peers: HashMap::new(), resolving: HashMap::new(), task_keys: HashMap::new(), tasks: JoinSet::new(), reseeding: Default::default(), by_hand: Default::default(), bound: None }
+        Self { store, jobs, policy, session: None, handles: HashMap::new(), peers: HashMap::new(), resolving: HashMap::new(), task_keys: HashMap::new(), tasks: JoinSet::new(), reseeding: Default::default(), bound: None }
     }
     fn job(&self, key: &str) -> Option<Job> { self.jobs.lock().unwrap().iter().find(|job| job.key == key).cloned() }
     fn update(&self, key: &str, f: impl FnOnce(&mut Job)) {
@@ -611,7 +632,9 @@ impl Worker {
         if self.resolving.contains_key(key) || self.handles.contains_key(key) { return Ok(()); }
         if self.vpn_route().is_err() { self.wait_for_vpn(key); return Ok(()); }
         let job = self.job(key).context("Missing transfer")?;
-        let folder = owned_folder(&job)?;
+        // The player can still choose another folder in the panel, so one that can't be used
+        // doesn't stop the lookup (it writes nothing); starting the download checks it again.
+        let folder = owned_folder(&job).unwrap_or_else(|_| job.folder.clone());
         self.update(key, |job| { job.folder = folder.clone(); job.state = State::Resolving; job.error.clear(); });
         self.persist();
         let session = self.session().await?;
@@ -739,11 +762,14 @@ impl Worker {
     }
 
     /// Whether a completed download may share: the setting, or the player asked for this one.
-    fn may_seed(&self, key: &str) -> bool { self.policy.seed_after_download || self.by_hand.contains(key) }
+    fn may_seed(&self, key: &str) -> bool { self.policy.seed_after_download || self.job(key).is_some_and(|job| job.shared_by_hand) }
 
     async fn set_seed_after_download(&mut self, enabled: bool) -> Result<()> {
         // Turning the setting off stops every seed, the ones shared by hand too.
-        if !enabled { self.by_hand.clear(); }
+        if !enabled {
+            for job in self.jobs.lock().unwrap().iter_mut() { job.shared_by_hand = false; }
+            self.persist();
+        }
         self.policy.seed_after_download = enabled;
         if enabled {
             self.seed_all().await;
@@ -835,7 +861,12 @@ impl Worker {
             // Looking it up made an empty folder where downloads went by default: not there now.
             remove_unused(&job.folder, key);
         }
-        self.update(key, |job| { job.folder = folder; job.selected = Some(selected); job.install_to = install_to; });
+        // Every file chosen is `None`; the file list was only for choosing.
+        let all = selected.len() == job.entries.len();
+        self.update(key, |job| {
+            job.folder = folder; job.selected = if all { None } else { Some(selected) }; job.install_to = install_to;
+            job.entries = vec![];
+        });
         self.persist();
         self.start(key).await
     }
@@ -846,7 +877,7 @@ impl Worker {
         // Paused: still being looked up when the VPN went (or wasn't there yet).
         let unstarted = match job.state {
             State::Resolving | State::Ready | State::Failed => true,
-            State::Paused => job.selected.is_none() && job.entries.is_empty(),
+            State::Paused => job.selected.is_none() && job.entries.is_empty() && job.install_to.is_none(),
             _ => false,
         };
         if !unstarted || job.done > 0 { return Ok(()); }
@@ -863,7 +894,6 @@ impl Worker {
     /// Delete a download's files (its own folder, checked by the marker inside it), then forget it.
     async fn delete(&mut self, key: &str) -> Result<()> {
         let Some(job) = self.job(key).filter(|job| !job.state.active()) else { return Ok(()); };
-        self.by_hand.remove(key);
         self.stop_job(key, job.state).await?;
         match std::fs::symlink_metadata(&job.folder) {
             Ok(meta) => {
@@ -873,8 +903,7 @@ impl Worker {
                     "Refusing to delete {}: it isn't this download's own folder", job.folder.display());
                 // Hidden at once, deleted in the background so other transfers never wait for it.
                 // remove_dir_all removes links, never what they point to.
-                let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-                let doomed = job.folder.with_file_name(format!(".torrent-{key}-deleting-{nanos}"));
+                let doomed = job.folder.with_file_name(crate::util::deleting_name(key));
                 std::fs::rename(&job.folder, &doomed).with_context(|| format!("Delete {}", job.folder.display()))?;
                 tokio::task::spawn_blocking(move || {
                     if let Err(error) = std::fs::remove_dir_all(&doomed) { crate::log!("deleting {} failed: {error}", doomed.display()); }
@@ -938,7 +967,8 @@ impl Worker {
         self.stop_idle_session().await;
     }
     async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
-        if self.policy.seed_after_download { self.seed_all().await; }
+        // Everything when sharing is on; otherwise only what the player shared by hand.
+        self.seed_all().await;
         let mut tick = tokio::time::interval(Duration::from_secs(1));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut dirty_ticks = 0;
@@ -971,12 +1001,14 @@ impl Worker {
                             None
                         },
                         Some(Command::Seed(key)) => {
-                            self.by_hand.insert(key.clone());
+                            self.update(&key, |job| job.shared_by_hand = true);
+                            self.persist();
                             let result = self.seed(&key).await;
                             Some((key, result))
                         },
                         Some(Command::StopSeed(key)) => {
-                            self.by_hand.remove(&key);
+                            self.update(&key, |job| job.shared_by_hand = false);
+                            self.persist();
                             let result = if self.job(&key).is_some_and(|job| job.state == State::Complete) {
                                 self.stop_job(&key, State::Complete).await
                             } else { Ok(()) };
@@ -1050,7 +1082,7 @@ mod tests {
             key: key.into(), topic: 0, name: "Generated public-domain fixture".into(),
             magnet: format!("magnet:?xt=urn:btih:{key}"), folder: base.join(format!("torrent-{key}")),
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false, shared_by_hand: false,
             platform: None, entries: vec![], selected: None, install_to: None, added: 0,
         }
     }
@@ -1353,7 +1385,7 @@ mod tests {
             assert_eq!(handles.len(), 2);
             // Exercise the production bounded command dispatch, without production test hooks.
             let (tx, rx) = mpsc::channel(64);
-            let mut manager = Manager { jobs: worker.jobs.clone(), tx, thread: None };
+            let mut manager = Manager { jobs: worker.jobs.clone(), tx, thread: None, store: worker.store.clone() };
             let running = tokio::spawn(worker.run(rx));
             manager.set_seed_after_download(false).unwrap();
             wait_job(&manager, &key, |job| !job.seeding).await;
@@ -1388,7 +1420,7 @@ mod tests {
                 let handle = worker.handles[&key].clone();
                 let payload = worker.job(&key).unwrap().folder.join("public-domain-fixture.bin");
                 let (tx, rx) = mpsc::channel(64);
-                let manager = Manager { jobs: worker.jobs.clone(), tx, thread: None };
+                let manager = Manager { jobs: worker.jobs.clone(), tx, thread: None, store: worker.store.clone() };
                 let running = tokio::spawn(worker.run(rx));
                 if stop_first {
                     manager.action(&key, "stop_seed").unwrap();
@@ -1587,7 +1619,7 @@ mod tests {
         assert!(!restored[0].seeding);
         assert_eq!(restored[0].upload_speed, 0.0);
         let (tx, mut rx) = mpsc::channel(1);
-        let manager = Manager { jobs: Arc::new(Mutex::new(restored)), tx, thread: None };
+        let manager = Manager { jobs: Arc::new(Mutex::new(restored)), tx, thread: None, store: PathBuf::new() };
         manager.set_seed_after_download(false).unwrap();
         assert!(manager.set_seed_after_download(true).is_err(), "full channel must report busy, not block UI");
         assert!(matches!(rx.try_recv(), Ok(Command::SetSeedAfterDownload(false))));
@@ -1804,6 +1836,7 @@ mod tests {
         assert_eq!(std::fs::read(done.folder.join(&pkg_path)).unwrap(), game);
         let extra = std::fs::read(done.folder.join(&other)).unwrap_or_default();
         assert!(extra.iter().all(|&b| b == 0), "the file left out wasn't downloaded");
+        assert_eq!(manager.left_out(&key).unwrap(), [other.clone()].into(), "and it isn't installed");
         assert!(!temp.path().join("default").join(format!("torrent-{key}")).exists(), "the empty default folder is gone");
         manager.shutdown();
     }

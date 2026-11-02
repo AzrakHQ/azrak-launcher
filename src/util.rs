@@ -48,6 +48,31 @@ pub fn cache_dir() -> PathBuf {
     std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".cache")).join(APP_NAME)
 }
 
+/// What a folder is renamed to while it's deleted in the background (games, downloads): hidden,
+/// and finished at the next start if the launcher closed first.
+pub fn deleting_name(key: &str) -> String {
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    format!("{DELETING}{key}-{nanos}")
+}
+const DELETING: &str = ".azrak-deleting-";
+
+/// Finish deletes the launcher closed in the middle of, in the background. Only this user's own
+/// hidden `.azrak-deleting-` folders right inside `dirs`; links in them are removed, never followed.
+pub fn finish_deletes(mut dirs: Vec<PathBuf>) {
+    use std::os::unix::fs::MetadataExt;
+    dirs.sort();
+    dirs.dedup();
+    std::thread::spawn(move || {
+        for entry in dirs.iter().filter_map(|dir| std::fs::read_dir(dir).ok()).flatten().flatten() {
+            let ours = entry.file_name().to_string_lossy().starts_with(DELETING)
+                && std::fs::symlink_metadata(entry.path()).is_ok_and(|m| m.is_dir() && m.uid() == unsafe { libc::geteuid() });
+            if ours {
+                if let Err(error) = std::fs::remove_dir_all(entry.path()) { crate::log!("deleting {} failed: {error}", entry.path().display()); }
+            }
+        }
+    });
+}
+
 pub fn expand_home(p: &str) -> PathBuf {
     if let Some(rest) = p.strip_prefix("~/") {
         home().join(rest)

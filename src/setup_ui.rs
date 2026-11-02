@@ -117,8 +117,12 @@ impl App {
             // or else the file list just didn't arrive (nobody answered, or this PC is offline).
             const RELEASE: [&str; 9] = ["Azrak can't install", "Nothing in this release", "Torrent", "Unsafe", "Invalid", "Symlink",
                 "Duplicate", "Conflicting", "Metadata info hash"];
-            let nobody = !RELEASE.iter().any(|start| error.starts_with(start));
-            let (title, message) = if nobody {
+            // Nothing could be looked up at all (too many downloads, say): only its reason helps.
+            let nobody = setup.key.is_some() && !RELEASE.iter().any(|start| error.starts_with(start));
+            let (title, message) = if setup.key.is_none() {
+                view.go_label = "Can't download right now".into();
+                failed("This release can't be looked up", &error)
+            } else if nobody {
                 view.go_label = "Keep trying".into();
                 view.go_enabled = true;
                 failed("The file list didn't arrive", "No other player answered, or this PC is offline. Keep trying, or close and pick a release with more players in the Game Hub.")

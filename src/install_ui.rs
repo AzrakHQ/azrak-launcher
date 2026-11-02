@@ -64,8 +64,9 @@ impl App {
         let platform = game.map(|game| game.g.platform).or(job.platform).unwrap_or_default();
         // PC games are named after the game (their folder and Library name), not the release.
         let name = match game { Some(game) if platform == crate::platform::Platform::Pc => game.name.clone(), _ => job.name };
+        let skip = self.downloads.left_out(key)?;
         let request = installer::Request { key: key.into(), topic: job.topic, name,
-            source: job.folder, destination: util::expand_home(destination), expected_ids: ids, platform };
+            source: job.folder, destination: util::expand_home(destination), expected_ids: ids, platform, skip };
         self.installer.start(request)?;
         self.install_failures.remove(key);
         self.install_states.insert(key.into(), installer::State::Inspecting);

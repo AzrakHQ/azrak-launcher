@@ -215,7 +215,9 @@ pub struct App {
     pub dl_delete: Option<(String, Vec<&'static str>)>,
     pub dl_delete_sel: usize,
     /// Blurred copies of art for the glass drawn over it (present::frosted), by image key.
-    pub frost: HashMap<String, slint::Image>,
+    /// Least recently used first.
+    pub frost: Vec<(String, slint::Image)>,
+    pub frost_pending: HashSet<String>,
     pub live: Vec<Session>,
     pub images: images::Store,
     pub monitors: Vec<Monitor>,
@@ -526,7 +528,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         dl_shelf: 0.0,
         dl_speeds: HashMap::new(),
         dl_keys: HashSet::new(),
-        frost: HashMap::new(),
+        frost: Vec::new(),
+        frost_pending: HashSet::new(),
         dl_delete: None,
         dl_delete_sel: 0,
         live: Vec::new(),
@@ -631,6 +634,14 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         status_count: 4,
         compat_checked: 0.0,
     };
+    // Deletes that were still going when the launcher last closed.
+    {
+        let c = cfg.lock().unwrap();
+        let mut dirs = vec![util::expand_home(&c.download_dir), util::expand_home(&c.install_dir)];
+        dirs.extend(app.downloads.snapshot().iter().filter_map(|job| job.folder.parent().map(|p| p.to_path_buf())));
+        dirs.extend(app.installer.snapshot().iter().filter_map(|r| r.path.as_ref()?.parent().map(|p| p.to_path_buf())));
+        util::finish_deletes(dirs);
+    }
     ui.set_grid_rows(ModelRc::from(app.grid_model.clone()));
     ui.set_tiles(ModelRc::from(app.tile_model.clone()));
     ui.set_toasts(ModelRc::from(app.toast_model.clone()));

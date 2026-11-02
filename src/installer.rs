@@ -5,7 +5,7 @@
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     ffi::{CStr, CString},
     fs::{self, File, Metadata},
     io::{Read, Write},
@@ -58,6 +58,9 @@ impl Record {
 pub struct Request {
     pub key: String, pub topic: i64, pub name: String, pub source: PathBuf,
     pub destination: PathBuf, pub expected_ids: Vec<String>,
+    /// Files in `source` the player left out of the download (paths inside it): the engine
+    /// still makes them, empty or partly written, so they're never installed.
+    pub skip: BTreeSet<String>,
     /// PC games install differently: everything is unpacked and the way to start it is found.
     pub platform: crate::platform::Platform,
 }
@@ -176,8 +179,7 @@ impl Manager {
                 let parent = Dir::absolute(path.parent().context("No parent folder")?, false)?;
                 let leaf = component(path.file_name().context("No folder name")?.as_bytes())?;
                 // Hidden, so the library never lists it while it goes.
-                let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-                let doomed = format!(".azrak-deleting-{key}-{nanos}");
+                let doomed = crate::util::deleting_name(key);
                 let hidden = component(doomed.as_bytes())?;
                 let r = unsafe { libc::renameat2(parent.0.as_raw_fd(), leaf.as_ptr(), parent.0.as_raw_fd(), hidden.as_ptr(), libc::RENAME_NOREPLACE) };
                 ensure!(r == 0, "Delete {}: {}", path.display(), std::io::Error::last_os_error());
@@ -412,7 +414,7 @@ impl Plan {
     }
 }
 
-struct Source { dir: Dir, plan: Plan, stamps: BTreeMap<String, Stamp> }
+struct Source { dir: Dir, plan: Plan, stamps: BTreeMap<String, Stamp>, skip: BTreeSet<String> }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Stamp { dev: u64, ino: u64, len: u64, mtime: i64, ns: i64, ctime: i64, cns: i64 }
 impl Stamp {
@@ -426,7 +428,7 @@ impl Source {
         ensure!(dir.0.metadata()?.uid() == unsafe { libc::geteuid() }, "Torrent folder belongs to another user");
         let marker = bounded_read(dir.read(OWNED).context("Source must be a launcher-owned torrent folder")?, 128)?;
         ensure!(marker == req.key.as_bytes(), "Torrent ownership marker does not match installation key");
-        let mut source = Self { dir, plan: Plan::default(), stamps: BTreeMap::new() };
+        let mut source = Self { dir, plan: Plan::default(), stamps: BTreeMap::new(), skip: req.skip.clone() };
         let root = Dir(source.dir.0.try_clone()?);
         source.walk(&root, "", cancel)?;
         Ok(source)
@@ -445,6 +447,8 @@ impl Source {
                 let child = dir.child(name.as_bytes(), false)?;
                 ensure!(child.0.metadata()?.ino() == st.st_ino && child.0.metadata()?.dev() == st.st_dev, "Source directory changed during inspection");
                 self.walk(&child, &path, cancel)?;
+            } else if self.skip.contains(&path) {
+                continue;
             } else {
                 ensure!(kind == libc::S_IFREG && st.st_nlink == 1, "Symlinks, hardlinks and special source entries are forbidden: {path}");
                 let file = dir.read(&name)?;
@@ -1368,7 +1372,7 @@ fn install_pkgs(req: &Request, source: &Source, pkgs: &[String], cancel: &Atomic
     progress(State::Validating, total, total);
     // Validate exactly what the extractor wrote (no links or special files), then find the game.
     let walk = |dir: &Dir| -> Result<Plan> {
-        let mut tree = Source { dir: Dir(dir.0.try_clone()?), plan: Plan::default(), stamps: BTreeMap::new() };
+        let mut tree = Source { dir: Dir(dir.0.try_clone()?), plan: Plan::default(), stamps: BTreeMap::new(), skip: BTreeSet::new() };
         tree.walk(&Dir(dir.0.try_clone()?), "", cancel)?;
         Ok(tree.plan)
     };
@@ -1502,7 +1506,7 @@ mod tests {
         fs::create_dir(&source).unwrap();
         fs::write(source.join(OWNED), KEY).unwrap();
         let req = Request { key: KEY.into(), topic: 1, name: "Generated fixture".into(), source,
-            destination: t.path().join("games"), expected_ids: vec!["PPSA12345".into()], platform: Default::default() };
+            destination: t.path().join("games"), expected_ids: vec!["PPSA12345".into()], platform: Default::default(), skip: Default::default() };
         (t, req)
     }
     fn game(path: &Path) {
@@ -1774,6 +1778,18 @@ mod tests {
         let error = run(&req, &AtomicBool::new(false), &|_,_,_| {}).unwrap_err();
         assert!(format!("{error:#}").contains("Missing RAR volume x.part2.rar"), "{error:#}");
         unpublished(&req);
+    }
+
+    #[test]
+    fn files_left_out_of_the_download_are_never_installed() {
+        let (_t, mut req) = fixture(); game(&req.source.join("game"));
+        // What the engine leaves for files the player unticked: empty, or partly written.
+        fs::write(req.source.join("update.pkg"), b"").unwrap();
+        fs::write(req.source.join("game/extra.bin"), b"half").unwrap();
+        req.skip = ["update.pkg".to_string(), "game/extra.bin".to_string()].into();
+        let p = run(&req, &AtomicBool::new(false), &|_, _, _| {}).unwrap();
+        assert_eq!(fs::read(p.join("data")).unwrap(), b"fixture contents");
+        assert!(!p.join("extra.bin").exists() && !p.join("update.pkg").exists());
     }
 
     #[test]

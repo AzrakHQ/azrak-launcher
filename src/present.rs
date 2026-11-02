@@ -50,14 +50,13 @@ fn action_data(a: &ActionDef) -> ActionData {
 
 /// A small, blurred copy of a picture: what frosted glass shows of the art behind it (Slint
 /// can't blur what's behind an element, so glass draws this copy, lined up with the art).
-pub fn frosted(img: &Image) -> Option<Image> {
-    let buf = img.to_rgba8()?;
+fn frosted(buf: slint::SharedPixelBuffer<slint::Rgba8Pixel>) -> Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>> {
     let src = image::RgbaImage::from_raw(buf.width(), buf.height(), buf.as_bytes().to_vec())?;
     let w = 480u32.min(src.width().max(1));
     let h = ((src.height() as u64 * w as u64) / src.width().max(1) as u64).max(1) as u32;
     let small = image::imageops::resize(&src, w, h, image::imageops::FilterType::Triangle);
     let blurred = image::imageops::fast_blur(&small, 9.0);
-    Some(Image::from_rgba8(slint::SharedPixelBuffer::clone_from_slice(blurred.as_raw(), w, h)))
+    Some(slint::SharedPixelBuffer::clone_from_slice(blurred.as_raw(), w, h))
 }
 
 fn logo_size(img: &Image, max_w: f32, max_h: f32) -> (f32, f32) {
@@ -78,13 +77,38 @@ impl App {
         self.images.want(&r.key, r.src.clone(), r.w, r.crop, p)
     }
 
-    /// The frosted copy of an image that has arrived (made once; a few are kept).
+    /// The frosted copy of an image that has arrived. Made once, in the background (the glass is
+    /// plain tint until then); the last few used are kept.
     pub fn frost_of(&mut self, key: &str) -> Option<Image> {
-        if let Some(img) = self.frost.get(key) { return Some(img.clone()); }
-        let img = frosted(&self.images.get(key)?)?;
-        if self.frost.len() >= 8 { self.frost.clear(); }
-        self.frost.insert(key.to_string(), img.clone());
-        Some(img)
+        if let Some(i) = self.frost.iter().position(|(k, _)| k == key) {
+            let entry = self.frost.remove(i);
+            let img = entry.1.clone();
+            self.frost.push(entry);
+            return Some(img);
+        }
+        if !self.frost_pending.contains(key) {
+            if let Some(buf) = self.images.get(key).and_then(|img| img.to_rgba8()) {
+                self.frost_pending.insert(key.to_string());
+                let key = key.to_string();
+                std::thread::spawn(move || {
+                    let blurred = frosted(buf);
+                    let _ = slint::invoke_from_event_loop(move || with_app(move |app| app.frost_done(key, blurred)));
+                });
+            }
+        }
+        None
+    }
+
+    fn frost_done(&mut self, key: String, buf: Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>) {
+        self.frost_pending.remove(&key);
+        let Some(buf) = buf else { return };
+        if self.frost.len() >= 16 { self.frost.remove(0); }
+        self.frost.push((key, Image::from_rgba8(buf)));
+        match self.overlay {
+            Overlay::Downloads => self.push_downloads(),
+            Overlay::Setup => self.push_setup(),
+            _ => {}
+        }
     }
 
     // ------------------------------------------------------------------ artwork choices
