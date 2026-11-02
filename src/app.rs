@@ -200,6 +200,8 @@ pub struct App {
     /// Folders chosen on the Download & install panel (download key, download, install): the
     /// defaults from now on once that download really starts (one that couldn't keeps them).
     pub chosen_dirs: Option<(String, String, String)>,
+    /// The same, for a download that couldn't start with them: its panel opens with them again.
+    pub tried_dirs: Option<(String, String, String)>,
     pub download_states: HashMap<String, crate::downloads::State>,
     pub download_model: Rc<VecModel<crate::DownloadData>>,
     /// The Download & install panel, while it's open.
@@ -522,6 +524,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         install_states: HashMap::new(),
         install_failures: HashMap::new(),
         chosen_dirs: None,
+        tried_dirs: None,
         download_states: HashMap::new(),
         download_model: Rc::new(VecModel::default()),
         setup: None,
@@ -695,6 +698,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
     slint::run_event_loop().expect("event loop failed");
     drop(tick);
     with_app(|app| {
+        // A lookup the panel was showing is forgotten as if it were closed.
+        if app.setup.is_some() { app.setup_closed(); }
         app.installer.shutdown();
         app.downloads.shutdown();
         crate::trailer::close();

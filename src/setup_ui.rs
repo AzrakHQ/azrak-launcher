@@ -107,6 +107,11 @@ impl App {
         self.setup_model.set_vec(vec![]);
         let ui = self.ui();
         ui.set_setup_title(name.into());
+        // One that couldn't start: the folders it was tried with (its error is about them).
+        let (download_dir, install_dir) = match self.tried_dirs.clone() {
+            Some((tried, dl, inst)) if Some(&tried) == self.setup.as_ref().and_then(|setup| setup.key.as_ref()) => (dl, inst),
+            _ => (download_dir, install_dir),
+        };
         ui.set_setup_dl_path(download_dir.into());
         ui.set_setup_inst_path(install_dir.into());
         ui.set_setup_edit(0);
@@ -127,7 +132,8 @@ impl App {
                 (cfg.download_dir, cfg.install_dir) = (download_dir, install_dir);
                 cfg.save();
             }
-            _ => {}
+            Some(_) => self.tried_dirs = Some((key, download_dir, install_dir)),
+            None => {}
         }
         self.chosen_dirs = None;
     }

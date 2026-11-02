@@ -541,6 +541,13 @@ impl App {
             self.toast("Installation in progress", "Cancel the installation before deleting it.", 0);
             return self.push_downloads();
         }
+        // Before anything goes: the download's folder must be its own to delete.
+        if matches!(choice, "both" | "download") {
+            if let Err(error) = self.downloads.check_delete(&key) {
+                self.toast("Couldn't delete it", &format!("{error:#}"), 2);
+                return self.push_downloads();
+            }
+        }
         if matches!(choice, "both" | "game") {
             // Never under a running game.
             let path = self.installer.snapshot().into_iter().find(|r| r.key == key).and_then(|r| r.path);

@@ -76,6 +76,13 @@ impl App {
     /// otherwise ask where. One that can't start waits for Install by hand, saying why.
     pub fn install_download(&mut self, key: &str) {
         let Some(to) = self.downloads.job(key).and_then(|job| job.install_to) else { return self.prepare_install(key) };
+        // Another one installing: this one goes next, by itself (an old record would stop that).
+        if self.installer.snapshot().iter().any(|record| record.state.active()) {
+            let _ = self.installer.forget(key);
+            self.install_failures.remove(key);
+            crate::audio::play(crate::audio::Sound::Select);
+            return self.toast("Installs next", "It installs as soon as the game installing now is done.", 1);
+        }
         match self.start_install(key, to) {
             Ok(()) => { crate::audio::play(crate::audio::Sound::Select); self.push_installs(); }
             Err(error) => {

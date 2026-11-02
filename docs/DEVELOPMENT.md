@@ -189,8 +189,8 @@ marker names it; an installed game only from the folder the installer recorded f
 while it runs. Links inside either are removed, never followed.
 
 **Completed downloads seed by default.** While the launcher remains open, their
-original files are shared with peers. Downloads shows **Complete · sharing**, upload
-speed and connected peers; **Install / Play** remains available. Use **Stop sharing**
+original files are shared with peers. Downloads shows **Ready · sharing**, sharing
+speed and connected players; **Install / Play** remains available. Use **Stop sharing**
 for one transfer (**Share again** turns it back on, even with the setting off), or disable **Settings → Keep sharing
 finished downloads** to stop all seeds; only that saved setting turns seeding off for good.
 While it is on, completed downloads seed again whenever the launcher opens, and turning

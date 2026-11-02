@@ -311,13 +311,16 @@ impl Manager {
         Ok(())
     }
 
+    /// Whether its download folder may be deleted (refused here, so the player hears it; the
+    /// worker checks again before deleting). Outside the lock, which the worker uses every second.
+    pub fn check_delete(&self, key: &str) -> Result<()> {
+        let job = self.job(key).context("Transfer not found")?;
+        ensure!(job.state.active() || own_folder(&job) || !job.folder.exists(), "{} isn't this download's own folder, so it's left alone", job.folder.display());
+        Ok(())
+    }
+
     pub fn action(&self, key: &str, action: &str) -> Result<()> {
-        if action == "delete" {
-            // Refused here, so the player hears it (the worker checks again before deleting);
-            // checked outside the lock, which the worker uses every second.
-            let job = self.job(key).context("Transfer not found")?;
-            ensure!(job.state.active() || own_folder(&job) || !job.folder.exists(), "{} isn't this download's own folder, so it's left alone", job.folder.display());
-        }
+        if action == "delete" { self.check_delete(key)?; }
         let jobs = self.jobs.lock().unwrap();
         let job = jobs.iter().find(|job| job.key == key).context("Transfer not found")?;
         let command = match action {
@@ -535,12 +538,20 @@ fn inspect_metadata(bytes: &[u8], key: &str, folder: Option<&Path>) -> Result<(u
         let components = file.filename.to_vec();
         ensure!(!components.is_empty() && components.iter().all(|part| !part.is_empty() && part != "." && part != ".." && !part.contains(['/', '\\'])), "Unsafe path component");
         let path = file.filename.to_pathbuf();
+        // Padding is never written (several often share one name, like .pad/16384): only its
+        // name is checked.
+        if file.attrs().padding {
+            check_names(&path)?;
+            files.push((components.join("/"), file.len));
+            padding.push(true);
+            continue;
+        }
         match folder { Some(folder) => check_path(folder, &path)?, None => check_names(&path)? }
         ensure!(paths.insert(path.clone()), "Duplicate torrent file path");
-        if !file.attrs().padding { total = total.checked_add(file.len).context("Torrent size overflow")?; }
+        total = total.checked_add(file.len).context("Torrent size overflow")?;
         ensure!(total <= i64::MAX as u64, "Torrent is too large");
         files.push((components.join("/"), file.len));
-        padding.push(file.attrs().padding);
+        padding.push(false);
     }
     for path in &paths {
         ensure!(!path.ancestors().skip(1).any(|parent| paths.contains(parent)), "Conflicting torrent file paths");

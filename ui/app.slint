@@ -1781,7 +1781,8 @@ export component AppWindow inherits Window {
             go => { root.setup-go(); }
             cancel => { root.setup-cancel(); }
             change(i) => { root.setup-change(i); }
-            edited(focused) => { root.setup-editing = focused; }
+            // Leaving the field any way (a click elsewhere too) finishes editing.
+            edited(focused) => { root.setup-editing = focused; if (!focused) { root.setup-edit-done(); } }
             edit-done => { root.setup-edit-done(); root.focus-root(); }
         }
         if root.overlay == 7 && root.download-consent: DownloadConsent {
