@@ -32,7 +32,7 @@ struct Desc {
     dl_label: String,
     inst_label: String,
     bar: i32,
-    /// (id, label, icon, primary, danger)
+    /// (id, label, icon)
     actions: Vec<(&'static str, &'static str, &'static str)>,
     line: String,
     tile: f32,
@@ -42,7 +42,7 @@ fn mbps(v: f64) -> String { format!("{v:.1} MB/s") }
 
 fn pct(f: f32) -> String { format!("{:.0}", (f * 100.0).clamp(0.0, 100.0).floor()) }
 
-/// "Added 4 minutes ago", "Added yesterday", "Added Oct 30".
+/// "Added 4 minutes ago", "Added yesterday", "Added Oct 30, 2026".
 fn added_label(added: u64) -> String {
     if added == 0 { return String::new(); }
     let ago = (crate::util::now_secs() as i64 - added as i64).max(0);
@@ -50,7 +50,10 @@ fn added_label(added: u64) -> String {
         0..60 => "Added just now".into(),
         60..3600 => { let m = ago / 60; format!("Added {m} minute{} ago", if m == 1 { "" } else { "s" }) }
         3600..86400 => { let h = ago / 3600; format!("Added {h} hour{} ago", if h == 1 { "" } else { "s" }) }
-        _ => format!("Added {}", crate::util::fmt_last_played(added as f64).to_lowercase().replace("today", "today")),
+        _ => match crate::util::fmt_last_played(added as f64) {
+            day if day == "Today" || day == "Yesterday" => format!("Added {}", day.to_lowercase()),
+            day => format!("Added {day}"),
+        },
     }
 }
 
@@ -75,7 +78,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
         State::Resolving => {
             d.status = "Getting the file list".into();
             d.line = "Getting the file list".into();
-            d.actions = vec![("cancel", "Cancel", "close")];
+            d.actions = vec![("discard", "Cancel", "close")];
         }
         State::Ready => {
             (d.group, d.kind) = (1, 1);
@@ -84,11 +87,11 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             if job.entries.is_empty() {
                 d.status = "Ready to download".into();
                 d.line = "Ready to download".into();
-                d.actions = vec![("start", "Start download", "disk"), ("cancel", "Remove", "trash")];
+                d.actions = vec![("start", "Start download", "disk"), ("discard", "Remove", "trash")];
             } else {
                 d.status = "Waiting for you to choose its files".into();
                 d.line = "Choose its files".into();
-                d.actions = vec![("choose", "Choose files", "check"), ("cancel", "Remove", "trash")];
+                d.actions = vec![("choose", "Choose files", "check"), ("discard", "Remove", "trash")];
             }
         }
         State::Checking | State::Downloading => {
@@ -113,7 +116,9 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                 d.status = "Paused until your VPN connects".into();
                 d.stats.push(("By itself".into(), "Resumes".into()));
                 d.line = "Waiting for your VPN".into();
-                d.actions = vec![("vpn", "VPN settings", "gear"), ("cancel", "Cancel", "close")];
+                // Still being looked up when the VPN went: nothing to keep, so Cancel forgets it.
+                let cancel = if job.selected.is_none() && job.entries.is_empty() && job.done == 0 { "discard" } else { "cancel" };
+                d.actions = vec![("vpn", "VPN settings", "gear"), (cancel, "Cancel", "close")];
             } else {
                 d.status = "Paused".into();
                 d.line = format!("Paused · {}%", pct(job.progress()));
@@ -145,6 +150,11 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             // Sharing goes on and off; Delete (which asks what to delete) sits beside it.
             let share = if sharing { ("stop_seed", "Stop sharing", "unshare") } else { ("share", "Share again", "share") };
             let remove = ("delete", "Delete…", "trash");
+            let failed = match install {
+                Some(record) if record.state == Install::Failed => Some(record.error.clone()),
+                None => failure.cloned(),
+                _ => None,
+            };
             match install.map(|r| r.state) {
                 Some(state) if state.active() => {
                     let record = install.unwrap();
@@ -173,10 +183,10 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                     d.tile = 1.0;
                     d.actions = vec![("play_install", "Play", "play"), share, remove];
                 }
-                Some(Install::Failed) => {
+                _ if failed.is_some() => {
                     (d.group, d.kind, d.bar) = (1, 2, 2);
                     d.status = "Couldn't install".into();
-                    d.note = install.unwrap().error.clone();
+                    d.note = failed.unwrap_or_default();
                     d.inst_label = "Install failed".into();
                     d.line = "Couldn't install".into();
                     d.actions = vec![("install", "Retry install", "retry"), share, remove];
@@ -186,14 +196,6 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                     d.status = "Install cancelled".into();
                     d.line = "Install cancelled".into();
                     d.actions = vec![("install", "Install", "disk"), share, remove];
-                }
-                None if failure.is_some() => {
-                    (d.group, d.kind, d.bar) = (1, 2, 2);
-                    d.status = "Couldn't install".into();
-                    d.note = failure.unwrap().clone();
-                    d.inst_label = "Install failed".into();
-                    d.line = "Couldn't install".into();
-                    d.actions = vec![("install", "Retry install", "retry"), share, remove];
                 }
                 None if job.install_to.is_some() => {
                     d.status = "Waiting to install".into();
@@ -287,6 +289,10 @@ impl App {
             }
             "vpn" => { self.open_settings(); return; }
             "delete" => return self.open_delete(key),
+            "discard" => {
+                if let Err(error) = self.downloads.discard(key) { self.toast("Transfer unavailable", &error.to_string(), 2); }
+                else { audio::play(Sound::Select); }
+            }
             "choose" => {
                 if let Some(game) = self.games.iter().position(|game| game.g.id == job.topic) {
                     let local = self.games[game].local;
@@ -436,11 +442,14 @@ impl App {
         } else {
             for (n, row) in data.into_iter().enumerate() {
                 let old = self.download_model.row_data(n);
-                let same = old.as_ref().is_some_and(|old| old.key == row.key && old.status == row.status && old.big == row.big
-                    && old.line == row.line && old.spark == row.spark && old.has_art == row.has_art && old.has_logo == row.has_logo
-                    && old.has_tile_art == row.has_tile_art && old.note == row.note && old.when == row.when && old.dl_frac == row.dl_frac
-                    && old.inst_frac == row.inst_frac && old.tile_frac == row.tile_frac && old.group_first == row.group_first
-                    && old.stats.iter().eq(row.stats.iter()) && old.actions.iter().eq(row.actions.iter()));
+                // Every field (images compare by their pixels' address, so it's cheap); the
+                // two models by their rows.
+                let same = old.as_ref().is_some_and(|old| {
+                    let mut old = old.clone();
+                    let rows_same = old.stats.iter().eq(row.stats.iter()) && old.actions.iter().eq(row.actions.iter());
+                    (old.stats, old.actions) = (row.stats.clone(), row.actions.clone());
+                    rows_same && old == row
+                });
                 if !same { self.download_model.set_row_data(n, row); }
             }
         }
@@ -529,6 +538,11 @@ impl App {
         let Some((key, ids)) = self.dl_delete.take() else { return };
         let choice = usize::try_from(index).ok().and_then(|i| ids.get(i).copied()).unwrap_or("cancel");
         let name = self.downloads.snapshot().into_iter().find(|job| job.key == key).map(|job| job.name).unwrap_or_default();
+        // It may have started installing while the dialog was open.
+        if choice != "cancel" && self.installer.snapshot().iter().any(|r| r.key == key && r.state.active()) {
+            self.toast("Installation in progress", "Cancel the installation before deleting it.", 0);
+            return self.push_downloads();
+        }
         if matches!(choice, "both" | "game") {
             // Never under a running game.
             let path = self.installer.snapshot().into_iter().find(|r| r.key == key).and_then(|r| r.path);
@@ -553,6 +567,7 @@ impl App {
         let result = match choice {
             "both" | "download" => self.downloads.action(&key, "delete"),
             "forget" => self.downloads.action(&key, "remove"),
+            "game" => Ok(()),
             _ => { audio::play(Sound::Back); return self.push_downloads(); }
         };
         match result {

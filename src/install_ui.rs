@@ -80,7 +80,9 @@ impl App {
         let mut jobs = self.downloads.snapshot();
         jobs.sort_by_key(|job| job.added);
         let next = jobs.into_iter().find(|job| job.state == downloads::State::Complete && job.install_to.is_some()
-            && !installs.iter().any(|record| record.key == job.key) && !self.install_failures.contains_key(&job.key));
+            && !installs.iter().any(|record| record.key == job.key) && !self.install_failures.contains_key(&job.key)
+            // Not while the player is choosing what to delete of it.
+            && self.dl_delete.as_ref().is_none_or(|(key, _)| *key != job.key));
         let Some(job) = next else { return };
         let destination = job.install_to.as_ref().unwrap().to_string_lossy().into_owned();
         if let Err(error) = self.start_install(&job.key, &destination) {

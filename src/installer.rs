@@ -160,6 +160,8 @@ impl Manager {
 
     /// Delete a game this installer installed: the folder it published (links inside it are
     /// removed, never followed) and its record. A folder that's already gone is just forgotten.
+    /// The folder is renamed out of sight at once and deleted in the background: a big game takes
+    /// a while, and nothing (the launcher, an install) should wait for it.
     pub fn uninstall(&self, key: &str) -> Result<PathBuf> {
         let mut jobs = self.core.jobs.lock().unwrap();
         let job = jobs.iter().find(|j| j.key == key && j.state == State::Installed).context("This game wasn't installed by Azrak")?;
@@ -172,11 +174,22 @@ impl Manager {
             Ok(meta) => {
                 ensure!(meta.is_dir() && !meta.file_type().is_symlink(), "{} isn't the installed game's folder", path.display());
                 let parent = Dir::absolute(path.parent().context("No parent folder")?, false)?;
-                let leaf = path.file_name().context("No folder name")?.as_bytes();
-                remove_contents(&parent.child(leaf, false)?, 0)?;
-                let name = component(leaf)?;
-                let r = unsafe { libc::unlinkat(parent.0.as_raw_fd(), name.as_ptr(), libc::AT_REMOVEDIR) };
+                let leaf = component(path.file_name().context("No folder name")?.as_bytes())?;
+                // Hidden, so the library never lists it while it goes.
+                let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+                let doomed = format!(".azrak-deleting-{key}-{nanos}");
+                let hidden = component(doomed.as_bytes())?;
+                let r = unsafe { libc::renameat2(parent.0.as_raw_fd(), leaf.as_ptr(), parent.0.as_raw_fd(), hidden.as_ptr(), libc::RENAME_NOREPLACE) };
                 ensure!(r == 0, "Delete {}: {}", path.display(), std::io::Error::last_os_error());
+                let shown = path.clone();
+                std::thread::spawn(move || {
+                    let result = parent.child(doomed.as_bytes(), false).and_then(|dir| remove_contents(&dir, 0)).and_then(|()| {
+                        let r = unsafe { libc::unlinkat(parent.0.as_raw_fd(), hidden.as_ptr(), libc::AT_REMOVEDIR) };
+                        ensure!(r == 0, "{}", std::io::Error::last_os_error());
+                        Ok(())
+                    });
+                    if let Err(e) = result { eprintln!("Deleting {} failed: {e:#}", shown.display()); }
+                });
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
@@ -1450,6 +1463,13 @@ mod uninstall_tests {
         assert!(manager.uninstall("other").is_err());
         assert_eq!(manager.uninstall(&"k".repeat(40)).unwrap(), game);
         assert!(!game.exists());
+        // Deleted in the background: wait for the library folder to empty.
+        let library = temp.path().join("library");
+        let start = std::time::Instant::now();
+        while fs::read_dir(&library).unwrap().next().is_some() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(10), "the game folder is deleted");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         assert_eq!(fs::read(&outside).unwrap(), b"keep me");
         assert!(temp.path().join("library").is_dir());
         assert!(Manager::at(store).snapshot().is_empty(), "the record is gone");

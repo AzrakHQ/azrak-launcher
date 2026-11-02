@@ -32,9 +32,10 @@ pub struct Setup {
     pub begun: bool,
 }
 
-/// "21.6 GB", "84 MB", "2 KB".
+/// "21.6 GB", "84 MB", "2 KB", "0 KB".
 pub fn size_label(bytes: u64) -> String {
     let b = bytes as f64;
+    if bytes == 0 { return "0 KB".into(); }
     if bytes >= 1 << 30 { format!("{:.1} GB", b / (1u64 << 30) as f64) }
     else if bytes >= 1 << 20 { format!("{:.0} MB", b / (1u64 << 20) as f64) }
     else { format!("{} KB", (bytes / 1024).max(1)) }
@@ -175,8 +176,7 @@ impl App {
             } else if blocked.len() > 1 {
                 view.notice = format!("{} Windows programs were left out. {console} games never need them.", blocked.len());
                 view.notice_kind = 1;
-            } else if let Some((i, name)) = biggest.filter(|(i, _)| picked > 0 && !setup.on[*i]) {
-                let _ = i;
+            } else if let Some((_, name)) = biggest.filter(|(i, _)| picked > 0 && !setup.on[*i]) {
                 view.notice = format!("Without {name} the game probably won't install.");
                 view.notice_kind = 1;
             } else if let Some(warning) = Some(self.pc_download_warning(setup.platform)).filter(|w| !w.is_empty()) {
@@ -204,8 +204,13 @@ impl App {
             if setup.entries.is_empty() {
                 let job = setup.key.as_ref().and_then(|key| self.downloads.snapshot().into_iter().find(|job| &job.key == key));
                 if let Some(job) = job.filter(|job| job.state == State::Ready && !job.entries.is_empty()) {
-                    setup.on = job.entries.iter().enumerate()
-                        .map(|(i, e)| !e.blocked && job.selected.as_ref().is_none_or(|s| s.contains(&i))).collect();
+                    let mut on: Vec<bool> = job.entries.iter().map(|e| !e.blocked).collect();
+                    if let Some(selected) = &job.selected {
+                        let mut picked = vec![false; on.len()];
+                        for &i in selected { if let Some(p) = picked.get_mut(i) { *p = true; } }
+                        on.iter_mut().zip(picked).for_each(|(on, picked)| *on &= picked);
+                    }
+                    setup.on = on;
                     setup.entries = job.entries;
                 }
             }
@@ -233,7 +238,7 @@ impl App {
                 if self.setup_model.row_data(i).as_ref() != Some(&row) { self.setup_model.set_row_data(i, row); }
             }
         }
-        let (focus, edit, platform) = (setup.focus, setup.edit, setup.platform);
+        let (focus, edit) = (setup.focus, setup.edit);
         let vpn = {
             let cfg = self.cfg.lock().unwrap();
             match cfg.download_vpn() {
@@ -244,7 +249,6 @@ impl App {
                 },
             }
         };
-        let _ = platform;
         // Over the Game Hub, the panel is glass over its art.
         let over_hub = self.stack.iter().any(|(overlay, _, _)| *overlay == Overlay::Hub);
         let glass = if over_hub { let key = self.bg_key.clone(); self.frost_of(&key) } else { None };

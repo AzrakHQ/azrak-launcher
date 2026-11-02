@@ -8,13 +8,13 @@
 use anyhow::{bail, ensure, Context, Result};
 use librqbit::{AddTorrent, AddTorrentOptions, AddTorrentResponse, ManagedTorrent, Session, SessionOptions, TorrentStatsState};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, Id, JoinError, JoinSet};
 
@@ -181,8 +181,6 @@ impl Manager {
         self.tx.try_send(Command::Begin { key: key.into(), base, selected, install_to }).context("Download worker is busy or unavailable")
     }
 
-    /// Forget a download that never started (the player closed the Download & install panel):
-    /// stop looking it up and remove it, with its still-empty folder.
     /// Stop it installing by itself (its game is being deleted). Takes effect at once, so the
     /// install queue can't pick it up again in between; the worker saves it.
     pub fn no_install(&self, key: &str) -> Result<()> {
@@ -190,6 +188,8 @@ impl Manager {
         self.tx.try_send(Command::NoInstall(key.into())).context("Download worker is busy or unavailable")
     }
 
+    /// Forget a download that never started (the player closed the Download & install panel):
+    /// stop looking it up and remove it, with its still-empty folder.
     pub fn discard(&self, key: &str) -> Result<()> {
         self.tx.try_send(Command::Discard(key.into())).context("Download worker is busy or unavailable")
     }
@@ -403,9 +403,10 @@ fn inspect_metadata(bytes: &[u8], key: &str, folder: &Path) -> Result<(u64, Vec<
     Ok((total, files))
 }
 
-/// Whether file `index` of a torrent is downloaded (`selected`: `None` for every file).
-fn chosen(selected: Option<&[usize]>, index: usize) -> bool {
-    selected.is_none_or(|selected| selected.contains(&index))
+/// Which files of a torrent are downloaded (`selected`: `None` for every file), one lookup each.
+fn chosen(selected: Option<&[usize]>) -> impl Fn(usize) -> bool {
+    let set: Option<HashSet<usize>> = selected.map(|selected| selected.iter().copied().collect());
+    move |index| set.as_ref().is_none_or(|set| set.contains(&index))
 }
 
 /// What a console game never needs: Windows programs and scripts. Left out of PS4/PS5 releases.
@@ -421,7 +422,8 @@ fn blocked(platform: Option<crate::platform::Platform>, path: &str) -> bool {
 fn payload_present(bytes: &[u8], folder: &Path, selected: Option<&[usize]>) -> Result<()> {
     let meta = librqbit::torrent_from_bytes(bytes).context("Invalid torrent metadata")?;
     let info = meta.info.data.validate().context("Unsafe torrent metadata")?;
-    for (_, file) in info.iter_file_details().enumerate().filter(|(i, _)| chosen(selected, *i)) {
+    let chosen = chosen(selected);
+    for (_, file) in info.iter_file_details().enumerate().filter(|(i, _)| chosen(*i)) {
         let found = std::fs::symlink_metadata(folder.join(file.filename.to_pathbuf())).ok();
         ensure!(found.is_some_and(|m| m.is_file() && m.len() == file.len), FILES_CHANGED);
     }
@@ -433,7 +435,8 @@ fn required_space(bytes: &[u8], folder: &Path, selected: Option<&[usize]>) -> Re
     let meta = librqbit::torrent_from_bytes(bytes)?;
     let info = meta.info.data.validate()?;
     let mut required = 0u64;
-    for (_, file) in info.iter_file_details().enumerate().filter(|(i, _)| chosen(selected, *i)) {
+    let chosen = chosen(selected);
+    for (_, file) in info.iter_file_details().enumerate().filter(|(i, _)| chosen(*i)) {
         let path = file.filename.to_pathbuf();
         check_path(folder, &path)?;
         let allocated = match std::fs::symlink_metadata(folder.join(path)) {
@@ -680,7 +683,8 @@ impl Worker {
             let folder = owned_folder(&job)?;
             let (total, files) = inspect_metadata(&bytes, key, &folder)?;
             let selected = job.selected.as_deref();
-            let total = if selected.is_some() { files.iter().enumerate().filter(|(i, _)| chosen(selected, *i)).map(|(_, f)| f.1).sum() } else { total };
+            let chosen = chosen(selected);
+            let total = if selected.is_some() { files.iter().enumerate().filter(|(i, _)| chosen(*i)).map(|(_, f)| f.1).sum() } else { total };
             ensure!(available_space(&folder)? >= required_space(&bytes, &folder, selected)?, "Not enough free space in the download folder");
             let session = self.session().await?;
             let magnet = librqbit::Magnet::parse(&job.magnet)?;
@@ -839,7 +843,13 @@ impl Worker {
     /// Forget a download that never started, and the empty folder looking it up made.
     async fn discard(&mut self, key: &str) -> Result<()> {
         let Some(job) = self.job(key) else { return Ok(()) };
-        if !matches!(job.state, State::Resolving | State::Ready | State::Failed) || job.done > 0 { return Ok(()); }
+        // Paused: still being looked up when the VPN went (or wasn't there yet).
+        let unstarted = match job.state {
+            State::Resolving | State::Ready | State::Failed => true,
+            State::Paused => job.selected.is_none() && job.entries.is_empty(),
+            _ => false,
+        };
+        if !unstarted || job.done > 0 { return Ok(()); }
         self.stop_job(key, State::Cancelled).await?;
         self.jobs.lock().unwrap().retain(|job| job.key != key);
         let _ = std::fs::remove_file(self.store.join(format!("{key}.torrent")));
@@ -861,8 +871,14 @@ impl Worker {
                     && job.folder.file_name().is_some_and(|name| name == format!("torrent-{key}").as_str())
                     && std::fs::read_to_string(job.folder.join(MARKER)).ok().as_deref() == Some(key),
                     "Refusing to delete {}: it isn't this download's own folder", job.folder.display());
+                // Hidden at once, deleted in the background so other transfers never wait for it.
                 // remove_dir_all removes links, never what they point to.
-                std::fs::remove_dir_all(&job.folder).with_context(|| format!("Delete {}", job.folder.display()))?;
+                let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+                let doomed = job.folder.with_file_name(format!(".torrent-{key}-deleting-{nanos}"));
+                std::fs::rename(&job.folder, &doomed).with_context(|| format!("Delete {}", job.folder.display()))?;
+                tokio::task::spawn_blocking(move || {
+                    if let Err(error) = std::fs::remove_dir_all(&doomed) { crate::log!("deleting {} failed: {error}", doomed.display()); }
+                });
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
@@ -1833,6 +1849,13 @@ mod tests {
             }).await.expect("deleted");
         });
         assert!(!done.folder.exists());
+        // Deleted in the background, out of sight: wait for the downloads folder to empty.
+        let base = done.folder.parent().unwrap();
+        let start = std::time::Instant::now();
+        while std::fs::read_dir(base).unwrap().next().is_some() {
+            assert!(start.elapsed() < Duration::from_secs(10), "the download's folder is deleted");
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert_eq!(std::fs::read(&outside).unwrap(), b"keep me");
         manager.shutdown();
 
@@ -1845,6 +1868,23 @@ mod tests {
         let mut worker = Worker::new(temp.path().join("store3"), Arc::new(Mutex::new(vec![job.clone()])), Policy { local_only: true, ..Default::default() });
         assert!(rt.block_on(worker.delete(&job.key)).is_err());
         assert!(job.folder.join("theirs.bin").exists());
+    }
+
+    #[test]
+    fn closing_the_panel_forgets_a_lookup_waiting_for_the_vpn() {
+        let rt = runtime();
+        let temp = tempfile::tempdir().unwrap();
+        let mut waiting = job(temp.path(), &"a".repeat(40));
+        (waiting.state, waiting.waiting_vpn) = (State::Paused, true);
+        // Paused after its files were chosen: a real download, never forgotten this way.
+        let mut chosen = job(temp.path(), &"b".repeat(40));
+        (chosen.state, chosen.selected) = (State::Paused, Some(vec![0]));
+        let jobs = Arc::new(Mutex::new(vec![waiting.clone(), chosen.clone()]));
+        let mut worker = Worker::new(temp.path().join("store"), jobs.clone(), Policy { local_only: true, ..Default::default() });
+        rt.block_on(worker.discard(&waiting.key)).unwrap();
+        rt.block_on(worker.discard(&chosen.key)).unwrap();
+        let left: Vec<String> = jobs.lock().unwrap().iter().map(|job| job.key.clone()).collect();
+        assert_eq!(left, vec![chosen.key]);
     }
 
     #[test]
