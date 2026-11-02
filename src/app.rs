@@ -2031,8 +2031,9 @@ impl App {
             self.finish_edit(Some(cur));
         }
         if zone == Z_SETTINGS_NAV && self.overlay == Overlay::Settings && idx >= 0 {
-            // Back from the rows (the hint clicked) sounds like Back, as on a controller.
-            audio::play(if self.zone == Z_SETTINGS { Sound::Back } else { Sound::Move });
+            // Back from the rows to their own section (the hint clicked) sounds like Back.
+            let back = self.zone == Z_SETTINGS && idx as usize == self.settings_section;
+            audio::play(if back { Sound::Back } else { Sound::Move });
             self.focus_settings_nav(idx as usize);
             if idx as usize >= self.settings_sections.len() { self.act(Act::Confirm); }
             return;

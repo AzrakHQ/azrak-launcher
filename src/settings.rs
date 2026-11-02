@@ -434,7 +434,7 @@ impl App {
 
     /// The glass behind the sheet: the art behind it, blurred (none over the dimmed Library).
     pub fn push_settings_glass(&mut self) {
-        let glass = self.bg_glass();
+        let Ok(glass) = self.bg_glass() else { return };
         let ui = self.ui();
         ui.set_settings_has_glass(glass.is_some());
         ui.set_settings_glass(glass.unwrap_or_default());

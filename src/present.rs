@@ -105,12 +105,12 @@ impl App {
         self.frost_pending.remove(&key);
         if self.frost.len() >= 16 { self.frost.remove(0); }
         self.frost.push((key, Image::from_rgba8(buf)));
-        self.push_ring();
+        // The top bar's and Settings' glass (only the glass: rebuilding Settings' rows would
+        // restart one being typed in).
+        self.push_glass();
         match self.overlay {
             Overlay::Downloads => self.push_downloads(),
             Overlay::Setup => self.push_setup(),
-            // Only the glass: rebuilding the rows would restart a row being typed in.
-            Overlay::Settings => self.push_settings_glass(),
             _ => {}
         }
     }
@@ -573,8 +573,16 @@ impl App {
     }
 
     /// The glass over the art: the art behind it, blurred (none over the dimmed Library).
-    pub fn bg_glass(&mut self) -> Option<Image> {
-        if self.view == 0 { let key = self.bg_key.clone(); self.frost_of(&key) } else { None }
+    /// `Err` while its blur is still being made: the glass shown stays until it's ready (no
+    /// flash of a solid pill in between).
+    pub fn bg_glass(&mut self) -> Result<Option<Image>, ()> {
+        if self.view != 0 { return Ok(None); }
+        let key = self.bg_key.clone();
+        match self.frost_of(&key) {
+            Some(img) => Ok(Some(img)),
+            None if self.frost_pending.contains(&key) => Err(()),
+            None => Ok(None),
+        }
     }
 
     /// Every glass on screen: the top bar's, and Settings' while it's open.

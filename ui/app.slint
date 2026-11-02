@@ -1682,6 +1682,7 @@ export component AppWindow inherits Window {
                                 font-size: (20px * S.t); font-weight: chosen ? 600 : 500;
                                 color: solid ? #05070f : #dfe4ef;
                                 vertical-alignment: center; horizontal-stretch: 1;
+                                overflow: elide;
                             }
                             // A long one (a controller's full name) is cut short, never past the column.
                             if sec.note != "": Text {
@@ -1881,7 +1882,10 @@ export component AppWindow inherits Window {
                         alignment: end;
                         spacing: (22px * S.k);
                         // Back/Close can be clicked too: from the rows to the sections, else closed.
-                        for h in [
+                        // About has no rows to open: only Close there.
+                        for h in (!in-rows && root.settings-section == root.settings-sections.length - 1) ? [
+                            { glyph: root.pad-hints ? "○" : "Esc", label: "Close", tint: #ff8a9a, back: true },
+                        ] : [
                             { glyph: root.pad-hints ? "✕" : "Enter", label: in-rows ? "Change" : "Open", tint: #8dbaff, back: false },
                             { glyph: root.pad-hints ? "○" : "Esc", label: in-rows ? "Back" : "Close", tint: #ff8a9a, back: true },
                         ]: Rectangle {
