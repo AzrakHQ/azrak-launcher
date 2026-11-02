@@ -207,7 +207,7 @@ impl App {
                 view.notice = warning;
                 view.notice_kind = 1;
             }
-            let paths_bad = view.dl.2 && dl_drive.is_none() || view.inst.2 && inst_drive.is_none();
+            let paths_bad = dl_drive.is_none() || inst_drive.is_none();
             (view.go_label, view.go_enabled) = if picked == 0 { ("Choose at least one file".into(), false) }
                 else if short.is_some() { ("Not enough space".into(), false) }
                 else if paths_bad { ("Choose the folders".into(), false) }
@@ -373,6 +373,8 @@ impl App {
             setup.edit = which;
             setup.focus = if which == 1 { Focus::ChangeDownload } else { Focus::ChangeInstall };
             setup.moved = true;
+            // Another folder: why the last one couldn't be used no longer applies.
+            setup.begin_error.clear();
         }
         audio::play(Sound::Select);
         self.push_setup();

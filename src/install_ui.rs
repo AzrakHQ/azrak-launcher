@@ -77,7 +77,8 @@ impl App {
     /// that hasn't been installed yet starts. One that failed waits for Retry install.
     pub fn auto_install(&mut self) {
         let installs = self.installer.snapshot();
-        if installs.iter().any(|record| record.state.active()) { return; }
+        // Not while one installs, or while the player is choosing where one goes.
+        if installs.iter().any(|record| record.state.active()) || self.install_pending.is_some() { return; }
         let mut jobs = self.downloads.snapshot();
         jobs.sort_by_key(|job| job.added);
         let next = jobs.into_iter().find(|job| job.state == downloads::State::Complete && job.install_to.is_some()

@@ -246,8 +246,9 @@ impl Manager {
     /// Where it installs by itself (`None`: it doesn't, its game is being deleted). Takes effect
     /// at once, so the install queue can't pick it up in between; the worker saves it.
     pub fn set_install_to(&self, key: &str, to: Option<PathBuf>) -> Result<()> {
-        if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key) { job.install_to = to.clone(); }
-        self.tx.try_send(Command::Save).context("Download worker is busy or unavailable")
+        if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key) { job.install_to = to; }
+        // Waits for room rather than leaving it unsaved (a deleted game mustn't reinstall).
+        self.tx.blocking_send(Command::Save).context("Download worker is unavailable")
     }
 
     /// Forget a download that never started (the player closed the Download & install panel):
@@ -656,7 +657,6 @@ struct Worker {
     tasks: JoinSet<Result<Resolved>>,
     /// Completed downloads added paused while their files are checked, before seeding again.
     reseeding: std::collections::HashSet<String>,
-    /// Completed downloads the player chose to share again, setting or not (until Stop sharing).
     /// The VPN interface the current session is bound to.
     bound: Option<String>,
 }
@@ -1047,13 +1047,6 @@ impl Worker {
     }
 
     /// Forget a download that never started, and the empty folder looking it up made.
-    #[cfg(test)]
-    async fn discard(&mut self, key: &str) -> Result<()> {
-        let Some(job) = self.job(key).filter(unstarted) else { return Ok(()) };
-        self.jobs.lock().unwrap().retain(|job| job.key != key);
-        self.forget(job).await
-    }
-
     /// Clean up after a discarded download (already out of the list): stop looking it up.
     async fn forget(&mut self, job: Job) -> Result<()> {
         let key = job.key.as_str();
@@ -1069,11 +1062,13 @@ impl Worker {
     /// Delete a download's files (its own folder, checked by the marker inside it), then forget it.
     async fn delete(&mut self, key: &str) -> Result<()> {
         let Some(job) = self.job(key).filter(|job| !job.state.active()) else { return Ok(()); };
+        // Checked before anything stops: a refused delete leaves it sharing as it was.
+        let present = std::fs::symlink_metadata(&job.folder).is_ok();
+        let own = job.folder.file_name().is_some_and(|name| name == format!("torrent-{key}").as_str()) && check_owned(&job.folder, key).is_ok();
+        ensure!(!present || own, "Refusing to delete {}: it isn't this download's own folder", job.folder.display());
         self.stop_job(key, job.state).await?;
         match std::fs::symlink_metadata(&job.folder) {
             Ok(_) => {
-                let own = job.folder.file_name().is_some_and(|name| name == format!("torrent-{key}").as_str()) && check_owned(&job.folder, key).is_ok();
-                ensure!(own, "Refusing to delete {}: it isn't this download's own folder", job.folder.display());
                 // Hidden at once, deleted in the background so other transfers never wait for it.
                 // remove_dir_all removes links, never what they point to.
                 let doomed = job.folder.with_file_name(crate::util::deleting_name(key));
@@ -2088,19 +2083,20 @@ mod tests {
 
     #[test]
     fn closing_the_panel_forgets_a_lookup_waiting_for_the_vpn() {
-        let rt = runtime();
         let temp = tempfile::tempdir().unwrap();
         let mut waiting = job(temp.path(), &"a".repeat(40));
         (waiting.state, waiting.waiting_vpn) = (State::Paused, true);
         // Paused once its file list was known (it has a size): a real download, never forgotten this way.
         let mut chosen = job(temp.path(), &"b".repeat(40));
         (chosen.state, chosen.total) = (State::Paused, 10);
-        let jobs = Arc::new(Mutex::new(vec![waiting.clone(), chosen.clone()]));
-        let mut worker = Worker::new(temp.path().join("store"), jobs.clone(), Policy { local_only: true, ..Default::default() });
-        rt.block_on(worker.discard(&waiting.key)).unwrap();
-        rt.block_on(worker.discard(&chosen.key)).unwrap();
-        let left: Vec<String> = jobs.lock().unwrap().iter().map(|job| job.key.clone()).collect();
+        let store = temp.path().join("store");
+        Worker::new(store.clone(), Arc::new(Mutex::new(vec![waiting.clone(), chosen.clone()])), Policy { local_only: true, ..Default::default() }).persist();
+        let mut manager = Manager::new(store, Policy { local_only: true, ..Default::default() });
+        manager.discard(&waiting.key).unwrap();
+        manager.discard(&chosen.key).unwrap();
+        let left: Vec<String> = manager.snapshot().iter().map(|job| job.key.clone()).collect();
         assert_eq!(left, vec![chosen.key]);
+        manager.shutdown();
     }
 
     #[test]

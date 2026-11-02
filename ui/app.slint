@@ -225,7 +225,6 @@ export component AppWindow inherits Window {
     in property <bool> download-active;
     in property <float> download-progress;
     in property <string> download-badge;
-    in property <string> download-summary;
     in property <bool> download-consent;
     in property <bool> download-is-install;
     in-out property <bool> download-focus-path;
@@ -239,7 +238,6 @@ export component AppWindow inherits Window {
     in property <string> download-warning;
     in-out property <string> download-path;
     in-out property <bool> download-editing;
-    in-out property <length> downloads-y;
     // The Downloads page: the selected download, the button with focus (-1: the shelf), the filter.
     in property <int> download-sel;
     in property <int> download-focus-btn: -1;
