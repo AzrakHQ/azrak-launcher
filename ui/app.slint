@@ -1131,18 +1131,19 @@ export component AppWindow inherits Window {
                     }
                     ta-ring := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, 4); } }
                 }
-                // A quarter bigger than a desktop app's: read from the sofa.
-                // Settings (3), and Downloads (4) when the ring isn't there; no search button: the
-                // Library has its own.
-                for ic[i] in root.ring-kind > 0 ? [Icons.gear] : [Icons.gear, Icons.disk]: Rectangle {
+                // A quarter bigger than a desktop app's: read from the sofa. Downloads (4) always
+                // sits before Settings (3): the ring above while something's happening, this icon
+                // in the same place otherwise. No search button: the Library has its own.
+                for ic in root.ring-kind > 0 ? [{ icon: Icons.gear, id: 3 }] : [{ icon: Icons.disk, id: 4 }, { icon: Icons.gear, id: 3 }]: Rectangle {
+                    property <int> id: ic.id;
                     width: (64px * S.k);
                     height: (64px * S.k);
                     y: (20px * S.k);
                     border-radius: (32px * S.k);
-                    property <bool> f: root.zone == Zone.top && root.idx == i + 3 && root.overlay == 0;
+                    property <bool> f: root.zone == Zone.top && root.idx == self.id && root.overlay == 0;
                     background: f ? #ffffff : ta.has-hover ? #ffffff14 : transparent;
-                    Image { source: ic; colorize: f ? #0a0d18 : Theme.text2; width: (32px * S.k); height: (32px * S.k); }
-                    ta := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, i + 3); } }
+                    Image { source: ic.icon; colorize: f ? #0a0d18 : Theme.text2; width: (32px * S.k); height: (32px * S.k); }
+                    ta := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, parent.id); } }
                 }
                 // The battery: green, amber at 20% or less, red at 10% or less (unless charging).
                 if root.battery-shown: bat := HorizontalLayout {
@@ -1652,12 +1653,17 @@ export component AppWindow inherits Window {
                         spacing: (12px * S.k);
                         alignment: start;
                         Rectangle {
-                            width: (26px * S.k); height: self.width; y: (8px * S.k);
+                            width: (26px * S.k); height: self.width; y: (10px * S.k);
                             border-radius: self.width / 2; background: #ffffff24;
                             Text { text: root.pad-hints ? "○" : "Esc"; font-size: root.pad-hints ? (13px * S.k) : (9px * S.k); color: #ff8a9a; }
                             TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.settings, -1); } }
                         }
-                        Text { text: "Settings"; font-size: (32px * S.t); font-weight: 600; color: Theme.text; vertical-alignment: center; }
+                        // The launcher's version under the title, as its caption.
+                        VerticalLayout {
+                            spacing: (2px * S.k);
+                            Text { text: "Settings"; font-size: (32px * S.t); font-weight: 600; color: Theme.text; }
+                            Text { text: root.settings-version; font-size: (15px * S.t); color: #9ba6c0; }
+                        }
                     }
                     for sec[i] in root.settings-sections: Rectangle {
                         property <bool> chosen: root.settings-section == i;
@@ -1691,8 +1697,6 @@ export component AppWindow inherits Window {
                         ta-sec := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.settings-nav, i); } }
                     }
                     Rectangle { vertical-stretch: 1; }
-                    Text { x: (18px * S.k); text: root.settings-version; font-size: (16px * S.t); color: #9ba6c0; }
-                    Rectangle { height: (6px * S.k); }
                     for q[k] in root.settings-footer: Rectangle {
                         property <bool> f: root.zone == Zone.settings-nav && root.idx == root.settings-sections.length + k;
                         height: (54px * S.k);

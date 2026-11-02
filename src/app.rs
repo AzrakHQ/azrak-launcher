@@ -320,8 +320,6 @@ pub struct App {
     /// Downloads that stopped or couldn't install, already seen on the Downloads page: the top
     /// bar's ring stops asking for them.
     pub ring_seen: HashSet<String>,
-    /// The ring is in the top bar (it comes before the gear then).
-    pub ring_shown: bool,
     /// A VPN connect, disconnect or import in progress ("Connecting…"), shown in Settings.
     pub vpn_busy: String,
     /// The VPNs last shown in Settings, to refresh it when one connects or drops.
@@ -623,7 +621,6 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         settings_sections: Vec::new(),
         settings_section: 0,
         ring_seen: HashSet::new(),
-        ring_shown: false,
         vpn_busy: String::new(),
         vpn_seen: String::new(),
         catalog_timer: slint::Timer::default(),
@@ -2131,9 +2128,8 @@ impl App {
     /// The top bar's buttons: 0–1 a running game's Resume and Stop, 3 Settings, 4 Downloads. (2 was
     /// a search button, which only led to the Library's own search: △ or / still gets there.)
     fn top_items(&self) -> Vec<i32> {
-        // The download ring sits before the gear; the plain Downloads icon after it.
-        let icons = if self.ring_shown { [4, 3] } else { [3, 4] };
-        if self.live.is_empty() { icons.to_vec() } else { [0, 1, icons[0], icons[1]].to_vec() }
+        // Downloads (the ring, or its icon) always before Settings.
+        if self.live.is_empty() { vec![4, 3] } else { vec![0, 1, 4, 3] }
     }
 
     pub fn act(&mut self, a: Act) {

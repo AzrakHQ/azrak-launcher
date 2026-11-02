@@ -695,7 +695,6 @@ impl App {
         } else {
             (0, String::new(), 0.0)
         };
-        self.ring_shown = kind != 0;
         // A focus that was on the ring stays on Downloads (the icon in its place).
         let glass = { let key = self.bg_key.clone(); self.frost_of(&key) };
         let ui = self.ui();
