@@ -171,8 +171,7 @@ try {
   assert.match(asked, /Remove from Downloads only/);
   await key('Up', 'Return'); // Cancel -> Remove from Downloads only: history goes, never payload.
   const removed = await shot('history-removed', 1);
-  assert.match(removed, /every file is kept/); // The toast (it names the game, so no doesNotMatch).
-  assert.match(removed, /All\s*2/);
+  assert.match(removed, /All\s*2/); // Its row is gone (no notification says so).
   assert.deepEqual(JSON.parse(await readFile(manifest)).jobs.map(job => job.key), [hash2, catalogHash]);
   assert.equal(digest(await readFile(payload)), before);
   await assert.rejects(access(installRoot), 'Completion alone must never create an installation destination');
