@@ -78,7 +78,8 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
         State::Resolving => {
             d.status = "Getting the file list".into();
             d.line = "Getting the file list".into();
-            d.actions = vec![("discard", "Cancel", "close")];
+            // Looked up again after it had started: cancelling keeps what it has.
+            d.actions = vec![(if job.done == 0 { "discard" } else { "cancel" }, "Cancel", "close")];
         }
         State::Ready => {
             (d.group, d.kind) = (1, 1);
@@ -87,7 +88,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             d.line = "Choose its files".into();
             // It couldn't start where (or with what) the player chose.
             d.note = job.error.clone();
-            d.actions = vec![("choose", "Choose files", "check"), ("discard", "Remove", "trash")];
+            d.actions = vec![("choose", "Choose files", "check"), (if job.done == 0 { "discard" } else { "remove" }, "Remove", "trash")];
         }
         State::Checking | State::Downloading => {
             d.status = if job.state == State::Checking { "Checking what's already downloaded".into() } else { "Downloading".into() };

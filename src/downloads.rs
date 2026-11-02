@@ -224,7 +224,8 @@ impl Manager {
         let job = {
             let mut jobs = self.jobs.lock().unwrap();
             let Some(job) = jobs.iter_mut().find(|job| job.key == key) else { return vec![] };
-            if job.state != State::Ready || !job.entries.is_empty() { return job.entries.clone(); }
+            // One that couldn't be read is read again on Keep trying (retry_entries), not every second.
+            if job.state != State::Ready || !job.entries.is_empty() || !job.error.is_empty() { return job.entries.clone(); }
             light(job)
         };
         let read = read_entries(&self.store, &job);
@@ -235,6 +236,14 @@ impl Manager {
             let _ = self.tx.try_send(Command::Save);
         }
         job.entries.clone()
+    }
+
+    /// Read a file list that couldn't be read back again (Keep trying).
+    pub fn retry_entries(&self, key: &str) -> Vec<Entry> {
+        if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key && job.state == State::Ready && job.entries.is_empty()) {
+            job.error.clear();
+        }
+        self.entries(key)
     }
 
     /// The files of a download the player left out (paths inside its folder).
@@ -295,7 +304,8 @@ impl Manager {
     /// It leaves the list at once, so pressing Download again starts afresh.
     pub fn discard(&self, key: &str) -> Result<()> {
         let mut jobs = self.jobs.lock().unwrap();
-        let Some(index) = jobs.iter().position(|job| job.key == key && unstarted(job)) else { return Ok(()) };
+        let Some(index) = jobs.iter().position(|job| job.key == key) else { return Ok(()) };
+        ensure!(unstarted(&jobs[index]), "It has started; cancel or remove it instead");
         let job = jobs.remove(index);
         if let Err(error) = self.tx.try_send(Command::Discard(job)) {
             let Command::Discard(job) = error.into_inner() else { unreachable!() };
@@ -317,8 +327,7 @@ impl Manager {
             "remove" if !job.state.active() => Command::Remove(key.into()),
             "delete" if !job.state.active() => {
                 // Refused here, so the player hears it (the worker checks again before deleting).
-                let own = job.folder.file_name().is_some_and(|name| name == format!("torrent-{key}").as_str()) && check_owned(&job.folder, key).is_ok();
-                ensure!(own || !job.folder.exists(), "{} isn't this download's own folder, so it's left alone", job.folder.display());
+                ensure!(own_folder(job) || !job.folder.exists(), "{} isn't this download's own folder, so it's left alone", job.folder.display());
                 Command::Delete(key.into())
             }
             "remove" | "delete" => bail!("It's downloading; cancel it first"),
@@ -562,6 +571,16 @@ fn shown(error: &anyhow::Error) -> String {
     URL.replace_all(&error.to_string(), "[network URL]").chars().take(500).collect()
 }
 
+/// The files that can be chosen (all but programs a console game never needs, and padding).
+fn allowed(entries: &[Entry]) -> Vec<usize> { (0..entries.len()).filter(|&i| !entries[i].blocked).collect() }
+
+const NOTHING_ALLOWED: &str = "Nothing in this release can be downloaded: it only holds programs a console game never needs.";
+
+/// The folder is this download's own (named for it, with its marker): safe to delete.
+fn own_folder(job: &Job) -> bool {
+    job.folder.file_name().is_some_and(|name| name == format!("torrent-{}", job.key).as_str()) && check_owned(&job.folder, &job.key).is_ok()
+}
+
 /// A download's file list, from its saved torrent.
 fn read_entries(store: &Path, job: &Job) -> Result<Vec<Entry>> {
     let (_, files, padding) = inspect_metadata(&read_torrent(store, &job.key)?, &job.key, None)?;
@@ -576,9 +595,15 @@ fn restore_entries(store: &Path, job: &mut Job, read: Result<Vec<Entry>>) {
     let torrent = store.join(format!("{}.torrent", job.key));
     let error = match read {
         Ok(entries) if entries.iter().any(|entry| !entry.blocked) => {
-            if job.selected.is_none() { job.selected = Some((0..entries.len()).filter(|&i| !entries[i].blocked).collect()); }
+            if job.selected.is_none() { job.selected = Some(allowed(&entries)); }
             job.entries = entries;
             job.error.clear();
+            return;
+        }
+        Ok(_) => {
+            job.state = State::Failed;
+            job.error = NOTHING_ALLOWED.into();
+            job.problem = Problem::Release;
             return;
         }
         _ if !torrent.exists() => "Its file list is missing. Retry looks it up again.".to_string(),
@@ -916,7 +941,7 @@ impl Worker {
                 return Err(Unsupported(format!("Azrak can't install this release: {why}. Nothing was downloaded; choose another release of this game.")).into());
             }
             let entries = entries_of(job.platform, files, padding);
-            ensure!(entries.iter().any(|entry| !entry.blocked), "Nothing in this release can be downloaded: it only holds programs a console game never needs.");
+            ensure!(entries.iter().any(|entry| !entry.blocked), NOTHING_ALLOWED);
             Ok((total, entries))
         })();
         let (total, entries) = checked.map_err(|error| anyhow::Error::new(ReleaseProblem(error)))?;
@@ -925,7 +950,7 @@ impl Worker {
         self.peers.insert(job.key.clone(), resolved.peers);
         self.update(&job.key, |job| {
             job.total = total; job.file_count = entries.iter().filter(|entry| !entry.padding).count();
-            job.selected = Some((0..entries.len()).filter(|&i| !entries[i].blocked).collect());
+            job.selected = Some(allowed(&entries));
             job.entries = entries;
             job.state = State::Ready; job.error.clear();
         });
@@ -950,8 +975,8 @@ impl Worker {
                 Some(selected) => Some(selected),
                 None => {
                     let entries = entries_of(job.platform, files.clone(), padding);
-                    let allowed: Vec<usize> = (0..entries.len()).filter(|&i| !entries[i].blocked).collect();
-                    ensure!(!allowed.is_empty(), "Nothing in this release can be downloaded: it only holds programs a console game never needs.");
+                    let allowed = allowed(&entries);
+                    ensure!(!allowed.is_empty(), NOTHING_ALLOWED);
                     (allowed.len() < entries.len()).then_some(allowed)
                 }
             };
@@ -969,7 +994,13 @@ impl Worker {
             })).await?;
             let handle = response.into_handle().context("No transfer handle")?;
             self.handles.insert(key.into(), handle);
-            self.update(key, |job| { job.folder = folder; job.total = total; job.done = 0; job.state = State::Checking; job.error.clear(); job.entries.clear(); });
+            // A partial download keeps what it had until the engine has checked it (it counts the
+            // whole torrent meanwhile); a whole one shows the check's progress.
+            let whole = wanted.is_none();
+            self.update(key, |job| {
+                job.folder = folder; job.total = total; if whole { job.done = 0; }
+                job.state = State::Checking; job.error.clear(); job.entries.clear();
+            });
         }
         self.persist();
         Ok(())
@@ -1168,8 +1199,7 @@ impl Worker {
         let Some(job) = self.job(key).filter(|job| !job.state.active()) else { return Ok(()); };
         // Checked before anything stops: a refused delete leaves it sharing as it was.
         let present = std::fs::symlink_metadata(&job.folder).is_ok();
-        let own = job.folder.file_name().is_some_and(|name| name == format!("torrent-{key}").as_str()) && check_owned(&job.folder, key).is_ok();
-        ensure!(!present || own, "Refusing to delete {}: it isn't this download's own folder", job.folder.display());
+        ensure!(!present || own_folder(&job), "Refusing to delete {}: it isn't this download's own folder", job.folder.display());
         // Hidden first (a seed keeps its open files meanwhile), so a rename that fails leaves it
         // sharing as it was; then stopped, and deleted in the background so other transfers never
         // wait for it. remove_dir_all removes links, never what they point to.
@@ -2204,7 +2234,7 @@ mod tests {
         Worker::new(store.clone(), Arc::new(Mutex::new(vec![waiting.clone(), chosen.clone()])), Policy { local_only: true, ..Default::default() }).persist();
         let mut manager = Manager::new(store, Policy { local_only: true, ..Default::default() });
         manager.discard(&waiting.key).unwrap();
-        manager.discard(&chosen.key).unwrap();
+        assert!(manager.discard(&chosen.key).is_err(), "a started one says so");
         let left: Vec<String> = manager.snapshot().iter().map(|job| job.key.clone()).collect();
         assert_eq!(left, vec![chosen.key]);
         manager.shutdown();

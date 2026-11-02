@@ -404,8 +404,9 @@ impl App {
         let Some(key) = self.setup.as_ref().and_then(|setup| setup.key.clone()) else { return };
         if view.state == 2 {
             if let Some(setup) = self.setup.as_mut() { setup.moved = false; }
-            // Waiting to be chosen: its file list is read again (push_setup asks); else look again.
-            if self.downloads.job(&key).is_some_and(|job| job.state != State::Ready) { let _ = self.downloads.action(&key, "retry"); }
+            // Waiting to be chosen: its file list is read again; else it's looked up again.
+            if self.downloads.job(&key).is_some_and(|job| job.state == State::Ready) { self.downloads.retry_entries(&key); }
+            else { let _ = self.downloads.action(&key, "retry"); }
             audio::play(Sound::Select);
             self.push_setup();
             return;

@@ -2733,7 +2733,9 @@ impl App {
             // isn't offered as the obvious next step.
             let discouraged = job.is_none() && self.outlook(t).is_some_and(|o| o.discourages_download());
             let (id, label) = if installing { ("download", "Installing…") }
-                else if job.as_ref().is_some_and(|job| job.state == crate::downloads::State::Complete && job.install_to.is_none()) { ("install", "Install") }
+                // Not installing by itself (never set to, or its install was cancelled or failed).
+                else if job.as_ref().is_some_and(|job| job.state == crate::downloads::State::Complete && (job.install_to.is_none()
+                    || self.installer.snapshot().iter().any(|record| record.key == job.key && record.state != crate::installer::State::Installed))) { ("install", "Install") }
                 else if job.is_some() { ("download", "View download") }
                 else if discouraged { ("download", "Download anyway") }
                 else { ("download", "Download") };
@@ -2795,7 +2797,15 @@ impl App {
                 self.toast("This release is a PS5 PKG package", &format!("PS5 games install from extracted releases only, not PKG packages. {tip}"), 0);
             }
             "install" => {
-                if let Some(job) = self.download_for_target(t) { self.prepare_install(&job.key); }
+                // Where it was set to install, if it was; otherwise ask where.
+                match self.download_for_target(t) {
+                    Some(job) if job.install_to.is_some() => match self.start_install(&job.key, job.install_to.clone().unwrap()) {
+                        Ok(()) => { audio::play(Sound::Select); self.push_installs(); }
+                        Err(error) => self.toast("Couldn't install", &format!("{error:#}"), 2),
+                    },
+                    Some(job) => self.prepare_install(&job.key),
+                    None => {}
+                }
             }
             "store" => {
                 if let Some(i) = self.target_info(t).filter(|i| !i.store.is_empty()) {
