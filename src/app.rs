@@ -47,6 +47,8 @@ pub const Z_POWER: i32 = 22;
 pub const Z_SEARCH_KEYS: i32 = 23;
 pub const Z_VERSIONS: i32 = 24;
 pub const Z_SETUP: i32 = 25;
+/// Settings' left column: its sections, and Quit under them.
+pub const Z_SETTINGS_NAV: i32 = 26;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Overlay {
@@ -312,7 +314,14 @@ pub struct App {
     pub row_flip: bool,
     pub settings_ids: Vec<crate::settings::SId>,
     /// Settings' Advanced section is expanded (for this session).
-    pub settings_advanced: bool,
+    /// Settings' sections (the left column), and the one shown.
+    pub settings_sections: Vec<crate::SettingSection>,
+    pub settings_section: usize,
+    /// Downloads that stopped or couldn't install, already seen on the Downloads page: the top
+    /// bar's ring stops asking for them.
+    pub ring_seen: HashSet<String>,
+    /// The ring is in the top bar (it comes before the gear then).
+    pub ring_shown: bool,
     /// A VPN connect, disconnect or import in progress ("Connecting…"), shown in Settings.
     pub vpn_busy: String,
     /// The VPNs last shown in Settings, to refresh it when one connects or drops.
@@ -611,7 +620,10 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         hero_flip: false,
         row_flip: false,
         settings_ids: Vec::new(),
-        settings_advanced: false,
+        settings_sections: Vec::new(),
+        settings_section: 0,
+        ring_seen: HashSet::new(),
+        ring_shown: false,
         vpn_busy: String::new(),
         vpn_seen: String::new(),
         catalog_timer: slint::Timer::default(),
@@ -1779,6 +1791,7 @@ impl App {
         self.push_installs();
         self.auto_install();
         self.push_downloads();
+        self.push_ring();
         if self.overlay == Overlay::Settings && self.edit_index < 0 && self.vpn_seen != crate::settings::vpn_signature() {
             self.refresh_settings();
         }
@@ -2017,6 +2030,12 @@ impl App {
             let cur = self.ui().get_edit_text().to_string();
             self.finish_edit(Some(cur));
         }
+        if zone == Z_SETTINGS_NAV && self.overlay == Overlay::Settings && idx >= 0 {
+            audio::play(Sound::Move);
+            self.focus_settings_nav(idx as usize);
+            if idx as usize >= self.settings_sections.len() { self.act(Act::Confirm); }
+            return;
+        }
         if zone == Z_WIFI_JOIN && self.overlay == Overlay::WifiJoin {
             return self.click_wifi_join(idx);
         }
@@ -2112,7 +2131,9 @@ impl App {
     /// The top bar's buttons: 0–1 a running game's Resume and Stop, 3 Settings, 4 Downloads. (2 was
     /// a search button, which only led to the Library's own search: △ or / still gets there.)
     fn top_items(&self) -> Vec<i32> {
-        if self.live.is_empty() { vec![3, 4] } else { vec![0, 1, 3, 4] }
+        // The download ring sits before the gear; the plain Downloads icon after it.
+        let icons = if self.ring_shown { [4, 3] } else { [3, 4] };
+        if self.live.is_empty() { icons.to_vec() } else { [0, 1, icons[0], icons[1]].to_vec() }
     }
 
     pub fn act(&mut self, a: Act) {
@@ -2144,7 +2165,8 @@ impl App {
             Overlay::WifiJoin => self.act_wifi_join(a),
             Overlay::SearchKeys => self.act_search_keys(a),
             Overlay::Power => self.act_power(a),
-            Overlay::Settings => self.act_settings(a),
+            Overlay::Settings if self.zone == Z_SETTINGS_NAV => self.act_settings_nav(a),
+            Overlay::Settings => self.act_settings_rows(a),
             Overlay::Hub => self.act_hub(a),
             Overlay::Downloads => self.act_downloads(a),
             Overlay::Setup => self.act_setup(a),
@@ -3198,33 +3220,12 @@ impl App {
     pub fn open_settings(&mut self) {
         audio::play(Sound::Select);
         self.sys_poll();
+        // The first section, with the sections in focus.
+        self.settings_section = 0;
         self.build_settings();
-        let first = self.settings_rows.iter().position(|r| r.kind != 0).unwrap_or(0) as i32;
         self.ui().set_settings_y(0.0);
-        self.push_overlay(Overlay::Settings, Z_SETTINGS, first);
+        self.push_overlay(Overlay::Settings, Z_SETTINGS_NAV, 0);
         self.push_settings();
-    }
-
-    fn act_settings(&mut self, a: Act) {
-        let n = self.settings_rows.len() as i32;
-        let focusable = |rows: &Vec<crate::SettingData>, i: i32| i >= 0 && i < rows.len() as i32 && rows[i as usize].kind != 0;
-        match a {
-            Act::Back => self.back(),
-            Act::Up | Act::Down => {
-                let step = if a == Act::Up { -1 } else { 1 };
-                let mut j = self.idx + step;
-                while j >= 0 && j < n && !focusable(&self.settings_rows, j) {
-                    j += step;
-                }
-                if focusable(&self.settings_rows, j) {
-                    self.move_focus(Z_SETTINGS, j);
-                    self.scroll_settings();
-                }
-            }
-            Act::Left | Act::Right => self.settings_change(self.idx as usize, if a == Act::Left { -1 } else { 1 }),
-            Act::Confirm => self.settings_activate(self.idx as usize),
-            _ => {}
-        }
     }
 
     pub fn finish_edit(&mut self, text: Option<String>) {

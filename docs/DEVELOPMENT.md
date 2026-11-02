@@ -173,8 +173,10 @@ Use this feature only for content you are authorized to obtain and share.
   install** stays off until both fit. Closing the panel forgets the lookup and its empty folder.
 4. The download starts and the game **installs by itself** when it finishes, one install at a
   time (the rest wait their turn). The download stays afterwards, for sharing.
-5. Keep browsing or minimize the window. Open **Downloads** with the top-bar disk icon,
-  **Ctrl+D**, or **Settings → Manage downloads**: the selected download over its key art (its
+5. Keep browsing or minimize the window. While something is happening, a ring in the top bar
+  shows it (the game and how far, several downloads together, Installing in purple, or in amber
+  what stopped or couldn't install until you've looked); otherwise there's a disk icon. Open
+  **Downloads** with either, **Ctrl+D**, or **Settings → Downloads → Open downloads**: the selected download over its key art (its
   progress, speed with a speed line, time left), one bar from Download to Install to Play, and
   a shelf of every download, newest first, filtered with L1/R1 (Q/E) into In progress, Needs
   you and Ready to play.

@@ -57,6 +57,22 @@ fn added_label(added: u64) -> String {
     }
 }
 
+/// The top bar ring's arc for `frac` (0–1), on a 36×36 box: a circle of radius 15 from the top,
+/// clockwise.
+fn ring_path(frac: f32) -> String {
+    let f = frac.clamp(0.0, 1.0);
+    if f >= 0.999 { return "M 18 3 A 15 15 0 0 1 18 33 A 15 15 0 0 1 18 3".into(); }
+    let a = f.max(0.01) * std::f32::consts::TAU;
+    let (x, y) = (18.0 + 15.0 * a.sin(), 18.0 - 15.0 * a.cos());
+    format!("M 18 3 A 15 15 0 {} 1 {x:.2} {y:.2}", if f > 0.5 { 1 } else { 0 })
+}
+
+/// A name short enough for the top bar.
+fn short_name(name: &str) -> String {
+    if name.chars().count() <= 26 { return name.into(); }
+    format!("{}…", name.chars().take(24).collect::<String>().trim_end())
+}
+
 /// The speed line: the last minutes of download speed, scaled to its own peak, on a 400×160 box.
 fn spark_path(speeds: &std::collections::VecDeque<f32>) -> String {
     if speeds.len() < 2 { return String::new(); }
@@ -237,6 +253,9 @@ impl App {
     }
 
     pub fn open_downloads(&mut self, key: Option<&str>) {
+        // Looked at: the ring stops asking about what stopped.
+        let needs = self.ring_needs();
+        self.ring_seen.extend(needs);
         if self.overlay != Overlay::Downloads {
             self.push_overlay(Overlay::Downloads, Z_DOWNLOADS, 0);
             self.dl_shelf = 0.0;
@@ -637,6 +656,54 @@ impl App {
             }
             Some(_) => {}
         }
+    }
+
+    /// Downloads that need the player: stopped ones, and finished ones that couldn't install.
+    fn ring_needs(&self) -> Vec<String> {
+        let installs = self.installer.snapshot();
+        self.downloads.snapshot().into_iter().filter(|job| match job.state {
+            State::Failed => job.total > 0,
+            State::Complete => self.install_failures.contains_key(&job.key)
+                || installs.iter().any(|r| r.key == job.key && r.state == Install::Failed),
+            _ => false,
+        }).map(|job| job.key).collect()
+    }
+
+    /// The top bar's ring: what needs you (until you've looked), else what's downloading, else
+    /// what's installing, else what waits for the VPN. Gone when nothing is happening (the
+    /// Downloads icon is there then).
+    pub fn push_ring(&mut self) {
+        let jobs = self.downloads.snapshot();
+        let installs = self.installer.snapshot();
+        let needs = self.ring_needs();
+        self.ring_seen.retain(|key| needs.contains(key));
+        let unseen: Vec<&Job> = jobs.iter().filter(|job| needs.contains(&job.key) && !self.ring_seen.contains(&job.key)).collect();
+        let active: Vec<&Job> = jobs.iter().filter(|job| matches!(job.state, State::Checking | State::Downloading)).collect();
+        let (kind, label, frac) = if let Some(job) = unseen.first() {
+            let what = if job.state == State::Failed { "Download stopped" } else { "Couldn't install" };
+            (3, if unseen.len() > 1 { format!("{} need you", unseen.len()) } else { what.to_string() }, job.progress())
+        } else if !active.is_empty() {
+            let (done, total) = active.iter().fold((0u64, 0u64), |(d, t), job| (d + job.done, t + job.total));
+            let frac = if total > 0 { done as f32 / total as f32 } else { 0.0 };
+            let pct = (frac * 100.0).floor();
+            let label = if active.len() == 1 { format!("{} · {pct:.0}%", short_name(&active[0].name)) } else { format!("{} downloads · {pct:.0}%", active.len()) };
+            (1, label, frac)
+        } else if let Some(record) = installs.iter().find(|r| r.state.active()) {
+            (2, format!("Installing · {:.0}%", (record.progress() * 100.0).floor()), record.progress())
+        } else if let Some(job) = jobs.iter().find(|job| job.waiting_vpn && job.state != State::Complete) {
+            (3, "Waiting for your VPN".to_string(), job.progress())
+        } else {
+            (0, String::new(), 0.0)
+        };
+        self.ring_shown = kind != 0;
+        // A focus that was on the ring stays on Downloads (the icon in its place).
+        let glass = { let key = self.bg_key.clone(); self.frost_of(&key) };
+        let ui = self.ui();
+        ui.set_ring_kind(kind);
+        ui.set_ring_label(label.into());
+        ui.set_ring_path(ring_path(frac).into());
+        ui.set_bar_has_glass(glass.is_some());
+        ui.set_bar_glass(glass.unwrap_or_default());
     }
 
     pub fn act_downloads(&mut self, action: Act) {

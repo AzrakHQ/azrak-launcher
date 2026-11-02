@@ -121,6 +121,7 @@ export global Zone {
     out property <int> search-keys: 23;
     out property <int> versions: 24;
     out property <int> setup: 25;
+    out property <int> settings-nav: 26;
 }
 
 // dot: KytyPS5 compatibility level (0 none, 1 in-game, 2 menus, 3 boots, 4 doesn't boot, 5 untested)
@@ -246,6 +247,9 @@ export struct HubData {
     about: [string],
 }
 
+// A section of Settings, in its left column: note beside it (note-kind 0 dim, 1 blue, 2 amber).
+export struct SettingSection { label: string, sub: string, note: string, note-kind: int }
+
 export struct SettingData {
     kind: int,        // 0 header, 1 text, 2 toggle, 3 cycle, 4 button
     label: string,
@@ -258,6 +262,7 @@ export struct SettingData {
     value-kind: int,  // 0 dim, 1 good, 2 bad, 3 call to action
     group-first: bool, // rows of a section share one card
     group-last: bool,
+    section: int,     // which section it's in (-1: under the sections, like Quit)
     icon: string,     // before the value (Icons.get), e.g. "check" for Connected
     signal: int,      // a Wi-Fi network's bars, 1–4, after the value (0: none)
     lock: bool,       // a Wi-Fi network that needs a password

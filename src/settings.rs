@@ -1,10 +1,11 @@
-//! Settings sheet: rows, controller-friendly editing, instant save.
+//! Settings sheet: sections on the left, the chosen one's rows on the right; controller-friendly
+//! editing, instant save.
 
 use crate::app::*;
 use crate::audio::{self, Sound};
 use crate::config::{PRESENT_MODES, RESOLUTIONS};
 use crate::util;
-use crate::SettingData;
+use crate::{SettingData, SettingSection};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SId {
@@ -49,7 +50,6 @@ pub enum SId {
     Sounds,
     Share,
     // Advanced
-    Advanced,
     Emulator,
     Resolution,
     Present,
@@ -288,12 +288,9 @@ impl App {
         };
         rows.push((SId::Share, r));
 
+        // Its own section: out of the way without a switch to show it.
         header(&mut rows, "ADVANCED");
-        let advanced = self.settings_advanced;
-        let mut r = row(4, if advanced { "Hide advanced settings" } else { "Show advanced settings" });
-        r.hint = "KytyPS5 location and video options, game catalog".into();
-        rows.push((SId::Advanced, r));
-        if advanced {
+        {
             let mut r = row(1, "KytyPS5 location");
             r.value = util::display_path(&cfg.emulator).into();
             (r.hint, r.hint_kind) = if ok { ("Found".into(), 1) } else { ("Nothing runnable at this path".into(), 2) };
@@ -339,14 +336,146 @@ impl App {
             rows.push((SId::Quit, r));
         }
 
-        // Rows between two headers form one card.
-        for i in 0..rows.len() {
-            let first = i == 0 || rows[i - 1].1.kind == 0;
-            let last = i + 1 == rows.len() || rows[i + 1].1.kind == 0;
-            (rows[i].1.group_first, rows[i].1.group_last) = (first, last);
+        // Each header starts a section (the left column); the last, unnamed one holds Quit (or
+        // Restart and Shut down), under the sections.
+        let mut titles: Vec<String> = Vec::new();
+        let mut cur = -1;
+        for (_, r) in rows.iter_mut() {
+            if r.kind == 0 {
+                cur = if r.label.is_empty() { -1 } else { titles.push(r.label.to_string()); titles.len() as i32 - 1 };
+            }
+            r.section = cur;
         }
+        titles.push("ABOUT".into());
+        self.settings_sections = titles.iter().map(|t| self.section_info(t)).collect();
+        self.settings_section = self.settings_section.min(self.settings_sections.len() - 1);
         self.settings_ids = rows.iter().map(|(id, _)| *id).collect();
         self.settings_rows = rows.into_iter().map(|(_, r)| r).collect();
+    }
+
+    /// A section's name in the left column, what it's for, and a note beside it (what needs you).
+    fn section_info(&self, header: &str) -> SettingSection {
+        let mut chars = header.chars();
+        let label: String = chars.next().into_iter().chain(chars.flat_map(|c| c.to_lowercase())).collect();
+        let (sub, (note, note_kind)) = match header {
+            "SYSTEM" => ("Internet, sound and power", (String::new(), 0)),
+            "GAMES" => ("Where your games live", (String::new(), 0)),
+            "PLAYING" => ("What happens when you start a game", match crate::gamepad::connected().first() {
+                Some(name) => (name.clone(), 0),
+                None => (String::new(), 0),
+            }),
+            "DOWNLOADS" => ("How games are downloaded and shared", {
+                let active = self.downloads.snapshot().iter().filter(|j| matches!(j.state, crate::downloads::State::Checking | crate::downloads::State::Downloading)).count();
+                if active > 0 { (format!("{active} active"), 1) } else { (String::new(), 0) }
+            }),
+            "UPDATES" => ("The launcher and its emulators", {
+                let ready = [self.app_update_available(), self.kyty_update_available()].iter().filter(|r| **r).count();
+                if ready > 0 { (format!("{ready} ready"), 2) } else { (String::new(), 0) }
+            }),
+            "LAUNCHER" => ("Display, sounds and your game ratings", (String::new(), 0)),
+            "ADVANCED" => ("KytyPS5 location and video options, the game catalog", (String::new(), 0)),
+            _ => ("", (String::new(), 0)),
+        };
+        let sub = if header == "ABOUT" { format!("Azrak Launcher {}", crate::update::current_version()) } else { sub.to_string() };
+        SettingSection { label: label.into(), sub: sub.into(), note: note.into(), note_kind }
+    }
+
+    /// The launcher's version and whether it's up to date, under the sections.
+    fn version_line(&self) -> String {
+        let cur = crate::update::current_version();
+        if self.upd.installed.is_some() { format!("Azrak Launcher {cur} · restart to update") }
+        else if self.app_update_available() { format!("Azrak Launcher {cur} · update ready") }
+        else if self.upd.latest.is_some() { format!("Azrak Launcher {cur} · up to date") }
+        else { format!("Azrak Launcher {cur}") }
+    }
+
+    /// The rows under the sections (Quit, or Restart and Shut down), by row number.
+    fn settings_footer(&self) -> Vec<usize> {
+        self.settings_rows.iter().enumerate().filter(|(_, r)| r.kind != 0 && r.section < 0).map(|(i, _)| i).collect()
+    }
+
+    /// The rows of the chosen section that can have focus, by row number.
+    fn section_rows(&self) -> Vec<usize> {
+        let s = self.settings_section as i32;
+        self.settings_rows.iter().enumerate().filter(|(_, r)| r.kind != 0 && r.section == s).map(|(i, _)| i).collect()
+    }
+
+    /// Focus a row, showing its section.
+    pub fn focus_setting_row(&mut self, i: usize) {
+        if let Some(s) = self.settings_rows.get(i).map(|r| r.section).filter(|s| *s >= 0) {
+            self.settings_section = s as usize;
+            self.set_focus(Z_SETTINGS, i as i32);
+            self.push_settings_nav();
+            self.scroll_settings();
+        }
+    }
+
+    /// The left column: section `i`, or a row under them (Quit) past the last section.
+    pub fn focus_settings_nav(&mut self, i: usize) {
+        let n = self.settings_sections.len();
+        if i < n && i != self.settings_section {
+            self.settings_section = i;
+            self.ui().set_settings_y(0.0);
+        }
+        self.move_focus(Z_SETTINGS_NAV, i as i32);
+        self.push_settings_nav();
+    }
+
+    pub fn act_settings_nav(&mut self, a: Act) {
+        let n = self.settings_sections.len();
+        let footer = self.settings_footer();
+        let i = self.idx.max(0) as usize;
+        match a {
+            Act::Back => self.back(),
+            Act::Up if i > 0 => { audio::play(Sound::Move); self.focus_settings_nav(i - 1); }
+            Act::Down if i + 1 < n + footer.len() => { audio::play(Sound::Move); self.focus_settings_nav(i + 1); }
+            Act::Right | Act::Confirm if i < n => {
+                if let Some(&j) = self.section_rows().first() {
+                    audio::play(Sound::Move);
+                    self.focus_setting_row(j);
+                }
+            }
+            Act::Confirm => {
+                if let Some(&j) = footer.get(i - n) { self.settings_activate(j); }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn act_settings_rows(&mut self, a: Act) {
+        let rows = self.section_rows();
+        let pos = rows.iter().position(|&j| j as i32 == self.idx);
+        let kind = self.settings_rows.get(self.idx.max(0) as usize).map_or(0, |r| r.kind);
+        let to_nav = |app: &mut App| { audio::play(Sound::Back); let s = app.settings_section; app.focus_settings_nav(s); };
+        match a {
+            // Back leaves the rows for their section; Back there closes Settings.
+            Act::Back => to_nav(self),
+            Act::Up | Act::Down => {
+                let next = match (pos, a) {
+                    (Some(p), Act::Up) => p.checked_sub(1),
+                    (Some(p), _) => Some(p + 1),
+                    (None, _) => Some(0),
+                };
+                if let Some(&j) = next.and_then(|p| rows.get(p)) {
+                    self.move_focus(Z_SETTINGS, j as i32);
+                    self.scroll_settings();
+                }
+            }
+            // Left changes a switch or a choice; anywhere else it goes back to the sections.
+            Act::Left if !matches!(kind, 2 | 3) => to_nav(self),
+            Act::Left | Act::Right => self.settings_change(self.idx as usize, if a == Act::Left { -1 } else { 1 }),
+            Act::Confirm => self.settings_activate(self.idx as usize),
+            _ => {}
+        }
+    }
+
+    /// The left column's state (which section, its title, the rows under the sections).
+    pub fn push_settings_nav(&mut self) {
+        let ui = self.ui();
+        let s = self.settings_sections.get(self.settings_section).cloned().unwrap_or_default();
+        ui.set_settings_section(self.settings_section as i32);
+        ui.set_settings_title(s.label);
+        ui.set_settings_sub(s.sub);
     }
 
     /// Open Settings with "Share your results with KytyPS5" selected.
@@ -358,43 +487,43 @@ impl App {
     pub fn open_setting(&mut self, id: SId) {
         self.open_settings();
         if let Some(i) = self.settings_ids.iter().position(|s| *s == id) {
-            self.set_focus(Z_SETTINGS, i as i32);
-            self.scroll_settings();
+            self.focus_setting_row(i);
         }
     }
 
     pub fn push_settings(&mut self) {
+        let footer: Vec<SettingData> = self.settings_footer().into_iter().map(|i| self.settings_rows[i].clone()).collect();
+        let glass = { let key = self.bg_key.clone(); self.frost_of(&key) };
         let ui = self.ui();
         ui.set_settings(model(self.settings_rows.clone()));
+        ui.set_settings_sections(model(self.settings_sections.clone()));
+        ui.set_settings_footer(model(footer));
+        ui.set_settings_version(self.version_line().into());
+        ui.set_settings_has_glass(glass.is_some());
+        ui.set_settings_glass(glass.unwrap_or_default());
         ui.set_edit_index(self.edit_index);
+        self.push_settings_nav();
     }
 
     pub fn scroll_settings(&mut self) {
-        // Estimated row heights matching app.slint. Text (and the panel's width) follows the text
-        // scale, which on small windows is larger than the layout scale.
+        // Estimated row heights matching app.slint (layout units). Text follows the text scale,
+        // which on small windows is larger than the layout scale.
         let r = (self.scale.max(crate::present::TEXT_SCALE_MIN) / self.scale).max(1.0);
-        let mut y = 64.0 + (54.0 + 24.0) * r;
-        let mut target = 0.0;
-        for (i, row) in self.settings_rows.iter().enumerate() {
+        let (mut y, mut target) = (0.0, 0.0);
+        for i in self.section_rows() {
             if i as i32 == self.idx {
                 target = y;
             }
-            // Hints wrap at about 66 characters (the panel's width at 17 px, at any scale).
-            let hint_lines = row.hint.chars().count().div_ceil(66) as f32;
-            y += match row.kind {
-                0 if row.label.is_empty() => 20.0 + 12.0,
-                0 => 36.0 + 20.0 * r + 12.0,
-                _ => 28.0 + 36.0 * r + if hint_lines > 0.0 { 4.0 + hint_lines * 21.0 * r } else { 0.0 } + if self.edit_index == i as i32 { 54.0 * r } else { 0.0 },
-            };
+            let row = &self.settings_rows[i];
+            // Hints wrap at about 95 characters (the column's width at 17 px).
+            let hint_lines = row.hint.chars().count().div_ceil(95) as f32;
+            let h = 32.0 + 26.0 * r + if hint_lines > 0.0 { 5.0 + hint_lines * 22.0 * r } else { 0.0 } + if self.edit_index == i as i32 { 60.0 * r } else { 0.0 };
+            y += f32::max(h, 84.0) + 10.0;
         }
-        y += 36.0 + (20.0 + 180.0) * r + 12.0; // About card under the last row
-        let (_, h) = self.logical_size();
-        let max = (y + 120.0 - h).max(0.0);
-        // The last row reveals the About block, which is not focusable itself.
-        if self.idx == self.settings_rows.len() as i32 - 1 {
-            target = y;
-        }
-        self.ui().set_settings_y(-(target - h * 0.4).clamp(0.0, max) * self.scale);
+        // The rows' window on the sheet: under the title, above the button hints.
+        let view = 960.0 - 48.0 - (42.0 + 8.0 + 24.0) * r - 30.0 - 76.0;
+        let max = (y - view).max(0.0);
+        self.ui().set_settings_y(-(target - view * 0.35).clamp(0.0, max) * self.scale);
     }
 
     fn save_cfg(&mut self, f: impl FnOnce(&mut crate::config::Config)) {
@@ -419,8 +548,7 @@ impl App {
             .filter(|(id, _)| *id != SId::Header)
             .find_map(|(id, label)| same_row((*id, label), &after)) else { return };
         if i as i32 != self.idx {
-            self.set_focus(Z_SETTINGS, i as i32);
-            self.scroll_settings();
+            self.focus_setting_row(i);
         }
     }
 
@@ -430,8 +558,7 @@ impl App {
             return;
         }
         if let Some(i) = self.settings_ids.iter().position(|s| *s == id) {
-            self.set_focus(Z_SETTINGS, i as i32);
-            self.scroll_settings();
+            self.focus_setting_row(i);
         }
     }
 
@@ -596,12 +723,6 @@ impl App {
             }
             SId::Quit => {
                 crate::app::quit("Settings → Quit Azrak Launcher");
-            }
-            SId::Advanced => {
-                audio::play(Sound::Select);
-                self.settings_advanced = !self.settings_advanced;
-                self.refresh_settings();
-                self.scroll_settings();
             }
             SId::Downloads => self.open_downloads(None),
             SId::Vpn => {

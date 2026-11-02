@@ -1,4 +1,4 @@
-import { S, Theme, Icons, Zone, DownloadData, DlTab, DlChoice, SetupFile, BootStep, OsiDisk, WjKey, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, ToastData, MenuItem, RunningData } from "theme.slint";
+import { S, Theme, Icons, Zone, DownloadData, DlTab, DlChoice, SetupFile, BootStep, OsiDisk, WjKey, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, SettingSection, ToastData, MenuItem, RunningData } from "theme.slint";
 import { FocusRing, Chip, Btn, Kicker, Badge, Switch, KeyCap, KeyboardKey, BackButton, Shimmer, Cover } from "widgets.slint";
 import { DownloadsPage, DownloadConsent, DownloadPanel } from "downloads.slint";
 import { LibraryFilter, LibrarySortPicker } from "library.slint";
@@ -346,7 +346,24 @@ export component AppWindow inherits Window {
     in property <length> shots-x;
 
     in property <[SettingData]> settings;
+    // The top bar's download ring: 0 none, 1 downloading, 2 installing, 3 needs you; its words,
+    // its arc (SVG path on a 36×36 box), and the art behind the bar, blurred, for its glass.
+    in property <int> ring-kind;
+    in property <string> ring-label;
+    in property <string> ring-path: "M 18 3";
+    in property <image> bar-glass;
+    in property <bool> bar-has-glass;
     in-out property <length> settings-y;
+    // Settings' left column: its sections, the one shown, and the rows under them (Quit).
+    in property <[SettingSection]> settings-sections;
+    in property <int> settings-section;
+    in property <string> settings-title;
+    in property <string> settings-sub;
+    in property <[SettingData]> settings-footer;
+    in property <string> settings-version;
+    // The art behind the sheet, blurred, for its glass.
+    in property <image> settings-glass;
+    in property <bool> settings-has-glass;
     in property <int> edit-index: -1;
     in-out property <string> edit-text;
 
@@ -1058,19 +1075,66 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-                if root.download-active || root.install-active: Rectangle {
-                    width: (230px * S.k); height: (52px * S.k); y: (26px * S.k);
-                    border-radius: (12px * S.k); background: #0a6cff26;
-                    Text { text: root.install-active ? root.install-badge : root.download-badge; font-size: (18px * S.k); color: #a7caff; y: (8px * S.k); height: (24px * S.k); }
-                    Rectangle {
-                        x: (14px * S.k); y: (39px * S.k); width: parent.width - (28px * S.k); height: (4px * S.k); background: #ffffff14;
-                        Rectangle { x: 0; y: 0; width: parent.width * (root.install-active ? root.install-progress : root.download-progress); background: Theme.accent; animate width { duration: 300ms; } }
+                // The download ring: what's downloading or installing, or what needs you; it opens
+                // Downloads (4). On the same glass as the Downloads page. Gone when nothing is
+                // happening: the Downloads icon is there then.
+                if root.ring-kind > 0: ring := Rectangle {
+                    property <bool> f: root.zone == Zone.top && root.idx == 4 && root.overlay == 0;
+                    property <color> tint: root.ring-kind == 2 ? (f ? #7c5cff : #c4b5fd) : root.ring-kind == 3 ? (f ? #d98a00 : #ffb547) : (f ? Theme.accent : #8dbaff);
+                    y: (24px * S.k);
+                    height: (56px * S.k);
+                    width: ring-row.preferred-width;
+                    border-radius: self.height / 2;
+                    clip: true;
+                    drop-shadow-blur: (24px * S.k);
+                    drop-shadow-color: #0000004d;
+                    background: f ? #f5f7fb : root.bar-has-glass ? transparent : #0e1424d9;
+                    if root.bar-has-glass && !f: Image {
+                        x: -ring.absolute-position.x; y: -ring.absolute-position.y;
+                        width: root.width; height: root.height;
+                        source: root.bar-glass; image-fit: cover;
                     }
-                    TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, 4); } }
+                    if !f: Rectangle {
+                        border-radius: parent.border-radius;
+                        background: ta-ring.has-hover ? #2a3550b3 : #161c2e6b;
+                        border-width: 1px; border-color: #ffffff29;
+                        animate background { duration: 120ms; }
+                    }
+                    if !f: Rectangle { x: parent.height / 2; y: 1px; width: parent.width - parent.height; height: 1px; background: #ffffff33; }
+                    ring-row := HorizontalLayout {
+                        padding-left: (14px * S.k); padding-right: (22px * S.k);
+                        spacing: (12px * S.k);
+                        Rectangle {
+                            width: (28px * S.k); height: self.width; y: (14px * S.k);
+                            Path {
+                                width: parent.width; height: parent.height;
+                                viewbox-width: 36; viewbox-height: 36;
+                                commands: "M 18 3 A 15 15 0 0 1 18 33 A 15 15 0 0 1 18 3";
+                                stroke: f ? #05070f24 : #ffffff2e;
+                                stroke-width: (3.2px * S.k);
+                            }
+                            Path {
+                                width: parent.width; height: parent.height;
+                                viewbox-width: 36; viewbox-height: 36;
+                                commands: root.ring-path;
+                                stroke: ring.tint;
+                                stroke-width: (3.2px * S.k);
+                                stroke-line-cap: round;
+                            }
+                        }
+                        Text {
+                            text: root.ring-label;
+                            font-size: (19px * S.k); font-weight: 600;
+                            color: f ? #05070f : #f5f7fb;
+                            vertical-alignment: center;
+                        }
+                    }
+                    ta-ring := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, 4); } }
                 }
                 // A quarter bigger than a desktop app's: read from the sofa.
-                // Settings (3) and Downloads (4); no search button: the Library has its own.
-                for ic[i] in [Icons.gear, Icons.disk]: Rectangle {
+                // Settings (3), and Downloads (4) when the ring isn't there; no search button: the
+                // Library has its own.
+                for ic[i] in root.ring-kind > 0 ? [Icons.gear] : [Icons.gear, Icons.disk]: Rectangle {
                     width: (64px * S.k);
                     height: (64px * S.k);
                     y: (20px * S.k);
@@ -1179,9 +1243,10 @@ export component AppWindow inherits Window {
             background: #070a14e6;
             border-width: 1px;
             border-color: Theme.line;
-            // Hidden over the library grid so it never covers game titles, and under a card that
-            // asks something (Join Wi-Fi, Restart now?): the card shows its own keys.
+            // Hidden over the library grid so it never covers game titles, and under Settings and
+            // the cards that ask something (Join Wi-Fi, Restart now?): they show their own keys.
             visible: root.overlay != 4 && root.overlay != 3 && root.overlay != 6 && root.overlay != 7 && root.overlay != 12 && root.overlay != 13
+                && root.overlay != 2
                 && (root.view == 0 || root.overlay != 0);
             hints := HorizontalLayout {
                 padding-left: (20px * S.k);
@@ -1537,208 +1602,294 @@ export component AppWindow inherits Window {
         }
 
         // ------------------------------------------------------------ SETTINGS
-        // Also behind the cards opened from it (Join Wi-Fi, Restart now?), so it's clear where
-        // they lead back to.
+        // A glass sheet over Home: sections on the left, the chosen one's rows on the right. Also
+        // behind the cards opened from it (Join Wi-Fi, Restart now?), so it's clear where they
+        // lead back to.
         if root.overlay == 2 || root.overlay == 12 || root.overlay == 13: Rectangle {
             property <bool> entered: false;
+            property <bool> in-rows: root.zone == Zone.settings;
             init => { entered = true; }
-            background: entered ? #03050ccc : #03050c00;
+            background: entered ? #05070f73 : #05070f00;
             animate background { duration: 260ms; }
             TouchArea { clicked => { root.click(Zone.settings, -1); } }
-            Rectangle {
-                // Sized by the text scale, so on a small window the panel grows with its text
-                // (and wraps it as at full size) instead of squeezing it.
-                property <length> panel-width: min(root.width, (760px * S.t));
-                x: root.width - self.panel-width + (entered ? 0 : (120px * S.k));
+            sheet := Rectangle {
+                width: min(root.width - (40px * S.k), (1520px * S.k));
+                height: min(root.height - (40px * S.k), (960px * S.k));
+                x: (root.width - self.width) / 2;
+                y: (root.height - self.height) / 2 + (entered ? 0 : (40px * S.k));
                 opacity: entered ? 1 : 0;
-                animate x { duration: 420ms; easing: ease-out-expo; }
+                animate y { duration: 420ms; easing: ease-out-expo; }
                 animate opacity { duration: 220ms; easing: ease-out-quad; }
-                width: self.panel-width;
-                background: @linear-gradient(180deg, #111a33 0%, #0a1024 100%);
-                border-width: 1px;
-                border-color: Theme.line;
+                border-radius: (32px * S.k);
+                clip: true;
+                drop-shadow-blur: (80px * S.k);
+                drop-shadow-color: #0000008c;
+                background: root.settings-has-glass ? transparent : #0b1120f2;
+                // Glass: the art behind it, blurred (Slint can't blur what's behind an element).
+                if root.settings-has-glass: Image {
+                    x: -sheet.absolute-position.x; y: -sheet.absolute-position.y;
+                    width: root.width; height: root.height;
+                    source: root.settings-glass; image-fit: cover;
+                }
+                Rectangle {
+                    border-radius: parent.border-radius;
+                    background: root.settings-has-glass ? #0e1321a8 : transparent;
+                    border-width: 1px; border-color: #ffffff29;
+                }
+                Rectangle { x: (32px * S.k); y: 1px; width: parent.width - (64px * S.k); height: 1px; background: #ffffff24; }
                 TouchArea {}
-                Flickable {
-                    content-y <=> root.settings-y;
-                    content-height: sheet.preferred-height;
-                    sheet := VerticalLayout {
-                        x: 0;
-                        y: 0;
-                        width: parent.width;
-                        height: self.preferred-height;
-                        padding-left: (56px * S.k);
-                        padding-right: (56px * S.k);
-                        padding-top: (64px * S.k);
-                        padding-bottom: (120px * S.k);
-                        spacing: 0;
-                        HorizontalLayout {
-                            alignment: start;
-                            padding-bottom: (20px * S.k);
-                            BackButton { pad: root.pad-hints; clicked => { root.click(Zone.settings, -1); } }
+
+                // Sections, and Quit under them.
+                nav := VerticalLayout {
+                    x: 0; y: 0;
+                    width: (400px * S.k); height: parent.height;
+                    padding-left: (24px * S.k); padding-right: (24px * S.k);
+                    padding-top: (40px * S.k); padding-bottom: (32px * S.k);
+                    spacing: (6px * S.k);
+                    HorizontalLayout {
+                        padding-left: (16px * S.k);
+                        padding-bottom: (22px * S.k);
+                        spacing: (12px * S.k);
+                        alignment: start;
+                        Rectangle {
+                            width: (26px * S.k); height: self.width; y: (8px * S.k);
+                            border-radius: self.width / 2; background: #ffffff24;
+                            Text { text: root.pad-hints ? "○" : "Esc"; font-size: root.pad-hints ? (13px * S.k) : (9px * S.k); color: #ff8a9a; }
+                            TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.settings, -1); } }
                         }
-                        Text { text: "Settings"; font-size: (44px * S.k); font-weight: 600; color: Theme.text; }
-                        Text { text: "Changes are saved automatically"; font-size: (18px * S.t); color: Theme.text3; }
-                        for s[i] in root.settings: VerticalLayout {
-                            property <bool> f: root.zone == Zone.settings && root.idx == i;
-                            property <length> r: (14px * S.k);
-                            padding-top: s.kind == 0 ? (s.label == "" ? (20px * S.k) : (36px * S.k)) : 0;
-                            padding-bottom: s.kind == 0 ? (12px * S.k) : 0;
-                            if s.kind == 0 && s.label != "": Text { text: s.label; font-size: (16px * S.t); font-weight: 600; letter-spacing: (2px * S.k); color: Theme.text3; }
-                            // One row of a section card: rows between two headers share a card.
-                            if s.kind != 0: Rectangle {
-                                background: f ? (s.danger ? #ff5a6a33 : #ffffff1f) : (s.danger ? #ff5a6a0d : #ffffff0b);
-                                border-top-left-radius: s.group-first || f ? r : 0;
-                                border-top-right-radius: s.group-first || f ? r : 0;
-                                border-bottom-left-radius: s.group-last || f ? r : 0;
-                                border-bottom-right-radius: s.group-last || f ? r : 0;
-                                border-width: f ? (3px * S.k) : 0;
-                                border-color: s.danger ? Theme.danger : #ffffff;
-                                if !s.group-first && !f && !(root.zone == Zone.settings && root.idx == i - 1): Rectangle {
-                                    x: (18px * S.k);
-                                    y: 0;
-                                    width: parent.width - (36px * S.k);
-                                    height: 1px;
-                                    background: Theme.line;
-                                }
-                                TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.settings, i); } }
-                                VerticalLayout {
-                                    padding-left: (18px * S.k);
-                                    padding-right: (18px * S.k);
-                                    padding-top: (14px * S.k);
-                                    padding-bottom: (14px * S.k);
-                                    spacing: (4px * S.k);
-                                    HorizontalLayout {
-                                        spacing: (16px * S.k);
-                                        min-height: (36px * S.k);
+                        Text { text: "Settings"; font-size: (32px * S.t); font-weight: 600; color: Theme.text; vertical-alignment: center; }
+                    }
+                    for sec[i] in root.settings-sections: Rectangle {
+                        property <bool> chosen: root.settings-section == i;
+                        // Solid while it has focus; lighter while its rows (or Quit) do.
+                        property <bool> solid: root.zone == Zone.settings-nav && root.idx == i;
+                        height: (60px * S.k);
+                        border-radius: (16px * S.k);
+                        background: solid ? #f5f7fb : chosen ? #ffffff1f : ta-sec.has-hover ? #ffffff0f : transparent;
+                        animate background { duration: 120ms; }
+                        HorizontalLayout {
+                            padding-left: (18px * S.k); padding-right: (18px * S.k);
+                            spacing: (16px * S.k);
+                            Rectangle {
+                                width: (10px * S.k); height: self.width; y: (25px * S.k);
+                                border-radius: self.width / 2;
+                                background: chosen ? Theme.accent : #ffffff40;
+                            }
+                            Text {
+                                text: sec.label;
+                                font-size: (20px * S.t); font-weight: chosen ? 600 : 500;
+                                color: solid ? #05070f : #dfe4ef;
+                                vertical-alignment: center; horizontal-stretch: 1;
+                            }
+                            if sec.note != "": Text {
+                                text: sec.note;
+                                font-size: (15px * S.t); font-weight: 500;
+                                color: solid ? #3a4560 : sec.note-kind == 1 ? #8dbaff : sec.note-kind == 2 ? #ffb547 : #9ba6c0;
+                                vertical-alignment: center;
+                            }
+                        }
+                        ta-sec := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.settings-nav, i); } }
+                    }
+                    Rectangle { vertical-stretch: 1; }
+                    Text { x: (18px * S.k); text: root.settings-version; font-size: (16px * S.t); color: #9ba6c0; }
+                    Rectangle { height: (6px * S.k); }
+                    for q[k] in root.settings-footer: Rectangle {
+                        property <bool> f: root.zone == Zone.settings-nav && root.idx == root.settings-sections.length + k;
+                        height: (54px * S.k);
+                        border-radius: (16px * S.k);
+                        background: f ? (q.danger ? #ff5a6a40 : #ffffff1f) : ta-q.has-hover ? #ffffff0f : transparent;
+                        border-width: f ? (3px * S.k) : 0;
+                        border-color: q.danger ? #ff8a9a : #ffffff;
+                        HorizontalLayout {
+                            padding-left: (18px * S.k); padding-right: (18px * S.k);
+                            spacing: (12px * S.k);
+                            Image { source: Icons.power; colorize: q.danger ? #ff8a9a : Theme.text2; width: (20px * S.k); height: self.width; y: (17px * S.k); }
+                            Text { text: q.label; font-size: (19px * S.t); font-weight: 500; color: q.danger ? #ff8a9a : Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
+                            if q.value != "" && !root.pad-hints: Text { text: q.value; font-size: (15px * S.t); color: Theme.text3; vertical-alignment: center; }
+                        }
+                        ta-q := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.settings-nav, root.settings-sections.length + k); } }
+                    }
+                }
+                Rectangle { x: nav.width; y: 0; width: 1px; height: parent.height; background: #ffffff1a; }
+
+                // The chosen section's rows: its title, the rows (scrolling), what the buttons do.
+                Rectangle {
+                    x: nav.width + 1px; y: 0;
+                    width: parent.width - nav.width - 1px; height: parent.height;
+                    property <length> pad-x: (56px * S.k);
+                    hdr := VerticalLayout {
+                        x: parent.pad-x; y: (48px * S.k);
+                        width: parent.width - 2 * parent.pad-x;
+                        height: self.preferred-height;
+                        spacing: (8px * S.k);
+                        Text { text: root.settings-title; font-size: (34px * S.t); font-weight: 600; color: Theme.text; }
+                        Text { text: root.settings-sub; font-size: (19px * S.t); color: #b9c3da; }
+                    }
+                    rows := Flickable {
+                        // 4 px of room each side for the focus ring.
+                        x: parent.pad-x - (4px * S.k); y: hdr.y + hdr.height + (26px * S.k);
+                        width: parent.width - 2 * parent.pad-x + (8px * S.k);
+                        height: set-hints.y - self.y - (12px * S.k);
+                        content-y <=> root.settings-y;
+                        // Room for the focus ring around the first and last rows.
+                        content-height: list.preferred-height;
+                        list := VerticalLayout {
+                            x: 0; y: 0;
+                            width: parent.width; height: self.preferred-height;
+                            padding: (4px * S.k);
+                            spacing: 0;
+                            // Every row is here; only the chosen section's take room (spacing
+                            // between hidden ones would leave gaps, so each shown row has its own).
+                            for s[i] in root.settings: VerticalLayout {
+                                property <bool> shown: s.kind != 0 && s.section == root.settings-section;
+                                property <bool> f: root.zone == Zone.settings && root.idx == i;
+                                visible: shown;
+                                padding-bottom: shown ? (10px * S.k) : 0;
+                                height: shown ? self.preferred-height : 0;
+                                if shown: row := Rectangle {
+                                    property <bool> editing: s.kind == 1 && root.edit-index == i;
+                                    // What's on the right (a switch, a value, a choice, at least a
+                                    // chevron), centred on the row; the words wrap beside it.
+                                    property <bool> has-right: !editing;
+                                    height: max((84px * S.k), words.preferred-height);
+                                    border-radius: (18px * S.k);
+                                    background: f ? (s.danger ? #ff5a6a33 : #ffffff24) : (s.danger ? #ff5a6a12 : #ffffff0f);
+                                    border-width: f ? (3px * S.k) : 1px;
+                                    border-color: f ? (s.danger ? Theme.danger : #f5f7fb) : #ffffff14;
+                                    TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.settings, i); } }
+                                    words := VerticalLayout {
+                                        x: 0; y: 0; width: parent.width; height: parent.height;
+                                        padding-left: (24px * S.k);
+                                        padding-right: (24px * S.k) + (row.has-right ? aside.width + (20px * S.k) : 0);
+                                        padding-top: (16px * S.k); padding-bottom: (16px * S.k);
+                                        spacing: (5px * S.k);
+                                        alignment: center;
                                         Text {
                                             text: s.label;
-                                            font-size: (19px * S.t);
-                                            font-weight: s.kind == 4 ? 600 : 500;
+                                            font-size: (21px * S.t); font-weight: 500;
                                             color: s.danger ? #ffb3bb : Theme.text;
-                                            vertical-alignment: center;
-                                            horizontal-stretch: s.kind == 1 ? 0 : 1;
-                                            // Never push the switch or value off the card.
                                             overflow: elide;
                                         }
-                                        if s.kind == 1 && root.edit-index != i: Text {
-                                            text: s.value != "" ? s.value : (s.secret ? "Not set" : "—");
+                                        if s.hint != "": Text {
+                                            text: s.hint;
                                             font-size: (17px * S.t);
-                                            font-family: "DejaVu Sans Mono";
-                                            color: s.value != "" ? Theme.text2 : Theme.text3;
+                                            wrap: word-wrap;
+                                            color: s.hint-kind == 1 ? Theme.ok : s.hint-kind == 2 ? Theme.danger : #9ba6c0;
+                                        }
+                                        if row.editing: Rectangle {
+                                            height: (52px * S.t);
+                                            border-radius: (12px * S.k);
+                                            background: #00000052;
+                                            border-width: 1px;
+                                            border-color: #ffffff29;
+                                            TextInput {
+                                                x: (14px * S.k);
+                                                width: parent.width - (28px * S.k);
+                                                height: parent.height;
+                                                text <=> root.edit-text;
+                                                single-line: true;
+                                                input-type: s.secret ? InputType.password : InputType.text;
+                                                font-size: (18px * S.t);
+                                                color: Theme.text;
+                                                vertical-alignment: center;
+                                                font-family: "DejaVu Sans Mono";
+                                                init => { self.focus(); self.select-all(); }
+                                                accepted => { root.edit-done(self.text, true); }
+                                            }
+                                        }
+                                    }
+                                    aside := HorizontalLayout {
+                                        visible: row.has-right;
+                                        // A long value (a folder) never takes more than about half the row.
+                                        width: min(self.preferred-width, parent.width * 0.45);
+                                        height: self.preferred-height;
+                                        x: parent.width - self.width - (24px * S.k);
+                                        y: (parent.height - self.height) / 2;
+                                        spacing: (10px * S.k);
+                                        alignment: end;
+                                        if s.kind == 2: Switch { on: s.on; }
+                                        if s.kind == 3: Image { y: (parent.height - self.height) / 2; source: Icons.chevl; colorize: f ? Theme.text : Theme.text3; width: (22px * S.k); height: (22px * S.k); }
+                                        if s.kind == 3: Text { text: s.value; font-size: (19px * S.t); color: Theme.text; vertical-alignment: center; }
+                                        if s.kind == 3: Image { y: (parent.height - self.height) / 2; source: Icons.chevr; colorize: f ? Theme.text : Theme.text3; width: (22px * S.k); height: (22px * S.k); }
+                                        if (s.kind == 1 || s.kind == 4) && s.busy: Image {
+                                            y: (parent.height - self.height) / 2;
+                                            source: Icons.spinner;
+                                            width: (20px * S.k); height: self.width;
+                                            transform-rotation: animation-tick() / 1ms * 0.4deg;
+                                        }
+                                        if (s.kind == 1 || s.kind == 4) && s.icon != "": Image {
+                                            y: (parent.height - self.height) / 2;
+                                            source: Icons.get(s.icon);
+                                            colorize: s.value-kind == 1 ? Theme.ok : s.value-kind == 2 ? Theme.danger : Theme.text2;
+                                            width: (20px * S.k); height: self.width;
+                                        }
+                                        if s.kind == 1 || (s.kind == 4 && s.value != ""): Text {
+                                            text: s.kind == 1 && s.value == "" ? (s.secret ? "Not set" : "—") : s.value;
+                                            font-size: (19px * S.t);
+                                            font-family: s.kind == 1 ? "DejaVu Sans Mono" : "";
+                                            font-weight: s.value-kind == 3 ? 600 : 400;
+                                            color: s.value-kind == 1 ? #3ddc97 : s.value-kind == 2 ? Theme.danger : s.value-kind == 3 ? #7ab4ff : #dfe4ef;
                                             horizontal-alignment: right;
                                             vertical-alignment: center;
-                                            horizontal-stretch: 1;
-                                            min-width: (120px * S.k);
                                             overflow: elide;
+                                            min-width: (40px * S.k);
                                         }
-                                        if s.kind == 2: VerticalLayout { alignment: center; Switch { on: s.on; } }
-                                        if s.kind == 3: HorizontalLayout {
-                                            spacing: (8px * S.k);
-                                            alignment: end;
-                                            Image { source: Icons.chevl; colorize: f ? Theme.text : Theme.text3; width: (22px * S.k); height: (22px * S.k); y: (7px * S.k); }
-                                            Text { text: s.value; font-size: (19px * S.t); color: Theme.text; vertical-alignment: center; }
-                                            Image { source: Icons.chevr; colorize: f ? Theme.text : Theme.text3; width: (22px * S.k); height: (22px * S.k); y: (7px * S.k); }
+                                        // A Wi-Fi network: a lock when it needs a password, then its bars.
+                                        if s.kind == 4 && s.signal > 0: Rectangle {
+                                            width: (22px * S.k);
+                                            if s.lock: Image { source: Icons.lock; colorize: Theme.text2; width: (18px * S.k); height: self.width; }
                                         }
-                                        if s.kind == 4 && (s.value != "" || s.icon != "" || s.signal > 0): HorizontalLayout {
-                                            spacing: (8px * S.k);
-                                            if s.busy: Image {
-                                                source: Icons.spinner;
-                                                width: (20px * S.k);
-                                                height: self.width;
-                                                y: (8px * S.k);
-                                                transform-rotation: animation-tick() / 1ms * 0.4deg;
-                                            }
-                                            if s.icon != "": Image {
-                                                source: Icons.get(s.icon);
-                                                colorize: s.value-kind == 1 ? Theme.ok : s.value-kind == 2 ? Theme.danger : Theme.text2;
-                                                width: (20px * S.k);
-                                                height: self.width;
-                                                y: (8px * S.k);
-                                            }
-                                            if s.value != "": Text {
-                                                text: s.value;
-                                                font-size: (17px * S.t);
-                                                font-weight: s.value-kind == 3 ? 600 : 400;
-                                                color: s.value-kind == 1 ? Theme.ok : s.value-kind == 2 ? Theme.danger : s.value-kind == 3 ? #7ab4ff : Theme.hint;
-                                                vertical-alignment: center;
-                                            }
-                                            // A Wi-Fi network: a lock when it needs a password, then its bars,
-                                            // each in its own column so they line up down the list.
-                                            if s.signal > 0: Rectangle {
-                                                width: (22px * S.k);
-                                                if s.lock: Image { source: Icons.lock; colorize: Theme.text2; width: (18px * S.k); height: self.width; }
-                                            }
-                                            if s.signal > 0: Image {
-                                                source: Icons.signal[s.signal - 1];
-                                                colorize: s.signal >= 3 ? Theme.text : s.signal == 2 ? Theme.text2 : Theme.warn;
-                                                width: (24px * S.k);
-                                                height: self.width;
-                                                y: (6px * S.k);
-                                            }
+                                        if s.kind == 4 && s.signal > 0: Image {
+                                            y: (parent.height - self.height) / 2;
+                                            source: Icons.signal[s.signal - 1];
+                                            colorize: s.signal >= 3 ? Theme.text : s.signal == 2 ? Theme.text2 : Theme.warn;
+                                            width: (24px * S.k); height: self.width;
                                         }
+                                        if s.kind == 1 || s.kind == 4: Image { y: (parent.height - self.height) / 2; source: Icons.chevr; colorize: #9ba6c0; width: (18px * S.k); height: self.width; }
                                     }
-                                    if s.kind == 1 && root.edit-index == i: Rectangle {
-                                        height: (50px * S.t);
-                                        border-radius: (10px * S.k);
-                                        background: #00000040;
-                                        border-width: 1px;
-                                        border-color: Theme.line;
-                                        TextInput {
-                                            x: (14px * S.k);
-                                            width: parent.width - (28px * S.k);
-                                            height: parent.height;
-                                            text <=> root.edit-text;
-                                            single-line: true;
-                                            input-type: s.secret ? InputType.password : InputType.text;
-                                            font-size: (18px * S.t);
-                                            color: Theme.text;
-                                            vertical-alignment: center;
-                                            font-family: "DejaVu Sans Mono";
-                                            init => { self.focus(); self.select-all(); }
-                                            accepted => { root.edit-done(self.text, true); }
-                                        }
+                                }
+                            }
+                            // About: required attribution for the Slint royalty-free license (section 2a).
+                            if root.settings-section == root.settings-sections.length - 1: Rectangle {
+                                border-radius: (18px * S.k);
+                                background: #ffffff0f;
+                                border-width: 1px; border-color: #ffffff14;
+                                HorizontalLayout {
+                                    padding: (24px * S.k);
+                                    spacing: (20px * S.k);
+                                    VerticalLayout { alignment: center; Image { source: Icons.app; width: (72px * S.k); height: (72px * S.k); } }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        spacing: (5px * S.k);
+                                        horizontal-stretch: 1;
+                                        Text { text: "Azrak Launcher"; font-size: (21px * S.t); font-weight: 600; color: Theme.text; }
+                                        Text { text: "Version " + root.app-version + " · Linux"; font-size: (17px * S.t); color: #9ba6c0; }
+                                        Text { text: "PS5 games on KytyPS5 · PS4 games on shadPS4"; font-size: (17px * S.t); color: #9ba6c0; }
                                     }
-                                    if s.hint != "": Text {
-                                        text: s.hint;
-                                        font-size: (17px * S.t);
-                                        wrap: word-wrap;
-                                        color: s.hint-kind == 1 ? Theme.ok : s.hint-kind == 2 ? Theme.danger : Theme.hint;
-                                    }
+                                    VerticalLayout { alignment: center; AboutSlint { width: (200px * S.k); } }
                                 }
                             }
                         }
-                        // About: required attribution for the Slint royalty-free license (section 2a).
-                        VerticalLayout {
-                            padding-top: (36px * S.k);
-                            spacing: (12px * S.k);
-                            Text { text: "ABOUT"; font-size: (16px * S.t); font-weight: 600; letter-spacing: (2px * S.k); color: Theme.text3; }
+                    }
+                    // What the buttons do here.
+                    set-hints := HorizontalLayout {
+                        x: parent.pad-x; width: parent.width - 2 * parent.pad-x;
+                        height: (26px * S.k); y: parent.height - (36px * S.k) - self.height;
+                        alignment: end;
+                        spacing: (22px * S.k);
+                        for h in [
+                            { glyph: root.pad-hints ? "✕" : "Enter", label: in-rows ? "Change" : "Open", tint: #8dbaff },
+                            { glyph: root.pad-hints ? "○" : "Esc", label: in-rows ? "Back" : "Close", tint: #ff8a9a },
+                        ]: HorizontalLayout {
+                            spacing: (8px * S.k);
                             Rectangle {
-                                border-radius: (14px * S.k);
-                                background: #ffffff0b;
-                                HorizontalLayout {
-                                    padding-left: (18px * S.k);
-                                    padding-right: (10px * S.k);
-                                    padding-top: (14px * S.k);
-                                    padding-bottom: (14px * S.k);
-                                    spacing: (16px * S.k);
-                                    VerticalLayout {
-                                        alignment: center;
-                                        Image { source: Icons.app; width: (60px * S.k); height: (60px * S.k); }
-                                    }
-                                    VerticalLayout {
-                                        alignment: center;
-                                        spacing: (4px * S.k);
-                                        horizontal-stretch: 1;
-                                        Text { text: "Azrak Launcher"; font-size: (19px * S.t); font-weight: 600; color: Theme.text; }
-                                        Text { text: "Version " + root.app-version + " · Linux"; font-size: (15px * S.t); color: Theme.text3; }
-                                        Text { text: "PS5 games on KytyPS5 · PS4 games on shadPS4"; font-size: (15px * S.t); color: Theme.text3; }
-                                    }
-                                    VerticalLayout {
-                                        alignment: center;
-                                        AboutSlint { width: (190px * S.k); }
-                                    }
-                                }
+                                width: root.pad-hints ? (26px * S.k) : kc.preferred-width + (14px * S.k);
+                                height: (26px * S.k);
+                                border-radius: (13px * S.k);
+                                background: #ffffff24;
+                                kc := Text { text: h.glyph; font-size: root.pad-hints ? (13px * S.k) : (12px * S.k); color: root.pad-hints ? h.tint : #dfe4ef; font-weight: 600; }
                             }
+                            Text { text: h.label; font-size: (16px * S.t); color: #dfe4ef; vertical-alignment: center; }
                         }
                     }
                 }

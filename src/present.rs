@@ -105,9 +105,11 @@ impl App {
         self.frost_pending.remove(&key);
         if self.frost.len() >= 16 { self.frost.remove(0); }
         self.frost.push((key, Image::from_rgba8(buf)));
+        self.push_ring();
         match self.overlay {
             Overlay::Downloads => self.push_downloads(),
             Overlay::Setup => self.push_setup(),
+            Overlay::Settings => self.push_settings(),
             _ => {}
         }
     }
