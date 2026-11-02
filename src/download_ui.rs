@@ -271,6 +271,7 @@ impl App {
         // Looked at: the ring stops asking about what stopped.
         let needs = self.ring_needs(&self.downloads.snapshot(), &self.installer.snapshot());
         self.ring_seen.extend(needs);
+        self.ring_done.clear();
         if self.overlay != Overlay::Downloads {
             self.push_overlay(Overlay::Downloads, Z_DOWNLOADS, 0);
             self.dl_shelf = 0.0;
@@ -303,6 +304,7 @@ impl App {
         // Nothing that changes the download while it's being installed from.
         let touches = !matches!(action, "folder" | "cancel_install" | "play_install" | "vpn" | "stop_seed" | "share" | "choose");
         self.dl_notes.remove(key);
+        self.played_from = None;
         if touches && install.as_ref().is_some_and(|record| record.state.active()) {
             return self.note_download(key, "It's installing: cancel the installation first");
         }
@@ -321,11 +323,8 @@ impl App {
                     if let Some(local) = self.locals.iter().position(|game| &game.l.path == path) {
                         // A game that can't start says why here, on its row (not behind this page).
                         let id = self.locals[local].l.id.clone();
-                        self.last_game_note = None;
+                        self.played_from = Some((id, key.to_string()));
                         self.run_action("play", Target { game: self.locals[local].cat, local: Some(local) });
-                        if let Some((_, text, true)) = self.last_game_note.take().filter(|(k, _, _)| *k == id) {
-                            self.note_download(key, &text);
-                        }
                     } else { self.note_download(key, "Its folder is missing: check Game folders in Settings"); }
                 }
                 return;
@@ -359,7 +358,7 @@ impl App {
 
     /// The same, for the page to show on its next push.
     fn note_download_quiet(&mut self, key: &str, text: impl AsRef<str>) {
-        self.dl_notes.insert(key.to_string(), crate::app::one_line(text.as_ref()));
+        self.dl_notes.insert(key.to_string(), (crate::app::one_line(text.as_ref()), true));
     }
 
     pub fn push_downloads(&mut self) {
@@ -458,10 +457,11 @@ impl App {
                 stats: ModelRc::new(VecModel::from(d.stats.iter().map(|(v, l)| DlStat { value: v.clone().into(), label: l.clone().into() }).collect::<Vec<_>>())),
                 spark: if d.spark { self.dl_speeds.get(&job.key).map(spark_path).unwrap_or_default() } else { String::new() }.into(),
                 // What pressing something on it just did, else what it needs.
-                note: self.dl_notes.get(&job.key).cloned().unwrap_or_else(|| d.note.clone()).into(),
+                note: self.dl_notes.get(&job.key).map(|(text, _)| text.clone()).unwrap_or_else(|| d.note.clone()).into(),
                 // What a press there couldn't do: in amber, whatever the download's own colour.
-                // A finished download's own note is a problem too (its files changed, a delete refused).
-                note_bad: self.dl_notes.contains_key(&job.key) || (job.state == State::Complete && !job.error.is_empty()),
+                // A finished or ready download's own error is a problem too (its files changed, a
+                // delete refused, it couldn't start with what was chosen).
+                note_bad: self.dl_notes.get(&job.key).map_or(matches!(job.state, State::Complete | State::Ready) && !job.error.is_empty(), |(_, bad)| *bad),
                 dl_frac: d.dl, inst_frac: d.inst, ready: d.ready, dl_label: d.dl_label.clone().into(), inst_label: d.inst_label.clone().into(), bar_kind: d.bar,
                 actions: ModelRc::new(VecModel::from(actions)),
                 line: d.line.clone().into(), tile_frac: d.tile, working: d.working,
@@ -700,6 +700,17 @@ impl App {
         if self.overlay == Overlay::Downloads { self.ring_seen.extend(needs.iter().cloned()); }
         let unseen: Vec<&Job> = jobs.iter().filter(|job| needs.contains(&job.key) && !self.ring_seen.contains(&job.key)).collect();
         let active: Vec<&Job> = jobs.iter().filter(|job| job.state.active()).collect();
+        // What finished since the last look (nothing else says so): ready until Downloads opens.
+        let busy: std::collections::HashSet<String> = active.iter().map(|job| job.key.clone())
+            .chain(installs.iter().filter(|r| r.state.active()).map(|r| r.key.clone())).collect();
+        for key in self.ring_busy.difference(&busy) {
+            if !self.ring_done.contains(key) { self.ring_done.push(key.clone()); }
+        }
+        self.ring_busy = busy;
+        if self.overlay == Overlay::Downloads { self.ring_done.clear(); }
+        self.ring_done.retain(|key| !needs.contains(key) && !self.ring_busy.contains(key)
+            && jobs.iter().any(|job| &job.key == key && job.state == State::Complete));
+        let installed = |key: &str| installs.iter().any(|r| r.key == key && r.state == Install::Installed);
         // What the ring says (its words, then a percentage), and the download it opens: worked
         // out together, so pressing it opens what it says.
         let none = || -> Option<String> { None };
@@ -724,6 +735,15 @@ impl App {
             (2, "Installing".to_string(), format!(" · {}%", pct(record.progress())), record.progress(), Some(record.key.clone()))
         } else if let Some(job) = jobs.iter().find(|job| job.waiting_vpn && job.state != State::Complete) {
             (3, "Waiting for your VPN".to_string(), String::new(), job.progress(), Some(job.key.clone()))
+        } else if let Some(key) = self.ring_done.last().cloned() {
+            let all = self.ring_done.iter().all(|key| installed(key));
+            let words = match (self.ring_done.len(), all) {
+                (1, true) => "Ready to play".to_string(),
+                (1, false) => "Downloaded".to_string(),
+                (n, true) => format!("{n} ready to play"),
+                (n, false) => format!("{n} ready"),
+            };
+            (5, words, String::new(), 1.0, Some(key))
         } else {
             (0, String::new(), String::new(), 0.0, none())
         };

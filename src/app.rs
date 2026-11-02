@@ -287,19 +287,21 @@ pub struct App {
     /// What was just pressed for the game on screen did (key, text, a problem): over its lasting
     /// note, and gone once another game is shown. See `note_game_brief`.
     pub brief_note: Option<(String, String, bool)>,
-    /// The last note made about any game (key, text, a problem), for a page that starts a game
-    /// from elsewhere (Downloads) to show why it couldn't.
-    pub last_game_note: Option<(String, String, bool)>,
-    /// A note on the running game's pill in the top bar (Resume couldn't switch to it).
-    pub running_note: String,
+    /// A game started from its download's row (game key, download key): while Downloads is
+    /// open, what's said about the game is said on that row too (it can't start, PS4 support is
+    /// being fetched first).
+    pub played_from: Option<(String, String)>,
+    /// A note on the running game's pill in the top bar (Resume couldn't switch to it), and
+    /// when: it gives the clock its place back after a few seconds.
+    pub running_note: (String, f64),
     /// A line for the Home screen's status that stays until the launcher restarts (AzrakOS was
     /// installed: restart without the USB stick), shown whenever nothing else is.
     pub sticky_status: String,
     /// The game whose trailer is playing (`game_key`), for a note if it fails partway.
     trailer_key: String,
-    /// What pressing something on a download just did, on its row, by download key. See
-    /// `note_download`.
-    pub dl_notes: HashMap<String, String>,
+    /// What pressing something on a download just did, on its row, by download key: (text, a
+    /// problem). See `note_download`.
+    pub dl_notes: HashMap<String, (String, bool)>,
     pub status: String,
     pub status_busy: bool,
     pub catalog_updated: f64,
@@ -340,6 +342,10 @@ pub struct App {
     pub settings_direct: bool,
     /// Each section's header (GAMES, DOWNLOADS…): what its notes are worked out from.
     pub settings_headers: Vec<String>,
+    /// Downloads and installs going on at the last look, and those that finished since (with
+    /// Downloads closed): the ring says they're ready until Downloads is opened.
+    pub ring_busy: HashSet<String>,
+    pub ring_done: Vec<String>,
     /// Downloads that stopped or couldn't install, already seen on the Downloads page: the top
     /// bar's ring stops asking for them.
     pub ring_seen: HashSet<String>,
@@ -615,8 +621,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         setting_notes: HashMap::new(),
         game_notes: HashMap::new(),
         brief_note: None,
-        last_game_note: None,
-        running_note: String::new(),
+        played_from: None,
+        running_note: (String::new(), 0.0),
         sticky_status: String::new(),
         trailer_key: String::new(),
         dl_notes: HashMap::new(),
@@ -652,6 +658,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         settings_direct: false,
         settings_headers: Vec::new(),
         ring_seen: HashSet::new(),
+        ring_busy: HashSet::new(),
+        ring_done: Vec::new(),
         ring_key: None,
         vpn_busy: String::new(),
         vpn_seen: String::new(),
@@ -1813,8 +1821,8 @@ impl App {
         }
         self.battery_tick();
         let running = match self.live.first() {
-            Some(s) => crate::RunningData { active: true, name: s.name.clone().into(), time: util::fmt_clock(util::now_secs() - s.since).into(), note: self.running_note.clone().into() },
-            None => { self.running_note.clear(); crate::RunningData::default() }
+            Some(s) => crate::RunningData { active: true, name: s.name.clone().into(), time: util::fmt_clock(util::now_secs() - s.since).into(), note: if util::now_secs() - self.running_note.1 < 8.0 { self.running_note.0.clone().into() } else { Default::default() } },
+            None => { self.running_note.0.clear(); crate::RunningData::default() }
         };
         if running.active || ui.get_running().active {
             ui.set_running(running);
@@ -2221,7 +2229,7 @@ impl App {
                         if self.view == 0 { self.move_focus(self.home_zone(), 0) } else { self.move_focus(Z_SEARCH, 0) }
                     }
                     Act::Confirm => match self.idx {
-                        0 => self.resume_game(),
+                        0 => self.resume_game(None),
                         1 => self.stop_game(None),
                         // The ring's download (what stopped, or what's going) is the one shown.
                         4 => { let key = self.ring_key.clone(); self.open_downloads(key.as_deref()) }
@@ -2725,8 +2733,8 @@ impl App {
             Some(RowItem::All) => self.switch_view(1, true),
             Some(RowItem::Local(l)) => {
                 if self.session_for_local(l).is_some() {
-                    audio::play(Sound::Select);
-                    self.resume_game();
+                    let key = self.locals[l].l.id.clone();
+                    self.resume_game(Some(&key));
                 } else {
                     self.launch(l);
                 }
@@ -2830,8 +2838,8 @@ impl App {
                 }
             }
             "resume" => {
-                audio::play(Sound::Select);
-                self.resume_game();
+                let key = self.game_key(t);
+                self.resume_game(Some(&key));
             }
             "stop" => self.stop_game(t.local),
             "hub" => {
@@ -2968,9 +2976,19 @@ impl App {
         }
     }
 
-    pub fn resume_game(&mut self) {
-        // Said on the running game's pill, where Resume was pressed.
-        self.running_note = if self.sessions.resume() { String::new() } else { "Couldn't switch to it: its window wasn't found (Resume needs xdotool)".into() };
+    /// Back to the running game. If its window can't be found: said on its pill in the top bar
+    /// (for a few seconds) and, pressed on the game (`key`), under its buttons too.
+    pub fn resume_game(&mut self, key: Option<&str>) {
+        if self.sessions.resume() {
+            audio::play(Sound::Select);
+            self.running_note.0.clear();
+            return;
+        }
+        audio::play(Sound::Error);
+        self.running_note = ("Couldn't switch to it".into(), util::now_secs());
+        if let Some(key) = key {
+            self.note_game_brief(key, "Couldn't switch to it: its window wasn't found (Resume needs xdotool)", true);
+        }
     }
 
     /// Play a game's official trailer inside the launcher.
@@ -3277,9 +3295,7 @@ impl App {
     /// device): shown on the row of that name, wherever it is by then.
     pub fn note_setting_named(&mut self, id: crate::settings::SId, label: &str, text: &str, kind: i32) {
         self.setting_notes.insert(id, (one_line(text), kind, label.to_string()));
-        // Not while a row is being typed in (new rows would select its text again): the tick shows
-        // it once the edit is done.
-        if self.edit_index < 0 && (self.overlay == Overlay::Settings || self.stack.iter().any(|s| s.0 == Overlay::Settings)) {
+        if self.overlay == Overlay::Settings || self.stack.iter().any(|s| s.0 == Overlay::Settings) {
             self.refresh_settings();
         }
     }
@@ -3289,8 +3305,8 @@ impl App {
     pub fn note_game(&mut self, key: &str, text: &str, warn: bool) {
         self.game_notes.insert(key.to_string(), (one_line(text), warn));
         if self.brief_note.as_ref().is_some_and(|(k, _, _)| k == key) { self.brief_note = None; }
-        self.last_game_note = Some((key.to_string(), one_line(text), warn));
         self.push_game_notes();
+        self.game_note_on_download(key, text, warn);
     }
 
     /// A note about what was just pressed for a game (a trailer that can't play, a rating saved):
@@ -3298,8 +3314,19 @@ impl App {
     /// is shown.
     pub fn note_game_brief(&mut self, key: &str, text: &str, warn: bool) {
         self.brief_note = Some((key.to_string(), one_line(text), warn));
-        self.last_game_note = self.brief_note.clone();
         self.push_game_notes();
+        self.game_note_on_download(key, text, warn);
+    }
+
+    /// See `played_from`.
+    fn game_note_on_download(&mut self, key: &str, text: &str, warn: bool) {
+        let Some((_, download)) = self.played_from.clone().filter(|(game, _)| game == key) else { return };
+        if self.overlay == Overlay::Downloads || self.stack.iter().any(|s| s.0 == Overlay::Downloads) {
+            self.dl_notes.insert(download, (one_line(text), warn));
+            self.push_downloads();
+        } else {
+            self.played_from = None;
+        }
     }
 
     fn push_game_notes(&mut self) {

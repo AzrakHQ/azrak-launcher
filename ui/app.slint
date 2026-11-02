@@ -73,7 +73,8 @@ component HeroView inherits Rectangle {
             spacing: (10px * S.k);
             alignment: start;
             if data.note-warn: Image { source: Icons.alert; colorize: Theme.warn; width: (20px * S.k); height: (20px * S.k); y: (2px * S.k); }
-            Text { text: data.note; font-size: (19px * S.k); color: data.note-warn ? Theme.warn : Theme.text2; wrap: word-wrap; max-width: (780px * S.k); }
+            // Two lines at most (an error's text can be long).
+            Text { text: data.note; font-size: (19px * S.k); color: data.note-warn ? Theme.warn : Theme.text2; wrap: word-wrap; max-width: (780px * S.k); max-height: (52px * S.k); overflow: elide; }
         }
     }
 }
@@ -224,7 +225,8 @@ export component AppWindow inherits Window {
     in property <length> shots-x;
 
     in property <[SettingData]> settings;
-    // The top bar's download ring: 0 none, 1 downloading, 2 installing, 3 needs you, 4 verifying; its words,
+    // The top bar's download ring: 0 none, 1 downloading, 2 installing, 3 needs you, 4 verifying,
+    // 5 ready (finished while Downloads was closed); its words,
     // its arc (SVG path on a 36×36 box), and the art behind the bar, blurred, for its glass.
     in property <int> ring-kind;
     in property <string> ring-label;
@@ -960,10 +962,10 @@ export component AppWindow inherits Window {
                 }
                 // One glass pill (on the same glass as the Downloads page): Downloads (4), Settings
                 // (3), the battery, the clock. Downloads is the ring while something's happening
-                // (what's downloading or installing, or what needs you), its icon otherwise; either
-                // way in the same place.
+                // (what's downloading or installing, what needs you, what just got ready), its icon
+                // otherwise; either way in the same place.
                 bar := Capsule {
-                    property <color> ring-tint: root.ring-kind == 2 ? #c4b5fd : root.ring-kind == 3 ? #ffb547 : root.ring-kind == 4 ? #5eead4 : #8dbaff;
+                    property <color> ring-tint: root.ring-kind == 2 ? #c4b5fd : root.ring-kind == 3 ? #ffb547 : root.ring-kind == 4 ? #5eead4 : root.ring-kind == 5 ? Theme.ok : #8dbaff;
                     // As tall as the tabs' row reads (the old 64px icons), centred on it.
                     y: (20px * S.k);
                     height: (64px * S.k);
@@ -999,29 +1001,32 @@ export component AppWindow inherits Window {
                                         width: parent.width; height: parent.height;
                                         viewbox-width: 36; viewbox-height: 36;
                                         commands: root.ring-path;
-                                        stroke: dl.f ? (root.ring-kind == 2 ? #7c5cff : root.ring-kind == 3 ? #d98a00 : root.ring-kind == 4 ? #0f9e8e : Theme.accent) : bar.ring-tint;
+                                        stroke: dl.f ? (root.ring-kind == 2 ? #7c5cff : root.ring-kind == 3 ? #d98a00 : root.ring-kind == 4 ? #0f9e8e : root.ring-kind == 5 ? #12a366 : Theme.accent) : bar.ring-tint;
                                         stroke-width: (3.2px * S.k);
                                         stroke-line-cap: round;
                                     }
                                 }
                                 // The words (a long name is cut short, never the percentage), then the
                                 // percentage, as wide as with every digit a 0 so the ring stays put.
-                                if root.ring-kind > 0: Text {
-                                    text: root.ring-label;
-                                    max-width: (300px * S.k); overflow: elide;
-                                    font-size: (22px * S.k); font-weight: 600;
-                                    color: dl.f ? #05070f : #f5f7fb;
-                                    vertical-alignment: center;
-                                }
-                                if root.ring-kind > 0 && root.ring-suffix != "": Rectangle {
-                                    width: max(ring-text.preferred-width, ring-sizer.preferred-width);
-                                    ring-text := Text {
-                                        x: 0; text: root.ring-suffix;
+                                // (Together: the suffix starts with its own space.)
+                                if root.ring-kind > 0: HorizontalLayout {
+                                    Text {
+                                        text: root.ring-label;
+                                        max-width: (300px * S.k); overflow: elide;
                                         font-size: (22px * S.k); font-weight: 600;
                                         color: dl.f ? #05070f : #f5f7fb;
                                         vertical-alignment: center;
                                     }
-                                    ring-sizer := Text { text: root.ring-sizer; font-size: (22px * S.k); font-weight: 600; visible: false; }
+                                    if root.ring-suffix != "": Rectangle {
+                                        width: max(ring-text.preferred-width, ring-sizer.preferred-width);
+                                        ring-text := Text {
+                                            x: 0; text: root.ring-suffix;
+                                            font-size: (22px * S.k); font-weight: 600;
+                                            color: dl.f ? #05070f : #f5f7fb;
+                                            vertical-alignment: center;
+                                        }
+                                        ring-sizer := Text { text: root.ring-sizer; font-size: (22px * S.k); font-weight: 600; visible: false; }
+                                    }
                                 }
                                 if root.ring-kind == 0: Image {
                                     y: (parent.height - self.height) / 2;
@@ -1305,7 +1310,7 @@ export component AppWindow inherits Window {
                         alignment: start;
                         if root.hub.download-note-warn: Image { source: Icons.alert; colorize: Theme.warn; width: (20px * S.k); height: (20px * S.k); y: (2px * S.k); }
                         // Wraps (two lines at most): what to do next is often at its end.
-                        Text { text: root.hub.download-note; width: (980px * S.k); wrap: word-wrap; max-height: (52px * S.k); overflow: elide; font-size: (19px * S.k); color: root.hub.download-note-warn ? Theme.warn : Theme.text2; }
+                        Text { text: root.hub.download-note; width: min((980px * S.k), root.hub-text-w - (40px * S.k)); wrap: word-wrap; max-height: (52px * S.k); overflow: elide; font-size: (19px * S.k); color: root.hub.download-note-warn ? Theme.warn : Theme.text2; }
                     }
                     Rectangle { height: (22px * S.k); }
                     // The game on each platform: how it should play here, how easy it is to get,

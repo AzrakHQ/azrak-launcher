@@ -575,12 +575,15 @@ impl App {
     }
 
     pub fn refresh_settings(&mut self) {
+        // Not while a row is being typed in: new rows would make its field again (and select its
+        // text). Finishing the edit rebuilds them.
+        if self.edit_index >= 0 { return; }
         // Rows come and go (the Wi-Fi list, devices found or paired): the selection stays on the
         // same row, not at the same place, or the next press would land on a stranger.
         let before: Vec<(SId, String)> = self.settings_ids.iter().zip(&self.settings_rows).map(|(id, r)| (*id, r.label.to_string())).collect();
         self.build_settings();
         self.push_settings();
-        if self.overlay != Overlay::Settings || self.zone != Z_SETTINGS || self.edit_index >= 0 {
+        if self.overlay != Overlay::Settings || self.zone != Z_SETTINGS {
             return;
         }
         let after: Vec<(SId, &str)> = self.settings_ids.iter().zip(&self.settings_rows).map(|(id, r)| (*id, r.label.as_str())).collect();
