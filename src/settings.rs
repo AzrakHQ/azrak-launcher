@@ -414,6 +414,7 @@ impl App {
     /// The left column: section `i`, or a row under them (Quit) past the last section. Silent:
     /// callers play the sound that fits (Move, or Back from the rows).
     pub fn focus_settings_nav(&mut self, i: usize) {
+        self.settings_direct = false;
         let n = self.settings_sections.len();
         if i < n && i != self.settings_section {
             self.settings_section = i;
@@ -434,7 +435,9 @@ impl App {
 
     /// The glass behind the sheet: the art behind it, blurred (none over the dimmed Library).
     pub fn push_settings_glass(&mut self, make: bool) {
-        let Ok(glass) = self.bg_glass(make) else { return };
+        // Over Home only: over another page (Downloads) the art behind isn't Home's.
+        let over_home = self.stack.last().is_some_and(|(overlay, _, _)| *overlay == Overlay::None);
+        let Ok(glass) = (if over_home { self.bg_glass(make) } else { Ok(None) }) else { return };
         let ui = self.ui();
         ui.set_settings_has_glass(glass.is_some());
         ui.set_settings_glass(glass.unwrap_or_default());
@@ -467,7 +470,9 @@ impl App {
         let kind = self.settings_rows.get(self.idx.max(0) as usize).map_or(0, |r| r.kind);
         let to_nav = |app: &mut App| { audio::play(Sound::Back); let s = app.settings_section; app.focus_settings_nav(s); };
         match a {
-            // Back leaves the rows for their section; Back there closes Settings.
+            // Back leaves the rows for their section; Back there closes Settings. Opened onto a
+            // row from elsewhere (VPN settings on Downloads), Back goes straight back there.
+            Act::Back if self.settings_direct => self.back(),
             Act::Back => to_nav(self),
             Act::Up | Act::Down => {
                 let next = match (pos, a) {
@@ -507,6 +512,8 @@ impl App {
         self.open_settings();
         if let Some(i) = self.settings_ids.iter().position(|s| *s == id) {
             self.focus_setting_row(i);
+            // Opened onto this row from elsewhere: Back returns there.
+            self.settings_direct = true;
         }
     }
 

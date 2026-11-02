@@ -1661,7 +1661,7 @@ export component AppWindow inherits Window {
                         padding-bottom: (22px * S.k);
                         spacing: (2px * S.k);
                         Text { text: "Settings"; font-size: (32px * S.t); font-weight: 600; color: Theme.text; }
-                        Text { text: root.settings-version; font-size: (15px * S.t); color: #9ba6c0; }
+                        Text { text: root.settings-version; font-size: (15px * S.t); color: #9ba6c0; overflow: elide; }
                     }
                     for sec[i] in root.settings-sections: Rectangle {
                         property <bool> chosen: root.settings-section == i;
@@ -1710,7 +1710,7 @@ export component AppWindow inherits Window {
                             padding-left: (18px * S.k); padding-right: (18px * S.k);
                             spacing: (12px * S.k);
                             Image { source: Icons.power; colorize: q.danger ? #ff8a9a : Theme.text2; width: (20px * S.k); height: self.width; y: (17px * S.k); }
-                            Text { text: q.label; font-size: (19px * S.t); font-weight: 500; color: q.danger ? #ff8a9a : Theme.text; vertical-alignment: center; horizontal-stretch: 1; }
+                            Text { text: q.label; font-size: (19px * S.t); font-weight: 500; color: q.danger ? #ff8a9a : Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
                             if q.value != "" && !root.pad-hints: Text { text: q.value; font-size: (15px * S.t); color: Theme.text3; vertical-alignment: center; }
                         }
                         ta-q := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.settings-nav, root.settings-sections.length + k); } }
@@ -1885,7 +1885,11 @@ export component AppWindow inherits Window {
                         spacing: (22px * S.k);
                         // Back/Close can be clicked too: from the rows to the sections, else closed.
                         // About has no rows to open: only Close there.
-                        for h in (!in-rows && root.settings-section == root.settings-sections.length - 1) ? [
+                        // What Enter does: open a section, change a row, or (on Quit, Restart…) that.
+                        for h in (root.zone == Zone.settings-nav && root.idx >= root.settings-sections.length) ? [
+                            { glyph: root.pad-hints ? "✕" : "Enter", label: "Select", tint: #8dbaff, back: false },
+                            { glyph: root.pad-hints ? "○" : "Esc", label: "Close", tint: #ff8a9a, back: true },
+                        ] : (!in-rows && root.settings-section == root.settings-sections.length - 1) ? [
                             { glyph: root.pad-hints ? "○" : "Esc", label: "Close", tint: #ff8a9a, back: true },
                         ] : [
                             { glyph: root.pad-hints ? "✕" : "Enter", label: in-rows ? "Change" : "Open", tint: #8dbaff, back: false },

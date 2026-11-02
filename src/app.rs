@@ -318,11 +318,15 @@ pub struct App {
     /// Settings' sections (the left column), and the one shown.
     pub settings_sections: Vec<crate::SettingSection>,
     pub settings_section: usize,
+    /// Settings was opened onto a row from elsewhere, and the player hasn't moved to the sections.
+    pub settings_direct: bool,
     /// Each section's header (GAMES, DOWNLOADS…): what its notes are worked out from.
     pub settings_headers: Vec<String>,
     /// Downloads that stopped or couldn't install, already seen on the Downloads page: the top
     /// bar's ring stops asking for them.
     pub ring_seen: HashSet<String>,
+    /// The download the ring is about, when it's about one.
+    pub ring_key: Option<String>,
     /// A VPN connect, disconnect or import in progress ("Connecting…"), shown in Settings.
     pub vpn_busy: String,
     /// The VPNs last shown in Settings, to refresh it when one connects or drops.
@@ -624,8 +628,10 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         settings_ids: Vec::new(),
         settings_sections: Vec::new(),
         settings_section: 0,
+        settings_direct: false,
         settings_headers: Vec::new(),
         ring_seen: HashSet::new(),
+        ring_key: None,
         vpn_busy: String::new(),
         vpn_seen: String::new(),
         catalog_timer: slint::Timer::default(),
@@ -2224,7 +2230,8 @@ impl App {
                     Act::Confirm => match self.idx {
                         0 => self.resume_game(),
                         1 => self.stop_game(None),
-                        4 => self.open_downloads(None),
+                        // The ring's download (what stopped, or what's going) is the one shown.
+                        4 => { let key = self.ring_key.clone(); self.open_downloads(key.as_deref()) }
                         _ => self.open_settings(),
                     },
                     _ => {}
@@ -3228,6 +3235,7 @@ impl App {
         self.sys_poll();
         // The first section, with the sections in focus.
         self.settings_section = 0;
+        self.settings_direct = false;
         self.build_settings();
         self.ui().set_settings_y(0.0);
         self.push_overlay(Overlay::Settings, Z_SETTINGS_NAV, 0);

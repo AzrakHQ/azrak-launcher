@@ -684,6 +684,9 @@ impl App {
         if self.overlay == Overlay::Downloads { self.ring_seen.extend(needs.iter().cloned()); }
         let unseen: Vec<&Job> = jobs.iter().filter(|job| needs.contains(&job.key) && !self.ring_seen.contains(&job.key)).collect();
         let active: Vec<&Job> = jobs.iter().filter(|job| job.state.active()).collect();
+        self.ring_key = unseen.first().map(|job| job.key.clone())
+            .or_else(|| (active.len() == 1).then(|| active[0].key.clone()))
+            .or_else(|| jobs.iter().find(|job| job.waiting_vpn && job.state != State::Complete).map(|job| job.key.clone()));
         let (kind, label, frac) = if let Some(job) = unseen.first() {
             let what = if job.state == State::Failed { "Download stopped" } else { "Couldn't install" };
             (3, if unseen.len() > 1 { format!("{} need you", unseen.len()) } else { what.to_string() }, job.progress())

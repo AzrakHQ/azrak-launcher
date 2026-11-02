@@ -106,16 +106,17 @@ impl App {
     fn frost_done(&mut self, key: String, buf: Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>>) {
         self.frost_pending.remove(&key);
         // One that can't be made is never tried again (and its art goes without glass).
+        // The glass changes only for the art on screen (a blur for art already passed waits in
+        // the cache), and only the glass: rebuilding Settings' rows would restart one being typed.
+        let current = key == self.bg_key;
         let Some(buf) = buf else {
             self.frost_failed.insert(key);
-            return self.push_glass(false);
+            if current { self.push_glass(false); }
+            return;
         };
         if self.frost.len() >= 16 { self.frost.remove(0); }
         self.frost.push((key, Image::from_rgba8(buf)));
-        // The top bar's and Settings' glass (only the glass: rebuilding Settings' rows would
-        // restart one being typed in). Only from blurs made already: starting one for the art
-        // shown now would chain a blur for every tile passed.
-        self.push_glass(false);
+        if current { self.push_glass(false); }
         match self.overlay {
             Overlay::Downloads => self.push_downloads(),
             Overlay::Setup => self.push_setup(),
