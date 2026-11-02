@@ -351,11 +351,12 @@ impl App {
         self.settings_headers = titles;
         self.settings_section = self.settings_section.min(self.settings_sections.len() - 1);
         // What a row just did, in place of its hint (see App::note_setting): on the row of that
-        // name in a list (a network, a device), and never over a problem the row shows itself.
+        // name in a list (a network, a device). Only what just happened (good or bad) covers a
+        // problem the row shows itself, not a passing remark.
         for (id, r) in rows.iter_mut() {
             let found = self.setting_notes.iter().find(|(nid, (_, _, label))| note_row(**nid, label, *id, &r.label));
             if let Some((_, (note, note_kind, _))) = found {
-                if r.hint_kind != 2 || *note_kind == 2 { (r.hint, r.hint_kind) = (note.into(), *note_kind); }
+                if r.hint_kind != 2 || *note_kind != 0 { (r.hint, r.hint_kind) = (note.into(), *note_kind); }
             }
         }
         self.settings_ids = rows.iter().map(|(id, _)| *id).collect();
@@ -820,9 +821,10 @@ impl App {
                 self.note_setting(SId::Dirs, &format!("{} found", plural(n, "installed game")), 1);
             }
             SId::Extra => self.save_cfg(|c| c.extra_args = t),
-            SId::VpnAdd if !t.is_empty() => {
+            // Typed on Add a VPN, or on Your VPN when there's none yet.
+            SId::VpnAdd | SId::Vpn if !t.is_empty() => {
                 let file = util::expand_home(&t);
-                self.vpn_task(SId::VpnAdd, "Adding…", move || crate::vpn::nm_import(&file).map(|_| ()));
+                self.vpn_task(id, "Adding…", move || crate::vpn::nm_import(&file).map(|_| ()));
             }
             SId::DownloadDir => {
                 if t.is_empty() || !util::expand_home(&t).is_absolute() {
@@ -885,7 +887,9 @@ impl App {
             ui.set_edit_index(i as i32);
             return;
         }
-        self.vpn_task(SId::VpnAdd, "Choose the file…", || match crate::vpn::choose_file() {
+        // Said on the row pressed: Add a VPN, or Your VPN when there's none yet.
+        let id = self.settings_ids.get(i).copied().unwrap_or(SId::VpnAdd);
+        self.vpn_task(id, "Choose the file…", || match crate::vpn::choose_file() {
             Ok(Some(file)) => crate::vpn::nm_import(&file).map(|_| ()),
             Ok(None) => Ok(()),
             Err(()) => Err("There's no file dialog on this PC".into()),

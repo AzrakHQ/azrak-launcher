@@ -272,6 +272,7 @@ impl App {
         let needs = self.ring_needs(&self.downloads.snapshot(), &self.installer.snapshot());
         self.ring_seen.extend(needs);
         self.ring_done.clear();
+        if self.overlay != Overlay::Downloads { self.dl_page_note.clear(); }
         if self.overlay != Overlay::Downloads {
             self.push_overlay(Overlay::Downloads, Z_DOWNLOADS, 0);
             self.dl_shelf = 0.0;
@@ -304,6 +305,7 @@ impl App {
         // Nothing that changes the download while it's being installed from.
         let touches = !matches!(action, "folder" | "cancel_install" | "play_install" | "vpn" | "stop_seed" | "share" | "choose");
         self.dl_notes.remove(key);
+        self.dl_page_note.clear();
         self.played_from = None;
         if touches && install.as_ref().is_some_and(|record| record.state.active()) {
             return self.note_download(key, "It's installing: cancel the installation first");
@@ -509,6 +511,7 @@ impl App {
         ui.set_download_has_glass(glass.is_some());
         ui.set_download_glass(glass.unwrap_or_default());
         ui.set_download_has_any(!jobs.is_empty());
+        ui.set_download_page_note(self.dl_page_note.as_str().into());
         ui.set_download_empty_title(["Nothing downloading", "Nothing in progress", "Nothing needs you", "Nothing ready to play yet"][self.dl_filter].into());
         ui.set_download_vpn(vpn_text.into());
         ui.set_download_vpn_kind(vpn_kind);
@@ -653,7 +656,12 @@ impl App {
                 let path = self.installer.snapshot().into_iter().find(|r| r.key == key).and_then(|r| r.path);
                 // The download's row is gone: what happened to the game shows on the game.
                 let local = path.as_ref().and_then(|p| self.locals.iter().position(|l| &l.l.path == p));
-                let note = |app: &mut App, text: &str| if let Some(l) = local { let id = app.locals[l].l.id.clone(); app.note_game(&id, text, true) };
+                // On the Downloads page too, at its foot (the row it was on is gone).
+                let note = |app: &mut App, text: &str| {
+                    if let Some(l) = local { let id = app.locals[l].l.id.clone(); app.note_game(&id, text, true) }
+                    app.dl_page_note = crate::app::one_line(&format!("{name}: {text}"));
+                    app.push_downloads();
+                };
                 if local.is_some_and(|l| self.session_for_local(l).is_some()) {
                     crate::log!("{name}: download deleted; the game is running, so it stays");
                     return note(self, "Its download is deleted; the game was running, so it stays");
@@ -701,7 +709,11 @@ impl App {
         let unseen: Vec<&Job> = jobs.iter().filter(|job| needs.contains(&job.key) && !self.ring_seen.contains(&job.key)).collect();
         let active: Vec<&Job> = jobs.iter().filter(|job| job.state.active()).collect();
         // What finished since the last look (nothing else says so): ready until Downloads opens.
+        // (One that's downloaded and about to install by itself isn't ready yet.)
+        let waits = |job: &&Job| job.state == State::Complete && job.install_to.is_some()
+            && !installs.iter().any(|r| r.key == job.key) && !self.install_failures.contains_key(&job.key);
         let busy: std::collections::HashSet<String> = active.iter().map(|job| job.key.clone())
+            .chain(jobs.iter().filter(waits).map(|job| job.key.clone()))
             .chain(installs.iter().filter(|r| r.state.active()).map(|r| r.key.clone())).collect();
         for key in self.ring_busy.difference(&busy) {
             if !self.ring_done.contains(key) { self.ring_done.push(key.clone()); }

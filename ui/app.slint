@@ -129,6 +129,7 @@ export component AppWindow inherits Window {
     in property <int> download-vpn-kind;
     in property <bool> download-has-any;
     in property <string> download-empty-title;
+    in property <string> download-page-note;
     in property <image> download-glass;
     in property <bool> download-delete-open;
     in property <string> download-delete-title;
@@ -1842,7 +1843,7 @@ export component AppWindow inherits Window {
             data: root.downloads; sel: root.download-sel; focus-btn: root.download-focus-btn; pad: root.pad-hints;
             tabs: root.download-tabs; filter: root.download-filter; shelf-x: root.download-shelf-x;
             down: root.download-down; up: root.download-up; vpn: root.download-vpn; vpn-kind: root.download-vpn-kind;
-            has-any: root.download-has-any; empty-title: root.download-empty-title;
+            has-any: root.download-has-any; empty-title: root.download-empty-title; note: root.download-page-note;
             glass: root.download-glass; has-glass: root.download-has-glass;
             delete-open: root.download-delete-open; delete-title: root.download-delete-title;
             delete-choices: root.download-delete-choices; delete-sel: root.download-delete-sel;

@@ -244,6 +244,8 @@ impl App {
     pub fn kyty_rollback(&mut self) {
         match kyty::rollback() {
             Ok(tag) => {
+                // The failed update it went back from is over.
+                self.kyty.error.clear();
                 self.note_setting(crate::settings::SId::KytyUpdate, &format!("Rolled back to {}", kyty::pretty(&tag)), 1);
                 self.kyty_refresh_version();
             }

@@ -89,6 +89,9 @@ export component DownloadsPage inherits Rectangle {
     // There are downloads, though the filter may show none ("Nothing needs you").
     in property <bool> has-any;
     in property <string> empty-title;
+    // What happened to a download whose row is gone (its game couldn't be deleted), in place of
+    // the hint at the bottom.
+    in property <string> note;
     // The selected download's art, blurred, for the glass over it.
     in property <image> glass;
     in property <bool> has-glass;
@@ -378,7 +381,11 @@ export component DownloadsPage inherits Rectangle {
     HorizontalLayout {
         x: (120px * S.k); y: root.height - (60px * S.k); width: root.width - (240px * S.k); height: (26px * S.k);
         spacing: (28px * S.k);
-        Text { text: "Cancel never deletes what you've downloaded"; font-size: (16px * S.k); color: Theme.hint; vertical-alignment: center; }
+        Text {
+            text: root.note != "" ? root.note : "Cancel never deletes what you've downloaded";
+            font-size: (16px * S.k); color: root.note != "" ? Theme.warn : Theme.hint;
+            vertical-alignment: center; overflow: elide; horizontal-stretch: 1;
+        }
         Rectangle { horizontal-stretch: 1; }
         if root.pad: HorizontalLayout { spacing: (10px * S.k); PadGlyph { glyph: "✕"; } Text { text: "Select"; font-size: (16px * S.k); color: Theme.hint; vertical-alignment: center; } }
         if root.pad: HorizontalLayout { spacing: (10px * S.k); PadGlyph { glyph: "○"; } Text { text: "Back"; font-size: (16px * S.k); color: Theme.hint; vertical-alignment: center; } }

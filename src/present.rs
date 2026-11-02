@@ -440,7 +440,8 @@ impl App {
                     });
                 h.desc = truncate(&desc, 260).into();
                 let key = self.game_key(t);
-                if self.hub.is_none() { self.keep_brief_notes_for(&key); }
+                // (Not under the Library, where the note may be for the card pressed.)
+                if self.hub.is_none() && self.view == 0 { self.keep_brief_notes_for(&key); }
                 if let Some((note, warn)) = self.game_note(&key) {
                     (h.note, h.note_warn) = (note.into(), warn);
                 }

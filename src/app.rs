@@ -302,6 +302,9 @@ pub struct App {
     /// What pressing something on a download just did, on its row, by download key: (text, a
     /// problem). See `note_download`.
     pub dl_notes: HashMap<String, (String, bool)>,
+    /// What happened to a download whose row is gone, at the foot of the Downloads page until
+    /// the next press there.
+    pub dl_page_note: String,
     pub status: String,
     pub status_busy: bool,
     pub catalog_updated: f64,
@@ -626,6 +629,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         sticky_status: String::new(),
         trailer_key: String::new(),
         dl_notes: HashMap::new(),
+        dl_page_note: String::new(),
         status: String::new(),
         status_busy: false,
         catalog_updated: catalog.updated,
@@ -3278,8 +3282,8 @@ impl App {
         if let Some(t) = text {
             self.settings_commit_text(i as usize, t);
         }
-        self.build_settings();
-        self.push_settings();
+        // Rows that changed while it was typed in (a Wi-Fi scan) keep the selection on its row.
+        self.refresh_settings();
     }
 
     // ------------------------------------------------------------------ notes / status
@@ -3307,6 +3311,7 @@ impl App {
         if self.brief_note.as_ref().is_some_and(|(k, _, _)| k == key) { self.brief_note = None; }
         self.push_game_notes();
         self.game_note_on_download(key, text, warn);
+        self.game_note_in_library(key, warn);
     }
 
     /// A note about what was just pressed for a game (a trailer that can't play, a rating saved):
@@ -3316,6 +3321,16 @@ impl App {
         self.brief_note = Some((key.to_string(), one_line(text), warn));
         self.push_game_notes();
         self.game_note_on_download(key, text, warn);
+        self.game_note_in_library(key, warn);
+    }
+
+    /// A Library card has no room for notes: a problem with the game it's on opens its Game
+    /// Hub, where the note is under its buttons.
+    fn game_note_in_library(&mut self, key: &str, warn: bool) {
+        if !warn || self.view != 1 || self.overlay != Overlay::None || self.zone != Z_GRID { return; }
+        if let Some(t) = self.focused_target().filter(|t| self.game_key(*t) == key) {
+            self.open_hub(t);
+        }
     }
 
     /// See `played_from`.
