@@ -89,8 +89,9 @@ pub struct Job {
     /// What it's for: a download the launcher couldn't install stops once its file list is known.
     #[serde(default)] pub platform: Option<crate::platform::Platform>,
     /// Every file in the torrent, in its order, while the player chooses what to download.
-    /// Emptied once the download starts (the choice is in `selected`).
-    #[serde(default)] pub entries: Vec<Entry>,
+    /// Emptied once the download starts (the choice is in `selected`). Not saved (it can be
+    /// long): rebuilt from the saved torrent at start-up.
+    #[serde(skip)] pub entries: Vec<Entry>,
     /// The files to download (indices into the torrent); `None` for all of them.
     #[serde(default)] pub selected: Option<Vec<usize>>,
     /// Where the game installs as soon as the download finishes; `None` to install by hand.
@@ -146,7 +147,7 @@ impl Default for Policy {
     }
 }
 
-enum Command { Prepare(Job), Begin { key: String, base: PathBuf, selected: Vec<usize>, install_to: Option<PathBuf> }, Discard(String), Start(String), Pause(String), Cancel(String), Remove(String), Delete(String), NoInstall(String), StopSeed(String), Seed(String), SetSeedAfterDownload(bool), SetVpn(Option<String>), Shutdown }
+enum Command { Prepare(Job), Begin { key: String, base: PathBuf, selected: Vec<usize>, install_to: Option<PathBuf> }, Discard(String), Start(String), Pause(String), Cancel(String), Remove(String), Delete(String), InstallTo(String, Option<PathBuf>), StopSeed(String), Seed(String), SetSeedAfterDownload(bool), SetVpn(Option<String>), Shutdown }
 
 const VPN_WAIT: &str = "Waiting for your VPN: downloads only run through it (Settings → Downloads)";
 const FILES_CHANGED: &str = "The downloaded files were moved, changed or deleted, so this download can't seed. Remove it, or download it again.";
@@ -165,7 +166,8 @@ impl Manager {
     }
 
     fn new(store: PathBuf, policy: Policy) -> Self {
-        let jobs = load_manifest(&store);
+        let mut jobs = load_manifest(&store);
+        for job in jobs.iter_mut().filter(|job| job.state == State::Ready) { restore_entries(&store, job); }
         let jobs = Arc::new(Mutex::new(jobs));
         let (tx, rx) = mpsc::channel(64);
         let shared = jobs.clone();
@@ -245,11 +247,11 @@ impl Manager {
         self.tx.try_send(Command::Begin { key: key.into(), base, selected, install_to }).context("Download worker is busy or unavailable")
     }
 
-    /// Stop it installing by itself (its game is being deleted). Takes effect at once, so the
-    /// install queue can't pick it up again in between; the worker saves it.
-    pub fn no_install(&self, key: &str) -> Result<()> {
-        if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key) { job.install_to = None; }
-        self.tx.try_send(Command::NoInstall(key.into())).context("Download worker is busy or unavailable")
+    /// Where it installs by itself (`None`: it doesn't, its game is being deleted). Takes effect
+    /// at once, so the install queue can't pick it up in between; the worker saves it.
+    pub fn set_install_to(&self, key: &str, to: Option<PathBuf>) -> Result<()> {
+        if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key) { job.install_to = to.clone(); }
+        self.tx.try_send(Command::InstallTo(key.into(), to)).context("Download worker is busy or unavailable")
     }
 
     /// Forget a download that never started (the player closed the Download & install panel):
@@ -467,6 +469,37 @@ fn inspect_metadata(bytes: &[u8], key: &str, folder: &Path) -> Result<(u64, Vec<
     Ok((total, files))
 }
 
+/// An error as the player sees it. Engine errors can contain tracker/magnet URLs: redacted.
+fn shown(error: &anyhow::Error) -> String {
+    regex::Regex::new(r"(?:https?://|udp://|magnet:\?)[^\s]+")
+        .unwrap().replace_all(&error.to_string(), "[network URL]").chars().take(500).collect()
+}
+
+/// The file list of a download waiting for its files to be chosen, from its saved torrent. One
+/// looked up by an older launcher gets its files chosen like a new one (Windows programs left
+/// out); one whose list can't be read is looked up again on Retry.
+fn restore_entries(store: &Path, job: &mut Job) {
+    use std::io::Read;
+    let torrent = store.join(format!("{}.torrent", job.key));
+    let read = || -> Result<Vec<Entry>> {
+        let mut bytes = Vec::new();
+        std::fs::File::open(&torrent)?.take(MAX_METADATA + 1).read_to_end(&mut bytes)?;
+        let (_, files) = inspect_metadata(&bytes, &job.key, &job.folder)?;
+        Ok(files.into_iter().map(|(path, size)| Entry { blocked: blocked(job.platform, &path), path, size }).collect())
+    };
+    match read() {
+        Ok(entries) if entries.iter().any(|entry| !entry.blocked) => {
+            if job.selected.is_none() { job.selected = Some((0..entries.len()).filter(|&i| !entries[i].blocked).collect()); }
+            job.entries = entries;
+        }
+        _ => {
+            let _ = std::fs::remove_file(&torrent);
+            job.state = State::Failed;
+            job.error = "Its file list couldn't be read. Retry looks it up again.".into();
+        }
+    }
+}
+
 /// A copy of a download without its file list (it can be long), for the UI.
 fn light(job: &mut Job) -> Job {
     let entries = std::mem::take(&mut job.entries);
@@ -484,7 +517,8 @@ fn chosen(selected: Option<&[usize]>) -> impl Fn(usize) -> bool {
 /// What a console game never needs: Windows programs and scripts. Left out of PS4/PS5 releases.
 fn blocked(platform: Option<crate::platform::Platform>, path: &str) -> bool {
     use crate::platform::Platform;
-    const PROGRAMS: [&str; 12] = [".exe", ".com", ".scr", ".msi", ".bat", ".cmd", ".lnk", ".vbs", ".vbe", ".js", ".ps1", ".pif"];
+    // Not .js or .com: games ship those as data (web UIs, say).
+    const PROGRAMS: [&str; 10] = [".exe", ".scr", ".msi", ".bat", ".cmd", ".lnk", ".vbs", ".vbe", ".ps1", ".pif"];
     let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
     matches!(platform, Some(Platform::Ps4 | Platform::Ps5)) && PROGRAMS.iter().any(|ext| name.ends_with(ext))
 }
@@ -585,9 +619,7 @@ impl Worker {
         }
     }
     fn fail(&self, key: &str, error: anyhow::Error) {
-        // Engine errors can contain tracker/magnet URLs; redact them from the UI.
-        let message = regex::Regex::new(r"(?:https?://|udp://|magnet:\?)[^\s]+")
-            .unwrap().replace_all(&error.to_string(), "[network URL]").chars().take(500).collect::<String>();
+        let message = shown(&error);
         self.update(key, |job| {
             if job.state != State::Complete { job.state = State::Failed; }
             job.error = message; job.problem = Problem::Other; job.clear_runtime();
@@ -922,18 +954,27 @@ impl Worker {
         if job.state != State::Ready { return Ok(()); }
         // The lookup's folder is canonical: the same folder reached another way is the same.
         let folder = base.canonicalize().unwrap_or_else(|_| base.to_path_buf()).join(format!("torrent-{key}"));
-        if folder != job.folder {
-            // Looking it up made an empty folder where downloads went by default: not there now.
-            remove_unused(&job.folder, key);
-        }
-        // Every file chosen is `None`; the file list was only for choosing.
+        // Every file chosen is `None`; the size is what's chosen.
         let all = selected.len() == job.entries.len();
-        self.update(key, |job| {
-            job.folder = folder; job.selected = if all { None } else { Some(selected) }; job.install_to = install_to;
-            job.entries = vec![];
+        let total = selected.iter().filter_map(|&i| job.entries.get(i)).map(|entry| entry.size).sum();
+        self.update(key, |j| {
+            j.folder = folder.clone(); j.selected = if all { None } else { Some(selected) }; j.install_to = install_to;
+            j.total = total; j.error.clear();
         });
         self.persist();
-        self.start(key).await
+        if let Err(error) = self.start(key).await {
+            // Back to choosing, saying why: another folder (or fewer files) may work.
+            if folder != job.folder { remove_unused(&folder, key); }
+            self.update(key, |j| { j.state = State::Ready; j.folder = job.folder.clone(); j.error = shown(&error); j.clear_runtime(); });
+            self.persist();
+            return Ok(());
+        }
+        // Started (or waiting for the VPN). Looking it up made an empty folder where downloads
+        // went by default: not there now. The file list was only for choosing.
+        if folder != job.folder { remove_unused(&job.folder, key); }
+        self.update(key, |j| j.entries = vec![]);
+        self.persist();
+        Ok(())
     }
 
     /// Forget a download that never started, and the empty folder looking it up made.
@@ -1059,8 +1100,8 @@ impl Worker {
                         },
                         Some(Command::Remove(key)) => Some((key.clone(), self.remove(&key).await)),
                         Some(Command::Delete(key)) => Some((key.clone(), self.delete(&key).await)),
-                        Some(Command::NoInstall(key)) => {
-                            self.update(&key, |job| job.install_to = None);
+                        Some(Command::InstallTo(key, to)) => {
+                            self.update(&key, |job| job.install_to = to);
                             self.persist();
                             None
                         },
@@ -1894,6 +1935,13 @@ mod tests {
         assert!(manager.begin(&key, temp.path().join("chosen"), vec![], None).is_err(), "nothing chosen");
         assert!(manager.begin(&key, PathBuf::from("relative"), vec![pkg], None).is_err());
         let install_to = temp.path().join("games");
+        // A folder it can't use (someone else's torrent-<key> is there): back to choosing, saying why.
+        let taken = temp.path().join("taken");
+        std::fs::create_dir_all(taken.join(format!("torrent-{key}"))).unwrap();
+        manager.begin(&key, taken, vec![pkg], Some(install_to.clone())).unwrap();
+        let back = rt.block_on(wait_job(&manager, &key, |job| job.state == State::Ready && !job.error.is_empty()));
+        assert!(back.error.contains("ownership marker"), "{}", back.error);
+        assert_eq!(manager.entries(&key).len(), 2, "its files can be chosen again");
         manager.begin(&key, temp.path().join("chosen"), vec![pkg], Some(install_to.clone())).unwrap();
         let done = rt.block_on(wait_job(&manager, &key, |job| job.state == State::Complete));
         assert_eq!(done.total, game.len() as u64, "progress counts only the chosen file");
@@ -2024,6 +2072,29 @@ mod tests {
         let mut job = job(temp.path(), &key); job.platform = Some(crate::platform::Platform::Ps5);
         let mut worker = Worker::new(temp.path().join("store2"), Arc::new(Mutex::new(vec![job])), Policy { local_only: true, ..Default::default() });
         assert!(worker.resolved(Resolved { key, bytes, peers: vec![] }).is_err(), "only programs: nothing to download");
+    }
+
+    #[test]
+    fn file_lists_come_back_after_a_restart_with_windows_programs_left_out() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = temp.path().join("store");
+        let (key, bytes) = metadata(&[&["Game", "CUSA00001-app.pkg"], &["Game", "Setup.exe"]], None, false);
+        let (lost, _) = metadata(&[&["Other", "a.pkg"]], None, false);
+        // Looked up by an older launcher (nothing chosen), and one whose torrent is gone.
+        let mut older = job(temp.path(), &key);
+        (older.state, older.platform) = (State::Ready, Some(crate::platform::Platform::Ps4));
+        let mut gone = job(temp.path(), &lost);
+        gone.state = State::Ready;
+        let worker = Worker::new(store.clone(), Arc::new(Mutex::new(vec![older, gone])), Policy { local_only: true, ..Default::default() });
+        worker.persist();
+        secure_write(&store.join(format!("{key}.torrent")), &bytes).unwrap();
+        let mut manager = Manager::new(store, Policy { local_only: true, ..Default::default() });
+        let entries = manager.entries(&key);
+        let exe = entries.iter().position(|e| e.path.ends_with("Setup.exe")).unwrap();
+        assert!(entries.len() == 2 && entries[exe].blocked);
+        assert_eq!(manager.job(&key).unwrap().selected, Some(vec![1 - exe]), "everything but the program is chosen");
+        assert_eq!(manager.job(&lost).unwrap().state, State::Failed, "Retry looks it up again");
+        manager.shutdown();
     }
 
     #[test]

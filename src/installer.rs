@@ -201,8 +201,10 @@ impl Manager {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
         }
+        // Only a PS4 game's, and only if it is one (a PS4 update's param.sfo inside).
         let patch = path.with_file_name(patch);
-        if fs::symlink_metadata(&patch).is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink()) {
+        let update = job.title_id.starts_with("CUSA") && fs::symlink_metadata(patch.join("sce_sys/param.sfo")).is_ok_and(|meta| meta.is_file());
+        if update && fs::symlink_metadata(&patch).is_ok_and(|meta| meta.is_dir() && !meta.file_type().is_symlink()) {
             if let Err(e) = hide(&patch) { crate::log!("The update beside {} wasn't deleted: {e:#}", path.display()); }
         }
         jobs.retain(|j| j.key != key);
@@ -1462,32 +1464,34 @@ mod uninstall_tests {
     #[test]
     fn uninstall_deletes_the_game_folder_but_never_follows_links_out_of_it() {
         let temp = tempfile::tempdir().unwrap();
-        let game = temp.path().join("library").join("PPSA00001");
+        let game = temp.path().join("library").join("CUSA00001");
         fs::create_dir_all(game.join("sce_sys")).unwrap();
         fs::write(game.join("eboot.bin"), b"not a program").unwrap();
         let outside = temp.path().join("precious.txt");
         fs::write(&outside, b"keep me").unwrap();
         std::os::unix::fs::symlink(&outside, game.join("sce_sys").join("link")).unwrap();
         std::os::unix::fs::symlink(temp.path(), game.join("dir-link")).unwrap();
-        let patch = temp.path().join("library").join("PPSA00001-patch");
-        fs::create_dir_all(&patch).unwrap();
-        fs::write(patch.join("eboot.bin"), b"update").unwrap();
+        // Its update beside it goes too; a folder that only looks like one stays.
+        let patch = temp.path().join("library").join("CUSA00001-patch");
+        fs::create_dir_all(patch.join("sce_sys")).unwrap();
+        fs::write(patch.join("sce_sys/param.sfo"), b"update").unwrap();
+        fs::create_dir_all(temp.path().join("library").join("Other-patch")).unwrap();
         let store = temp.path().join("installs");
         save_records(&store, &[Record { key: "k".repeat(40), topic: 1, name: "Game".into(), state: State::Installed, done: 1, total: 1,
-            error: String::new(), path: Some(game.clone()), title_id: "PPSA00001".into() }]).unwrap();
+            error: String::new(), path: Some(game.clone()), title_id: "CUSA00001".into() }]).unwrap();
         let manager = Manager::at(store.clone());
         assert!(manager.uninstall("other").is_err());
         assert_eq!(manager.uninstall(&"k".repeat(40)).unwrap(), game);
         assert!(!game.exists() && !patch.exists(), "the game and its update");
-        // Deleted in the background: wait for the library folder to empty.
+        // Deleted in the background: wait for the library folder to hold only what isn't the game's.
         let library = temp.path().join("library");
         let start = std::time::Instant::now();
-        while fs::read_dir(&library).unwrap().next().is_some() {
+        while fs::read_dir(&library).unwrap().count() > 1 {
             assert!(start.elapsed() < std::time::Duration::from_secs(10), "the game folder is deleted");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert_eq!(fs::read(&outside).unwrap(), b"keep me");
-        assert!(temp.path().join("library").is_dir());
+        assert!(library.join("Other-patch").is_dir(), "not this game's");
         assert!(Manager::at(store).snapshot().is_empty(), "the record is gone");
     }
 
