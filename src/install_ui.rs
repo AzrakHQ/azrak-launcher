@@ -41,7 +41,7 @@ impl App {
     pub fn confirm_install(&mut self) {
         let Some(key) = self.install_pending.clone() else { return; };
         let destination = self.ui().get_download_path().trim().to_owned();
-        match self.start_install(&key, &destination) {
+        match self.start_install(&key, util::expand_home(&destination)) {
             Ok(()) => {
                 { let mut cfg = self.cfg.lock().unwrap(); cfg.install_dir = destination; cfg.save(); }
                 self.install_pending = None;
@@ -52,8 +52,8 @@ impl App {
         }
     }
 
-    /// Install a finished download into `destination` (a folder; ~/ is allowed).
-    pub fn start_install(&mut self, key: &str, destination: &str) -> anyhow::Result<()> {
+    /// Install a finished download into `destination` (a folder).
+    pub fn start_install(&mut self, key: &str, destination: std::path::PathBuf) -> anyhow::Result<()> {
         let job = self.downloads.snapshot().into_iter().find(|job| job.key == key && job.state == downloads::State::Complete)
             .context("The download isn't finished")?;
         let ids = self.games.iter().find(|game| game.g.id == job.topic).map(|game| {
@@ -66,7 +66,7 @@ impl App {
         let name = match game { Some(game) if platform == crate::platform::Platform::Pc => game.name.clone(), _ => job.name };
         let skip = self.downloads.left_out(key)?;
         let request = installer::Request { key: key.into(), topic: job.topic, name,
-            source: job.folder, destination: util::expand_home(destination), expected_ids: ids, platform, skip };
+            source: job.folder, destination, expected_ids: ids, platform, skip };
         self.installer.start(request)?;
         self.install_failures.remove(key);
         self.install_states.insert(key.into(), installer::State::Inspecting);
@@ -85,8 +85,8 @@ impl App {
             // Not while the player is choosing what to delete of it.
             && self.dl_delete.as_ref().is_none_or(|(key, _)| *key != job.key));
         let Some(job) = next else { return };
-        let destination = job.install_to.as_ref().unwrap().to_string_lossy().into_owned();
-        if let Err(error) = self.start_install(&job.key, &destination) {
+        let destination = job.install_to.clone().unwrap();
+        if let Err(error) = self.start_install(&job.key, destination) {
             self.install_failures.insert(job.key.clone(), format!("{error:#}"));
             self.toast_action("Couldn't install", &job.name, 2, "downloads", "See why");
         } else {

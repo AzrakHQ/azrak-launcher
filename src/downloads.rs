@@ -430,14 +430,23 @@ fn remove_unused(folder: &Path, key: &str) {
     }
 }
 
-fn check_path(folder: &Path, relative: &Path) -> Result<()> {
+/// A torrent path's names are safe to show and write (no marker, separators or control characters).
+fn check_names(relative: &Path) -> Result<()> {
     ensure!(!relative.as_os_str().is_empty(), "Torrent contains an empty filename");
+    for component in relative.components() {
+        let Component::Normal(component) = component else { bail!("Unsafe torrent file path"); };
+        let name = component.to_string_lossy();
+        ensure!(!name.contains(['\0', '\\']) && name != MARKER && !name.chars().any(char::is_control), "Unsafe torrent filename");
+    }
+    Ok(())
+}
+
+fn check_path(folder: &Path, relative: &Path) -> Result<()> {
+    check_names(relative)?;
     let mut path = folder.to_path_buf();
     let mut components = relative.components().peekable();
     while let Some(component) = components.next() {
         let Component::Normal(component) = component else { bail!("Unsafe torrent file path"); };
-        let name = component.to_string_lossy();
-        ensure!(!name.contains(['\0', '\\']) && name != MARKER && !name.chars().any(char::is_control), "Unsafe torrent filename");
         path.push(component);
         match std::fs::symlink_metadata(&path) {
             Ok(metadata) => {
@@ -472,7 +481,7 @@ fn inspect_metadata(bytes: &[u8], key: &str, folder: Option<&Path>) -> Result<(u
         let components = file.filename.to_vec();
         ensure!(!components.is_empty() && components.iter().all(|part| !part.is_empty() && part != "." && part != ".." && !part.contains(['/', '\\'])), "Unsafe path component");
         let path = file.filename.to_pathbuf();
-        if let Some(folder) = folder { check_path(folder, &path)?; }
+        match folder { Some(folder) => check_path(folder, &path)?, None => check_names(&path)? }
         ensure!(paths.insert(path.clone()), "Duplicate torrent file path");
         total = total.checked_add(file.len).context("Torrent size overflow")?;
         ensure!(total <= i64::MAX as u64, "Torrent is too large");
@@ -902,6 +911,8 @@ impl Worker {
     fn may_seed(&self, key: &str) -> bool { self.policy.seed_after_download || self.job(key).is_some_and(|job| job.shared_by_hand) }
 
     async fn set_seed_after_download(&mut self, enabled: bool) -> Result<()> {
+        // Settings sends it on every press, even when it's already so: nothing changes then.
+        if enabled == self.policy.seed_after_download { return Ok(()); }
         // Turning the setting off stops every seed, the ones shared by hand too.
         if !enabled {
             for job in self.jobs.lock().unwrap().iter_mut() { job.shared_by_hand = false; }
@@ -986,6 +997,8 @@ impl Worker {
             _ => {
                 self.reseeding.remove(key);
                 let _ = self.stop_job(key, State::Complete).await;
+                // Shared by hand: not checked all over again at every start; Share again tries.
+                self.update(key, |job| job.shared_by_hand = false);
                 self.fail(key, anyhow::anyhow!(FILES_CHANGED));
             }
         }
@@ -1005,6 +1018,8 @@ impl Worker {
             j.total = total; j.error.clear();
         });
         self.persist();
+        // Folders that don't exist yet: made for it, and gone again if it can't start.
+        let made: Vec<PathBuf> = base.ancestors().take_while(|p| !p.exists()).map(Path::to_path_buf).collect();
         // The folder now, even if the download waits for the VPN: later it couldn't be changed.
         // Without its saved torrent, starting would look it up again and forget the choice.
         let started = match self.job(key).map(|job| owned_folder(&job)) {
@@ -1015,6 +1030,7 @@ impl Worker {
         if let Err(error) = started {
             // Back to choosing, saying why: another folder (or fewer files) may work.
             if folder != job.folder { remove_unused(&folder, key); }
+            for dir in &made { let _ = std::fs::remove_dir(dir); }
             self.update(key, |j| {
                 j.state = State::Ready; j.folder = job.folder.clone(); j.total = job.total; j.install_to = job.install_to.clone();
                 j.error = shown(&error); j.clear_runtime();

@@ -264,9 +264,8 @@ impl App {
             }
             "install" => {
                 // Retrying where it was set to install skips the question; otherwise ask where.
-                let to = job.install_to.as_ref().map(|path| path.to_string_lossy().into_owned());
-                match to {
-                    Some(to) => match self.start_install(key, &to) {
+                match job.install_to.clone() {
+                    Some(to) => match self.start_install(key, to) {
                         Ok(()) => { audio::play(Sound::Select); self.push_installs(); }
                         Err(error) => {
                             self.toast("Couldn't install", &format!("{error:#}"), 2);
