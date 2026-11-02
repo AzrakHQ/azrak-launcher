@@ -144,10 +144,5 @@ impl App {
         self.install_states.retain(|key, _| records.iter().any(|record| &record.key == key));
         if register { self.rescan_library(); }
         if changed && self.overlay == Overlay::Hub { self.push_hub(); }
-        if let Some(record) = records.iter().find(|record| record.state.active()) {
-            self.ui().set_install_badge(format!("{} · {:.0}%", record.state.label(), record.progress() * 100.0).into());
-            self.ui().set_install_progress(record.progress());
-            self.ui().set_install_active(true);
-        } else { self.ui().set_install_active(false); }
     }
 }

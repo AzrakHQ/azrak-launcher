@@ -27,8 +27,19 @@ export function parse(text) {
   while (i < text.length) {
     const c = text[i];
     if (c === '\n') { line++; i++; continue; }
-    if (c === '/' && text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i++; continue; }
-    if (c === '/' && text[i + 1] === '*') { i = text.indexOf('*/', i + 2) + 2; continue; }
+    // Comments: skipped, and a statement that hasn't started yet starts after them.
+    if (c === '/' && (text[i + 1] === '/' || text[i + 1] === '*')) {
+      const fresh = text.slice(start, i).trim() === '';
+      if (text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i++; }
+      else {
+        const end = text.indexOf('*/', i + 2);
+        const stop = end < 0 ? text.length : end + 2;
+        line += (text.slice(i, stop).match(/\n/g) || []).length;
+        i = stop;
+      }
+      if (fresh) start = i;
+      continue;
+    }
     if (c === '"') { i++; while (i < text.length && text[i] !== '"') { if (text[i] === '\\') i++; i++; } i++; continue; }
     if (c === '{') {
       const head = statement();
@@ -93,11 +104,15 @@ export function lint(text) {
         if (box?.len && !(wraps && box.el !== el)) {
           const ratio = font.scale === 't' && box.len.scale === 'k' ? T_OVER_K : 1;
           const need = font.px * LINE * ratio;
-          if (need > box.len.px + 0.5 && !allowed(el.line) && !allowed(el.props['font-size'].line)) {
+          // A box's own padding (top and bottom) leaves less room inside it.
+          const pad = name => length(box.el.props[name]?.value)?.px ?? 0;
+          const room = box.el === el ? box.len.px
+            : box.len.px - (box.el.props['padding-top'] ? pad('padding-top') : pad('padding')) - (box.el.props['padding-bottom'] ? pad('padding-bottom') : pad('padding'));
+          if (need > room + 0.5 && !allowed(el.line) && !allowed(el.props['font-size'].line)) {
             problems.push({
               line: el.props['font-size'].line,
               message: `text of ${font.px}px (S.${font.scale}) needs about ${need.toFixed(0)}px of height`
-                + `${ratio > 1 ? ' on the smallest windows' : ''}, but its box (line ${box.el.props.height.line}) is ${box.len.px}px (S.${box.len.scale})`,
+                + `${ratio > 1 ? ' on the smallest windows' : ''}, but its box (line ${box.el.props.height.line}) has ${room}px (S.${box.len.scale})`,
             });
           }
         }

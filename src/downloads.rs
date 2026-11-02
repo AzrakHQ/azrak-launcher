@@ -82,8 +82,10 @@ pub struct Job {
     #[serde(skip)] pub upload_speed: f64,
     /// Checking a completed download's files before it seeds again.
     #[serde(skip)] pub verifying: bool,
-    /// While the engine verifies the files on disk (resuming): how much it has checked.
+    /// While the engine verifies the files on disk (resuming): how much it has checked, of how
+    /// much (the whole torrent: it checks every file, chosen or not).
     #[serde(skip)] pub checked: u64,
+    #[serde(skip)] pub check_total: u64,
     /// Download & install was pressed and the worker is starting it.
     #[serde(skip)] pub starting: bool,
     /// Stopped because "download only through a VPN" is on and the VPN isn't connected;
@@ -125,7 +127,7 @@ pub struct Entry {
 
 impl Job {
     fn clear_runtime(&mut self) {
-        self.speed = 0.0; self.peers = 0; self.eta.clear(); self.seeding = false; self.upload_speed = 0.0; self.verifying = false; self.checked = 0;
+        self.speed = 0.0; self.peers = 0; self.eta.clear(); self.seeding = false; self.upload_speed = 0.0; self.verifying = false; self.checked = 0; self.check_total = 0;
     }
     pub fn progress(&self) -> f32 {
         if self.state == State::Complete { return 1.0; }
@@ -261,7 +263,7 @@ impl Manager {
             folder: base.join(format!("torrent-{key}")), key: key.clone(), topic,
             name: name.chars().filter(|c| !c.is_control()).take(200).collect(), magnet,
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, checked: 0, starting: false, piece: 0, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, checked: 0, check_total: 0, starting: false, piece: 0, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
             platform: Some(platform), entries: vec![], selected: None, install_to: None, added: crate::util::now_secs() as u64,
         };
         self.tx.try_send(Command::Prepare(job.clone())).context("Download worker is busy or unavailable")?;
@@ -1313,7 +1315,8 @@ impl Worker {
             let newly_complete = stats.finished && !was_complete;
             self.update(&key, |job| {
                 if (!was_complete || stats.finished) && counts(&stats) { job.done = stats.progress_bytes; job.total = stats.total_bytes; }
-                job.checked = if matches!(stats.state, TorrentStatsState::Initializing { .. }) { stats.progress_bytes } else { 0 };
+                let checking = matches!(stats.state, TorrentStatsState::Initializing { .. });
+                (job.checked, job.check_total) = if checking { (stats.progress_bytes, stats.total_bytes) } else { (0, 0) };
                 job.state = state;
                 job.speed = if complete { 0.0 } else { speed }; job.peers = peers;
                 job.eta = if complete { String::new() } else { eta };
@@ -1454,7 +1457,7 @@ mod tests {
             key: key.into(), topic: 0, name: "Generated public-domain fixture".into(),
             magnet: format!("magnet:?xt=urn:btih:{key}"), folder: base.join(format!("torrent-{key}")),
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, checked: 0, starting: false, piece: 0, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, checked: 0, check_total: 0, starting: false, piece: 0, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
             platform: None, entries: vec![], selected: None, install_to: None, added: 0,
         }
     }

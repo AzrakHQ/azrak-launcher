@@ -118,7 +118,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             let verifying = job.state == State::Checking;
             d.status = if verifying { "Verifying what's already downloaded".into() } else { "Downloading".into() };
             if verifying { d.dl_label = "Verifying".into(); (d.kind, d.bar) = (4, 4); }
-            let checked = if job.total > 0 { (job.checked as f32 / job.total as f32).min(1.0) } else { 0.0 };
+            let checked = if job.check_total > 0 { (job.checked as f32 / job.check_total as f32).min(1.0) } else { 0.0 };
             // Verifying, the number and the bars are the check's; then back to what's downloaded.
             progress(&mut d, if verifying { checked } else { job.progress() });
             if verifying { (d.dl, d.tile) = (checked, checked); }
@@ -369,16 +369,6 @@ impl App {
         self.dl_speeds.retain(|key, _| jobs.iter().any(|job| &job.key == key));
         if changed && self.overlay == Overlay::Hub { self.push_hub(); }
         if self.overlay == Overlay::Setup { self.push_setup(); }
-        let active: Vec<_> = jobs.iter().filter(|job| job.state.active()).collect();
-        let seeding = jobs.iter().filter(|job| job.seeding).count();
-        let done = active.iter().fold(0u64, |sum, job| sum.saturating_add(job.done));
-        let total = active.iter().fold(0u64, |sum, job| sum.saturating_add(job.total));
-        let progress = if total == 0 { 0.0 } else { (done as f64 / total as f64).clamp(0.0, 1.0) as f32 };
-        let ui = self.ui();
-        ui.set_download_active(!active.is_empty() || seeding > 0);
-        ui.set_download_progress(progress);
-        ui.set_download_badge(if active.is_empty() { format!("{seeding} sharing") }
-            else if total == 0 { "Getting file list".to_string() } else { format!("{} active · {:.0}%", active.len(), progress * 100.0) }.into());
         if self.overlay != Overlay::Downloads { return; }
 
         // Newest first within each group: in progress, needs you, ready to play.
@@ -697,7 +687,7 @@ impl App {
         } else if !active.is_empty() {
             // One that's verifying shows how far the check is.
             let verifying = active.len() == 1 && active[0].state == State::Checking;
-            let (done, total) = active.iter().fold((0u64, 0u64), |(d, t), job| (d + if verifying { job.checked } else { job.done }, t + job.total));
+            let (done, total) = active.iter().fold((0u64, 0u64), |(d, t), job| if verifying { (d + job.checked, t + job.check_total) } else { (d + job.done, t + job.total) });
             let frac = if total > 0 { (done as f32 / total as f32).min(1.0) } else { 0.0 };
             let pct = (frac * 100.0).floor();
             let label = if active.len() > 1 { format!("{} downloads · {pct:.0}%", active.len()) }
@@ -712,7 +702,7 @@ impl App {
             (0, String::new(), 0.0)
         };
         // A focus that was on the ring stays on Downloads (the icon in its place).
-        let glass = { let key = self.bg_key.clone(); self.frost_of(&key) };
+        let glass = if self.view == 0 { let key = self.bg_key.clone(); self.frost_of(&key) } else { None };
         let ui = self.ui();
         ui.set_ring_kind(kind);
         ui.set_ring_label(label.into());

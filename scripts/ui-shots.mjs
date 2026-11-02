@@ -111,7 +111,13 @@ async function shoot([w, h]) {
   const child = spawn(binary, ['--windowed'], { env, stdio: ['ignore', 'ignore', 'pipe'] });
   let log = '';
   child.stderr.on('data', d => { log += d; });
-  for (let i = 0; i < 120 && !log.includes('home screen shown'); i++) await sleep(250);
+  const exited = new Promise(r => child.on('exit', r));
+  for (let i = 0; i < 120 && !log.includes('home screen shown') && child.exitCode === null; i++) await sleep(250);
+  if (!log.includes('home screen shown')) {
+    child.kill();
+    console.error(`${w}x${h}: the launcher didn't reach its home screen\n${log.slice(-2000)}`);
+    process.exit(1);
+  }
   const win = run('xdotool', ['search', '--sync', '--onlyvisible', '--name', '^Azrak Launcher$']).stdout.trim().split('\n')[0];
   run('xdotool', ['windowfocus', '--sync', win]);
   run('xdotool', ['windowsize', win, String(w), String(h)]);
@@ -124,8 +130,12 @@ async function shoot([w, h]) {
     run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'x11grab', '-draw_mouse', '0',
       '-video_size', `${w}x${h}`, '-i', `${process.env.DISPLAY}+0,0`, '-frames:v', '1', join(dir, `${name}.png`)]);
   }
+  if (child.exitCode !== null) {
+    console.error(`${w}x${h}: the launcher closed while its screens were taken\n${log.slice(-2000)}`);
+    process.exit(1);
+  }
   child.kill();
-  await new Promise(r => child.on('exit', r));
+  await Promise.race([exited, sleep(5000)]);
 }
 
 for (const size of sizes) {
@@ -147,12 +157,17 @@ for (const [name] of steps) {
 let changed = 0, compared = 0;
 for (const [w, h] of sizes) for (const [name] of steps) {
   const shot = join(out, `${w}x${h}`, `${name}.png`), ok = join(golden, `${w}x${h}`, `${name}.png`);
+  if (!existsSync(shot)) { changed++; console.log(`missing: ${w}x${h}/${name}`); continue; }
   if (flag('--approve')) { mkdirSync(dirname(ok), { recursive: true }); cpSync(shot, ok); continue; }
   if (!existsSync(ok)) continue;
   compared++;
   const r = run('compare', ['-metric', 'AE', '-fuzz', '6%', ok, shot, shot.replace(/\.png$/, '.diff.png')]);
-  const pixels = Number.parseFloat(r.stderr) || 0;
-  if (pixels / (w * h) > 0.004) {
+  // A comparison that couldn't be made (other sizes, no ImageMagick) is a change, not a pass.
+  const pixels = Number.parseFloat(r.stderr);
+  if (!Number.isFinite(pixels)) {
+    changed++;
+    console.log(`couldn't compare: ${w}x${h}/${name}: ${(r.stderr || r.error?.message || '').trim()}`);
+  } else if (pixels / (w * h) > 0.004) {
     changed++;
     console.log(`changed: ${w}x${h}/${name} (${(100 * pixels / (w * h)).toFixed(2)}% of pixels)`);
   } else rmSync(shot.replace(/\.png$/, '.diff.png'), { force: true });

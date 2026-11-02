@@ -24,6 +24,13 @@ test('text scale against a layout-scaled box is checked at the smallest window',
   assert.equal(lint(ui.replace('S.t', 'S.k')).length, 0);
 });
 
+test('comments before a property and padding inside the box are understood', () => {
+  assert.equal(lint('Rectangle {\n  // a box\n  height: (40px * S.k);\n  Text { font-size: (36px * S.k); }\n}').length, 1);
+  assert.equal(lint('/* one\ntwo */\nRectangle {\n  height: (40px * S.k);\n  Text { font-size: (36px * S.k); }\n}')[0].line, 5);
+  assert.equal(lint('HorizontalLayout { height: (40px * S.k); padding: (10px * S.k); Text { font-size: (25px * S.k); } }').length, 1);
+  assert.equal(lint('HorizontalLayout { height: (40px * S.k); Text { font-size: (25px * S.k); } }').length, 0);
+});
+
 test('a column shares its height out, wrapped text grows, and allow skips a line', () => {
   assert.equal(lint('Rectangle { height: (40px * S.k); VerticalLayout { Text { font-size: (36px * S.k); } Text { font-size: (36px * S.k); } } }').length, 0);
   assert.equal(lint('Rectangle { height: (40px * S.k); Text { font-size: (36px * S.k); wrap: word-wrap; } }').length, 0);

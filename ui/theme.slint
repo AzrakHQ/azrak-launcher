@@ -262,8 +262,6 @@ export struct SettingData {
     secret: bool,
     danger: bool,
     value-kind: int,  // 0 dim, 1 good, 2 bad, 3 call to action
-    group-first: bool, // rows of a section share one card
-    group-last: bool,
     section: int,     // which section it's in (-1: under the sections, like Quit)
     icon: string,     // before the value (Icons.get), e.g. "check" for Connected
     signal: int,      // a Wi-Fi network's bars, 1–4, after the value (0: none)

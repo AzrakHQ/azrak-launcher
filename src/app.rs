@@ -313,10 +313,11 @@ pub struct App {
     pub hero_flip: bool,
     pub row_flip: bool,
     pub settings_ids: Vec<crate::settings::SId>,
-    /// Settings' Advanced section is expanded (for this session).
     /// Settings' sections (the left column), and the one shown.
     pub settings_sections: Vec<crate::SettingSection>,
     pub settings_section: usize,
+    /// The section notes last shown (they're refreshed each second while Settings is open).
+    pub settings_notes_seen: String,
     /// Downloads that stopped or couldn't install, already seen on the Downloads page: the top
     /// bar's ring stops asking for them.
     pub ring_seen: HashSet<String>,
@@ -620,6 +621,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         settings_ids: Vec::new(),
         settings_sections: Vec::new(),
         settings_section: 0,
+        settings_notes_seen: String::new(),
         ring_seen: HashSet::new(),
         vpn_busy: String::new(),
         vpn_seen: String::new(),
@@ -1766,7 +1768,7 @@ impl App {
                 self.set_focus(self.zone, 0);
             }
             if self.zone == Z_TOP && self.live.is_empty() && self.idx < 2 {
-                self.set_focus(Z_TOP, 3);
+                self.set_focus(Z_TOP, 4);
             }
             self.build_row();
             self.push_row();
@@ -1792,6 +1794,7 @@ impl App {
         if self.overlay == Overlay::Settings && self.edit_index < 0 && self.vpn_seen != crate::settings::vpn_signature() {
             self.refresh_settings();
         }
+        if self.overlay == Overlay::Settings { self.refresh_settings_notes(); }
         if self.overlay == Overlay::Settings {
             self.sys_poll();
         }
@@ -3219,6 +3222,7 @@ impl App {
         // The first section, with the sections in focus.
         self.settings_section = 0;
         self.build_settings();
+        self.settings_notes_seen = String::new();
         self.ui().set_settings_y(0.0);
         self.push_overlay(Overlay::Settings, Z_SETTINGS_NAV, 0);
         self.push_settings();

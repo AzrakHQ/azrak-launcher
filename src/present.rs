@@ -109,7 +109,8 @@ impl App {
         match self.overlay {
             Overlay::Downloads => self.push_downloads(),
             Overlay::Setup => self.push_setup(),
-            Overlay::Settings => self.push_settings(),
+            // Only the glass: rebuilding the rows would restart a row being typed in.
+            Overlay::Settings => self.push_settings_glass(),
             _ => {}
         }
     }

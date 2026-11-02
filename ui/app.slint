@@ -222,15 +222,9 @@ export component AppWindow inherits Window {
     in property <string> status;
     in property <bool> status-busy;
     in property <[DownloadData]> downloads;
-    in property <bool> download-active;
-    in property <float> download-progress;
-    in property <string> download-badge;
     in property <bool> download-consent;
     in property <bool> download-is-install;
     in-out property <bool> download-focus-path;
-    in property <bool> install-active;
-    in property <float> install-progress;
-    in property <string> install-badge;
     in property <string> download-title;
     in property <string> download-error;
     in property <string> download-privacy;
@@ -1694,8 +1688,11 @@ export component AppWindow inherits Window {
                                 color: solid ? #05070f : #dfe4ef;
                                 vertical-alignment: center; horizontal-stretch: 1;
                             }
+                            // A long one (a controller's full name) is cut short, never past the column.
                             if sec.note != "": Text {
                                 text: sec.note;
+                                max-width: (150px * S.k);
+                                overflow: elide;
                                 font-size: (15px * S.t); font-weight: 500;
                                 color: solid ? #3a4560 : sec.note-kind == 1 ? #8dbaff : sec.note-kind == 2 ? #ffb547 : #9ba6c0;
                                 vertical-alignment: center;

@@ -410,15 +410,35 @@ impl App {
         }
     }
 
-    /// The left column: section `i`, or a row under them (Quit) past the last section.
+    /// The left column: section `i`, or a row under them (Quit) past the last section. Silent:
+    /// callers play the sound that fits (Move, or Back from the rows).
     pub fn focus_settings_nav(&mut self, i: usize) {
         let n = self.settings_sections.len();
         if i < n && i != self.settings_section {
             self.settings_section = i;
             self.ui().set_settings_y(0.0);
         }
-        self.move_focus(Z_SETTINGS_NAV, i as i32);
+        self.set_focus(Z_SETTINGS_NAV, i as i32);
         self.push_settings_nav();
+    }
+
+    /// The notes beside the sections ("1 active", "1 ready") as they are now.
+    pub fn refresh_settings_notes(&mut self) {
+        let sections: Vec<SettingSection> = self.settings_sections.iter().map(|s| self.section_info(&s.label.to_uppercase())).collect();
+        let seen: String = sections.iter().map(|s| format!("{}|", s.note)).collect();
+        if seen != self.settings_notes_seen {
+            self.settings_notes_seen = seen;
+            self.settings_sections = sections;
+            self.ui().set_settings_sections(model(self.settings_sections.clone()));
+        }
+    }
+
+    /// The glass behind the sheet: the art behind it, blurred (none over the dimmed Library).
+    pub fn push_settings_glass(&mut self) {
+        let glass = if self.view == 0 { let key = self.bg_key.clone(); self.frost_of(&key) } else { None };
+        let ui = self.ui();
+        ui.set_settings_has_glass(glass.is_some());
+        ui.set_settings_glass(glass.unwrap_or_default());
     }
 
     pub fn act_settings_nav(&mut self, a: Act) {
@@ -493,14 +513,12 @@ impl App {
 
     pub fn push_settings(&mut self) {
         let footer: Vec<SettingData> = self.settings_footer().into_iter().map(|i| self.settings_rows[i].clone()).collect();
-        let glass = { let key = self.bg_key.clone(); self.frost_of(&key) };
+        self.push_settings_glass();
         let ui = self.ui();
         ui.set_settings(model(self.settings_rows.clone()));
         ui.set_settings_sections(model(self.settings_sections.clone()));
         ui.set_settings_footer(model(footer));
         ui.set_settings_version(self.version_line().into());
-        ui.set_settings_has_glass(glass.is_some());
-        ui.set_settings_glass(glass.unwrap_or_default());
         ui.set_edit_index(self.edit_index);
         self.push_settings_nav();
     }
@@ -515,14 +533,18 @@ impl App {
                 target = y;
             }
             let row = &self.settings_rows[i];
-            // Hints wrap at about 95 characters (the column's width at 17 px).
-            let hint_lines = row.hint.chars().count().div_ceil(95) as f32;
+            // Hints wrap at about 95 characters (the column's width at 17 px), or about 55 beside
+            // a long value (a folder takes up to half the row).
+            let per_line = if row.kind == 1 || row.value.chars().count() > 24 { 55 } else { 95 };
+            let hint_lines = row.hint.chars().count().div_ceil(per_line) as f32;
             let h = 32.0 + 26.0 * r + if hint_lines > 0.0 { 5.0 + hint_lines * 22.0 * r } else { 0.0 } + if self.edit_index == i as i32 { 60.0 * r } else { 0.0 };
             y += f32::max(h, 84.0) + 10.0;
         }
-        // The rows' window on the sheet: under the title, above the button hints.
-        let view = 960.0 - 48.0 - (42.0 + 8.0 + 24.0) * r - 30.0 - 76.0;
-        let max = (y - view).max(0.0);
+        // The rows' window on the sheet (as tall as the window allows): under the title, above
+        // the button hints. A little room to spare at the end, as the heights are estimates.
+        let (_, h) = self.logical_size();
+        let view = f32::min(960.0, h - 40.0) - 48.0 - (42.0 + 8.0 + 24.0) * r - 26.0 - 74.0;
+        let max = (y + 24.0 - view).max(0.0);
         self.ui().set_settings_y(-(target - view * 0.35).clamp(0.0, max) * self.scale);
     }
 
