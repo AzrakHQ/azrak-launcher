@@ -105,10 +105,11 @@ export component DownloadsPage inherits Rectangle {
     property <DownloadData> s: root.data[root.sel];
     property <bool> any: root.data.length > 0;
     pure function bar-color() -> color {
-        return root.s.bar-kind == 1 ? Theme.hint : root.s.bar-kind == 2 ? Theme.danger : root.s.bar-kind == 3 ? Theme.ok : #4d94ff;
+        // 4: verifying what's on disk (teal), apart from downloading (blue).
+        return root.s.bar-kind == 1 ? Theme.hint : root.s.bar-kind == 2 ? Theme.danger : root.s.bar-kind == 3 ? Theme.ok : root.s.bar-kind == 4 ? #2dd4bf : #4d94ff;
     }
     pure function kind-color(kind: int) -> color {
-        return kind == 1 ? Theme.warn : kind == 2 ? Theme.danger : kind == 3 ? Theme.ok : #8dbaff;
+        return kind == 1 ? Theme.warn : kind == 2 ? Theme.danger : kind == 3 ? Theme.ok : kind == 4 ? #5eead4 : #8dbaff;
     }
     background: Theme.bg;
     TouchArea { }
@@ -313,7 +314,7 @@ export component DownloadsPage inherits Rectangle {
                         if t.has-tile-art: Image { width: parent.width; height: parent.height; source: t.tile-art; image-fit: cover; opacity: t.group == 2 && root.sel != i ? 0.75 : 1; }
                         Rectangle {
                             y: parent.height - self.height; height: (4px * S.k); background: #00000080;
-                            Rectangle { x: 0; width: parent.width * t.tile-frac; background: t.kind == 2 ? Theme.danger : t.kind == 3 ? #3ddc9799 : t.kind == 1 ? Theme.hint : #4d94ff; }
+                            Rectangle { x: 0; width: parent.width * t.tile-frac; background: t.kind == 2 ? Theme.danger : t.kind == 3 ? #3ddc9799 : t.kind == 1 ? Theme.hint : t.kind == 4 ? #2dd4bf : #4d94ff; }
                         }
                     }
                     TouchArea { mouse-cursor: pointer; clicked => { root.select(i); } }

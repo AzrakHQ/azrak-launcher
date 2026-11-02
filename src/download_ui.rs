@@ -112,15 +112,21 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             }
         }
         State::Checking | State::Downloading => {
-            d.status = if job.state == State::Checking { "Checking what's already downloaded".into() } else { "Downloading".into() };
+            // Resuming: the engine verifies what's on disk before downloading the rest.
+            let verifying = job.state == State::Checking;
+            d.status = if verifying { "Verifying what's already downloaded".into() } else { "Downloading".into() };
+            if verifying { d.dl_label = "Verifying".into(); (d.kind, d.bar) = (4, 4); }
+            let checked = if job.total > 0 { (job.checked as f32 / job.total as f32).min(1.0) } else { 0.0 };
             progress(&mut d, job.progress());
+            if verifying { d.stats.push((format!("{}%", pct(checked)), "Verified".into())); }
             if job.state == State::Downloading {
                 d.stats.push((mbps(job.speed), "Download speed".into()));
                 d.spark = true;
                 if !job.eta.is_empty() { d.stats.push((job.eta.clone(), "Time left".into())); }
             }
             d.stats.push((format!("{} of {}", size_label(job.done), size), "Downloaded".into()));
-            d.line = if job.eta.is_empty() { format!("{}%", pct(job.progress())) } else { format!("{}% · {} left", pct(job.progress()), job.eta) };
+            d.line = if verifying { format!("Verifying · {}%", pct(checked)) }
+                else if job.eta.is_empty() { format!("{}%", pct(job.progress())) } else { format!("{}% · {} left", pct(job.progress()), job.eta) };
             d.actions = vec![("pause", "Pause", "pause"), ("cancel", "Cancel", "close")];
         }
         State::Paused => {
@@ -196,13 +202,16 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                     d.status = "Ready to play".into();
                     (d.inst, d.ready) = (1.0, true);
                     d.inst_label = "Installed".into();
-                    d.stats = if job.seeding {
+                    // Before sharing again, its files are verified first.
+                    d.stats = if job.verifying {
+                        vec![(size.clone(), "Size".into()), ("Verifying".into(), "Before sharing".into())]
+                    } else if job.seeding {
                         vec![(format!("{} player{}", job.peers, if job.peers == 1 { "" } else { "s" }), "Connected to you".into()),
                             (mbps(job.upload_speed), "Sharing speed".into()), (size, "Size".into())]
                     } else {
                         vec![(size, "Size".into()), ("Not sharing".into(), if sharing_on { "Share it again any time" } else { "Sharing is off in Settings" }.into())]
                     };
-                    d.line = if job.seeding { "Ready · sharing".into() } else { "Ready to play".into() };
+                    d.line = if job.verifying { "Ready · verifying".into() } else if job.seeding { "Ready · sharing".into() } else { "Ready to play".into() };
                     d.tile = 1.0;
                     d.actions = vec![("play_install", "Play", "play"), share, remove];
                 }
@@ -683,11 +692,15 @@ impl App {
             let what = if job.state == State::Failed { "Download stopped" } else { "Couldn't install" };
             (3, if unseen.len() > 1 { format!("{} need you", unseen.len()) } else { what.to_string() }, job.progress())
         } else if !active.is_empty() {
-            let (done, total) = active.iter().fold((0u64, 0u64), |(d, t), job| (d + job.done, t + job.total));
-            let frac = if total > 0 { done as f32 / total as f32 } else { 0.0 };
+            // One that's verifying shows how far the check is.
+            let verifying = active.len() == 1 && active[0].state == State::Checking;
+            let (done, total) = active.iter().fold((0u64, 0u64), |(d, t), job| (d + if verifying { job.checked } else { job.done }, t + job.total));
+            let frac = if total > 0 { (done as f32 / total as f32).min(1.0) } else { 0.0 };
             let pct = (frac * 100.0).floor();
-            let label = if active.len() == 1 { format!("{} · {pct:.0}%", short_name(&active[0].name)) } else { format!("{} downloads · {pct:.0}%", active.len()) };
-            (1, label, frac)
+            let label = if active.len() > 1 { format!("{} downloads · {pct:.0}%", active.len()) }
+                else if verifying { format!("Verifying · {pct:.0}%") }
+                else { format!("{} · {pct:.0}%", short_name(&active[0].name)) };
+            (if verifying { 4 } else { 1 }, label, frac)
         } else if let Some(record) = installs.iter().find(|r| r.state.active()) {
             (2, format!("Installing · {:.0}%", (record.progress() * 100.0).floor()), record.progress())
         } else if let Some(job) = jobs.iter().find(|job| job.waiting_vpn && job.state != State::Complete) {

@@ -129,7 +129,7 @@ export global Zone {
 export struct ChipData { icon: string, text: string, gold: bool, dot: int, stars: float }
 export struct ActionData { id: string, label: string, icon: string, primary: bool, danger: bool, round: bool }
 // One download on the Downloads page. kind: 0 in progress (blue), 1 needs you (amber),
-// 2 stopped (red), 3 ready to play (green). group: 0 in progress, 1 needs you, 2 ready to play.
+// 2 stopped (red), 3 ready to play (green), 4 verifying what's on disk (teal). group: 0 in progress, 1 needs you, 2 ready to play.
 export struct DlStat { value: string, label: string }
 export struct DownloadData {
     key: string, title: string,

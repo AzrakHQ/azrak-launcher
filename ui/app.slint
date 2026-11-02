@@ -346,7 +346,7 @@ export component AppWindow inherits Window {
     in property <length> shots-x;
 
     in property <[SettingData]> settings;
-    // The top bar's download ring: 0 none, 1 downloading, 2 installing, 3 needs you; its words,
+    // The top bar's download ring: 0 none, 1 downloading, 2 installing, 3 needs you, 4 verifying; its words,
     // its arc (SVG path on a 36×36 box), and the art behind the bar, blurred, for its glass.
     in property <int> ring-kind;
     in property <string> ring-label;
@@ -1081,7 +1081,7 @@ export component AppWindow inherits Window {
                 // (what's downloading or installing, or what needs you), its icon otherwise; either
                 // way in the same place.
                 bar := Rectangle {
-                    property <color> tint: root.ring-kind == 2 ? #c4b5fd : root.ring-kind == 3 ? #ffb547 : #8dbaff;
+                    property <color> tint: root.ring-kind == 2 ? #c4b5fd : root.ring-kind == 3 ? #ffb547 : root.ring-kind == 4 ? #5eead4 : #8dbaff;
                     // As tall as the tabs' row reads (the old 64px icons), centred on it.
                     y: (20px * S.k);
                     height: (64px * S.k);
@@ -1129,7 +1129,7 @@ export component AppWindow inherits Window {
                                         width: parent.width; height: parent.height;
                                         viewbox-width: 36; viewbox-height: 36;
                                         commands: root.ring-path;
-                                        stroke: dl.f ? (root.ring-kind == 2 ? #7c5cff : root.ring-kind == 3 ? #d98a00 : Theme.accent) : bar.tint;
+                                        stroke: dl.f ? (root.ring-kind == 2 ? #7c5cff : root.ring-kind == 3 ? #d98a00 : root.ring-kind == 4 ? #0f9e8e : Theme.accent) : bar.tint;
                                         stroke-width: (3.2px * S.k);
                                         stroke-line-cap: round;
                                     }

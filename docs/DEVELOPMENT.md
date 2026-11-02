@@ -197,8 +197,8 @@ for one transfer (**Share again** turns it back on, even with the setting off), 
 finished downloads** to stop all seeds; only that saved setting turns seeding off for good.
 While it is on, completed downloads seed again whenever the launcher opens, and turning
 it back on seeds them all again. Each is first added **paused** so the engine checks its
-files against the torrent: it seeds only if every piece verifies (**Complete · checking
-files before sharing** meanwhile). Missing, resized or changed files stop it with an error and
+files against the torrent: it seeds only if every piece verifies (**Ready · verifying** meanwhile). Resuming a download
+shows **Verifying** too, while the engine checks what's already on disk. Missing, resized or changed files stop it with an error and
 nothing is downloaded again; unfinished transfers are never started automatically.
 
 The default destination is `~/Downloads/PS5`, editable in Settings or the setup

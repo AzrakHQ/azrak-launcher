@@ -82,6 +82,8 @@ pub struct Job {
     #[serde(skip)] pub upload_speed: f64,
     /// Checking a completed download's files before it seeds again.
     #[serde(skip)] pub verifying: bool,
+    /// While the engine verifies the files on disk (resuming): how much it has checked.
+    #[serde(skip)] pub checked: u64,
     /// Download & install was pressed and the worker is starting it.
     #[serde(skip)] pub starting: bool,
     /// Stopped because "download only through a VPN" is on and the VPN isn't connected;
@@ -123,7 +125,7 @@ pub struct Entry {
 
 impl Job {
     fn clear_runtime(&mut self) {
-        self.speed = 0.0; self.peers = 0; self.eta.clear(); self.seeding = false; self.upload_speed = 0.0; self.verifying = false;
+        self.speed = 0.0; self.peers = 0; self.eta.clear(); self.seeding = false; self.upload_speed = 0.0; self.verifying = false; self.checked = 0;
     }
     pub fn progress(&self) -> f32 {
         if self.state == State::Complete { return 1.0; }
@@ -259,7 +261,7 @@ impl Manager {
             folder: base.join(format!("torrent-{key}")), key: key.clone(), topic,
             name: name.chars().filter(|c| !c.is_control()).take(200).collect(), magnet,
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, starting: false, piece: 0, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, checked: 0, starting: false, piece: 0, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
             platform: Some(platform), entries: vec![], selected: None, install_to: None, added: crate::util::now_secs() as u64,
         };
         self.tx.try_send(Command::Prepare(job.clone())).context("Download worker is busy or unavailable")?;
@@ -669,13 +671,10 @@ fn restore_entries(store: &Path, job: &mut Job, read: Result<(Vec<Entry>, u64)>)
 }
 
 /// Whether the engine's numbers are the download's: an error reports nothing done, and while
-/// checking it counts the whole torrent (right only when every file is downloaded).
-fn counts(stats: &librqbit::TorrentStats, job: &Job) -> bool {
-    match stats.state {
-        TorrentStatsState::Live | TorrentStatsState::Paused => true,
-        TorrentStatsState::Initializing { .. } => job.selected.is_none(),
-        TorrentStatsState::Error => false,
-    }
+/// it verifies the files on disk its numbers are how much it has checked (kept apart, so what's
+/// downloaded doesn't seem to drop and climb back).
+fn counts(stats: &librqbit::TorrentStats) -> bool {
+    matches!(stats.state, TorrentStatsState::Live | TorrentStatsState::Paused)
 }
 
 /// A download that never started: nothing downloaded, so closing the panel forgets it.
@@ -1049,11 +1048,9 @@ impl Worker {
             })).await?;
             let handle = response.into_handle().context("No transfer handle")?;
             self.handles.insert(key.into(), handle);
-            // A partial download keeps what it had until the engine has checked it (it counts the
-            // whole torrent meanwhile); a whole one shows the check's progress.
-            let whole = wanted.is_none();
+            // What it had stays shown while the engine verifies it (see counts).
             self.update(key, |job| {
-                job.folder = folder; job.total = total; if whole { job.done = 0; }
+                job.folder = folder; job.total = total;
                 job.state = State::Checking; job.error.clear(); job.entries.clear();
             });
         }
@@ -1076,7 +1073,7 @@ impl Worker {
                 if state == State::Paused && stats.finished { state = State::Complete; }
                 self.update(key, |job| {
                     // Error/None engine states report zero progress even for a previously verified seed.
-                    if (job.state != State::Complete || stats.finished) && counts(&stats, job) {
+                    if (job.state != State::Complete || stats.finished) && counts(&stats) {
                         job.done = stats.progress_bytes; job.total = stats.total_bytes;
                     }
                 });
@@ -1315,7 +1312,8 @@ impl Worker {
             }).unwrap_or_default();
             let newly_complete = stats.finished && !was_complete;
             self.update(&key, |job| {
-                if (!was_complete || stats.finished) && counts(&stats, job) { job.done = stats.progress_bytes; job.total = stats.total_bytes; }
+                if (!was_complete || stats.finished) && counts(&stats) { job.done = stats.progress_bytes; job.total = stats.total_bytes; }
+                job.checked = if matches!(stats.state, TorrentStatsState::Initializing { .. }) { stats.progress_bytes } else { 0 };
                 job.state = state;
                 job.speed = if complete { 0.0 } else { speed }; job.peers = peers;
                 job.eta = if complete { String::new() } else { eta };
@@ -1456,7 +1454,7 @@ mod tests {
             key: key.into(), topic: 0, name: "Generated public-domain fixture".into(),
             magnet: format!("magnet:?xt=urn:btih:{key}"), folder: base.join(format!("torrent-{key}")),
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, starting: false, piece: 0, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, checked: 0, starting: false, piece: 0, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
             platform: None, entries: vec![], selected: None, install_to: None, added: 0,
         }
     }
