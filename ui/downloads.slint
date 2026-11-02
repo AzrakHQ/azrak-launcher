@@ -531,6 +531,8 @@ export component DownloadPanel inherits Rectangle {
     callback cancel();
     callback change(int);
     callback edited(bool);
+    /// A folder field (1 download, 2 install) lost focus: its editing ends, unless the other's began.
+    callback left(int);
     callback edit-done();
     property <length> row-h: (53px * S.k);
     property <bool> entered: false;
@@ -666,13 +668,13 @@ export component DownloadPanel inherits Rectangle {
             Destination {
                 label: "Download to"; path <=> root.dl-path; line: root.dl-line; frac: root.dl-frac; bad: root.dl-bad;
                 focused: root.focus-item == 1; editing: root.edit == 1;
-                change => { root.change(1); } edited(f) => { root.edited(f); } done => { root.edit-done(); }
+                change => { root.change(1); } edited(f) => { root.edited(f); if (!f) { root.left(1); } } done => { root.edit-done(); }
             }
             Rectangle { height: (20px * S.k); }
             Destination {
                 label: "Install to"; path <=> root.inst-path; line: root.inst-line; frac: root.inst-frac; bad: root.inst-bad;
                 focused: root.focus-item == 2; editing: root.edit == 2;
-                change => { root.change(2); } edited(f) => { root.edited(f); } done => { root.edit-done(); }
+                change => { root.change(2); } edited(f) => { root.edited(f); if (!f) { root.left(2); } } done => { root.edit-done(); }
             }
             Rectangle { height: (22px * S.k); }
             Text {

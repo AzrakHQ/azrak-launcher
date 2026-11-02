@@ -803,6 +803,7 @@ fn wire_callbacks(ui: &AppWindow) {
     ui.on_setup_cancel(|| with_app(|app| app.back()));
     ui.on_setup_change(|i| with_app(move |app| app.setup_change(i)));
     ui.on_setup_edit_done(|| with_app(|app| app.setup_edit_done()));
+    ui.on_setup_edit_left(|which| with_app(move |app| app.setup_edit_left(which)));
     ui.on_hub_release(|delta| with_app(move |app| app.cycle_hub_release(delta)));
     ui.on_genres_scroll(|delta| with_app(move |app| app.scroll_genres(delta)));
 }

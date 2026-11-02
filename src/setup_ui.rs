@@ -412,6 +412,11 @@ impl App {
         self.push_setup();
     }
 
+    /// A folder field lost focus: done with it, unless the other one is being edited now.
+    pub fn setup_edit_left(&mut self, which: i32) {
+        if self.setup.as_ref().is_some_and(|setup| setup.edit == which) { self.setup_edit_done(); }
+    }
+
     pub fn setup_edit_done(&mut self) {
         if let Some(setup) = self.setup.as_mut() { setup.edit = 0; }
         let ui = self.ui();

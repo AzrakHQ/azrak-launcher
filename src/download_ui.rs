@@ -134,7 +134,9 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             d.note = job.error.clone();
             d.stats = vec![(format!("{} of {}", size_label(job.done), size), "Downloaded, and kept".into())];
             d.line = "Stopped".into();
-            d.actions = vec![("retry", "Retry", "retry"), ("delete", "Delete…", "trash")];
+            // A release it can never download or install: nothing to retry, only to remove.
+            let hopeless = job.done == 0 && matches!(job.problem, crate::downloads::Problem::Release | crate::downloads::Problem::Unsupported);
+            d.actions = if hopeless { vec![("discard", "Remove", "trash")] } else { vec![("retry", "Retry", "retry"), ("delete", "Delete…", "trash")] };
         }
         State::Cancelled => {
             (d.group, d.kind, d.bar) = (1, 1, 1);
@@ -556,44 +558,46 @@ impl App {
                 self.toast("Quit the game first", &format!("{name} is running."), 2);
                 return self.push_downloads();
             }
-            // First, so the install queue never reinstalls it while (or after) it's deleted.
-            let install_to = self.downloads.job(&key).and_then(|job| job.install_to);
-            self.downloads.set_install_to(&key, None);
+        }
+        if choice == "cancel" { audio::play(Sound::Back); return self.push_downloads(); }
+        // First, so the install queue never (re)installs it while (or after) anything goes.
+        let install_to = self.downloads.job(&key).and_then(|job| job.install_to);
+        self.downloads.set_install_to(&key, None);
+        // The download first (it can still be refused), then the game: a refusal leaves both.
+        let queued = match choice {
+            "both" | "download" => self.downloads.action(&key, "delete"),
+            "forget" => self.downloads.action(&key, "remove"),
+            _ => Ok(()),
+        };
+        if let Err(error) = queued {
+            self.downloads.set_install_to(&key, install_to);
+            self.toast("Couldn't delete it", &format!("{error:#}"), 2);
+            return self.push_downloads();
+        }
+        if matches!(choice, "both" | "game") {
             match self.installer.uninstall(&key) {
                 Ok(_) => {
                     self.install_states.remove(&key);
                     self.rescan_library();
                 }
                 Err(error) => {
-                    self.downloads.set_install_to(&key, install_to);
-                    self.toast("Couldn't delete the game", &format!("{error:#}"), 2);
+                    if choice == "game" { self.downloads.set_install_to(&key, install_to); }
+                    let also = if choice == "both" { " Its download is being deleted." } else { "" };
+                    self.toast("Couldn't delete the game", &format!("{error:#}.{also}"), 2);
                     return self.push_downloads();
                 }
             }
         }
-        let result = match choice {
-            "both" | "download" => self.downloads.action(&key, "delete"),
-            "forget" => self.downloads.action(&key, "remove"),
-            "game" => Ok(()),
-            _ => { audio::play(Sound::Back); return self.push_downloads(); }
-        };
-        match result {
-            Ok(()) => {
-                // Gone from the install queue at once (the worker removes it a moment later).
-                if matches!(choice, "download" | "forget") {
-                    self.downloads.set_install_to(&key, None);
-                    // An install that failed goes with it: downloaded again, it installs afresh.
-                    let _ = self.installer.forget(&key);
-                    self.install_failures.remove(&key);
-                }
-                audio::play(Sound::Select);
-                // The download itself goes a moment later (the worker deletes it).
-                let what = match choice { "both" => "The game is deleted, and its download is going", "game" => "The game is deleted; its download stays",
-                    "download" => "Its download is being deleted", _ => "Removed from Downloads; every file is kept" };
-                self.toast(&name, what, 1);
-            }
-            Err(error) => self.toast("Couldn't delete it", &format!("{error:#}"), 2),
+        if matches!(choice, "download" | "forget") {
+            // An install that failed goes with it: downloaded again, it installs afresh.
+            let _ = self.installer.forget(&key);
+            self.install_failures.remove(&key);
         }
+        audio::play(Sound::Select);
+        // The download itself goes a moment later (the worker deletes it).
+        let what = match choice { "both" => "The game is deleted, and its download is going", "game" => "The game is deleted; its download stays",
+            "download" => "Its download is being deleted", _ => "Removed from Downloads; every file is kept" };
+        self.toast(&name, what, 1);
         self.dl_btn = -1;
         self.push_downloads();
     }

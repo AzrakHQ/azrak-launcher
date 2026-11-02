@@ -303,6 +303,7 @@ impl Manager {
         let Some(index) = jobs.iter().position(|job| job.key == key) else { return Ok(()) };
         ensure!(unstarted(&jobs[index]), "It has started; cancel or remove it instead");
         let job = jobs.remove(index);
+        self.unreadable.lock().unwrap().remove(key);
         if let Err(error) = self.tx.try_send(Command::Discard(job)) {
             let Command::Discard(job) = error.into_inner() else { unreachable!() };
             jobs.insert(index, job);
@@ -321,6 +322,7 @@ impl Manager {
 
     pub fn action(&self, key: &str, action: &str) -> Result<()> {
         if action == "delete" { self.check_delete(key)?; }
+        if matches!(action, "delete" | "remove") { self.unreadable.lock().unwrap().remove(key); }
         let jobs = self.jobs.lock().unwrap();
         let job = jobs.iter().find(|job| job.key == key).context("Transfer not found")?;
         let command = match action {
@@ -376,6 +378,8 @@ fn load_manifest(store: &Path) -> Vec<Job> {
     }).take(MAX_JOBS).map(|mut job| {
         if job.state.active() { job.state = State::Paused; }
         job.clear_runtime();
+        // Only written for older launchers (empty): an old manifest's display list goes.
+        job.files.clear();
         // Reopening never resumes a transfer by itself, VPN or not.
         job.waiting_vpn = false;
         job
@@ -696,6 +700,15 @@ fn required_space(bytes: &[u8], folder: &Path, selected: Option<&[usize]>) -> Re
     let info = meta.info.data.validate()?;
     let mut required = 0u64;
     let chosen = chosen(selected);
+    // A left-out file beside a chosen one gets the pieces they share written into it (up to two).
+    let files: Vec<_> = info.iter_file_details().enumerate().filter(|(_, file)| !file.attrs().padding).collect();
+    let piece = info.lengths().default_piece_length() as u64;
+    for (n, (i, file)) in files.iter().enumerate() {
+        let beside = |k: Option<usize>| k.and_then(|k| files.get(k)).is_some_and(|(j, _)| chosen(*j));
+        if !chosen(*i) && (beside(n.checked_sub(1)) || beside(Some(n + 1))) {
+            required = required.checked_add(file.len.min(2 * piece)).context("Torrent size overflow")?;
+        }
+    }
     for (_, file) in info.iter_file_details().enumerate().filter(|(i, file)| chosen(*i) && !file.attrs().padding) {
         let path = file.filename.to_pathbuf();
         check_path(folder, &path)?;

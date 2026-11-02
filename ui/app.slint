@@ -452,6 +452,7 @@ export component AppWindow inherits Window {
     callback setup-cancel();
     callback setup-change(int);
     callback setup-edit-done();
+    callback setup-edit-left(int);
     callback hub-release(int);
     callback genres-scroll(int);
     in-out property <bool> hub-details-open;
@@ -1781,8 +1782,9 @@ export component AppWindow inherits Window {
             go => { root.setup-go(); }
             cancel => { root.setup-cancel(); }
             change(i) => { root.setup-change(i); }
-            // Leaving the field any way (a click elsewhere too) finishes editing.
-            edited(focused) => { root.setup-editing = focused; if (!focused) { root.setup-edit-done(); } }
+            edited(focused) => { root.setup-editing = focused; }
+            // Leaving the field any way (a click elsewhere too) finishes editing it.
+            left(i) => { root.setup-edit-left(i); }
             edit-done => { root.setup-edit-done(); root.focus-root(); }
         }
         if root.overlay == 7 && root.download-consent: DownloadConsent {
