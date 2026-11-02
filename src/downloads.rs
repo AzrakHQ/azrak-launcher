@@ -790,7 +790,8 @@ impl Worker {
     fn new(store: PathBuf, jobs: Arc<Mutex<Vec<Job>>>, policy: Policy) -> Self {
         Self { store, jobs, policy, session: None, handles: HashMap::new(), peers: HashMap::new(), resolving: HashMap::new(), task_keys: HashMap::new(), tasks: JoinSet::new(), reseeding: Default::default(), bound: None }
     }
-    fn job(&self, key: &str) -> Option<Job> { self.jobs.lock().unwrap().iter().find(|job| job.key == key).cloned() }
+    /// A copy of one download, without its file list (begin reads that in place).
+    fn job(&self, key: &str) -> Option<Job> { self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key).map(light) }
     fn update(&self, key: &str, f: impl FnOnce(&mut Job)) {
         if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key) { f(job); }
     }
@@ -1154,8 +1155,11 @@ impl Worker {
         // The lookup's folder is canonical: the same folder reached another way is the same.
         let folder = base.canonicalize().unwrap_or_else(|_| base.to_path_buf()).join(format!("torrent-{key}"));
         // The size is what's chosen; every file chosen is `None` once it started.
-        let all = selected.len() == job.entries.len();
-        let total = selected.iter().filter_map(|&i| job.entries.get(i)).map(|entry| entry.size).sum();
+        let (all, total) = {
+            let jobs = self.jobs.lock().unwrap();
+            let entries = jobs.iter().find(|j| j.key == key).map_or(&[][..], |j| &j.entries[..]);
+            (selected.len() == entries.len(), selected.iter().filter_map(|&i| entries.get(i)).map(|entry| entry.size).sum())
+        };
         self.update(key, |j| {
             j.folder = folder.clone(); j.selected = Some(selected); j.install_to = install_to;
             j.total = total; j.error.clear();
@@ -1193,6 +1197,8 @@ impl Worker {
     /// remove the empty folder looking it up made.
     async fn forget(&mut self, job: Job) -> Result<()> {
         let key = job.key.as_str();
+        // Download pressed again meanwhile: the new lookup has this key (and may use what's here).
+        if self.job(key).is_some() { return Ok(()); }
         self.stop_job(key, State::Cancelled).await?;
         let _ = std::fs::remove_file(self.store.join(format!("{key}.torrent")));
         remove_unused(&job.folder, key);
@@ -2280,7 +2286,7 @@ mod tests {
             let mut job = job(temp.path(), &key); job.platform = platform;
             let mut worker = Worker::new(temp.path().join("store"), Arc::new(Mutex::new(vec![job])), Policy { local_only: true, ..Default::default() });
             worker.resolved(Resolved { key: key.clone(), bytes, peers: vec![] }).unwrap();
-            let job = worker.job(&key).unwrap();
+            let job = worker.jobs.lock().unwrap()[0].clone();
             let exe = job.entries.iter().position(|e| e.path.ends_with("Setup.exe")).unwrap();
             assert_eq!(job.entries[exe].blocked, blocked_exe);
             assert_eq!(job.selected.unwrap().contains(&exe), !blocked_exe);
@@ -2341,7 +2347,7 @@ mod tests {
         let folder = job.folder.clone();
         let mut worker = Worker::new(temp.path().join("store"), Arc::new(Mutex::new(vec![job])), Policy { local_only: true, ..Default::default() });
         worker.resolved(Resolved { key: key.clone(), bytes: bytes.clone(), peers: vec![] }).unwrap();
-        let job = worker.job(&key).unwrap();
+        let job = worker.jobs.lock().unwrap()[0].clone();
         assert_eq!(job.selected, Some(vec![0, 2]), "never chosen");
         assert!(job.entries[1].padding && job.entries[1].blocked);
         // The engine never makes it: a finished download without it is all there.

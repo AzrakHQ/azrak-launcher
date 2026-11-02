@@ -126,13 +126,14 @@ impl App {
     pub fn settle_chosen_dirs(&mut self) {
         let Some((key, download_dir, install_dir)) = self.chosen_dirs.clone() else { return };
         match self.downloads.job(&key) {
-            Some(job) if job.state == State::Ready && job.error.is_empty() => return,
-            Some(job) if job.state != State::Ready => {
+            Some(job) if job.state == State::Ready && job.starting => return,
+            Some(job) if matches!(job.state, State::Checking | State::Downloading | State::Paused | State::Complete) => {
                 let mut cfg = self.cfg.lock().unwrap();
                 (cfg.download_dir, cfg.install_dir) = (download_dir, install_dir);
                 cfg.save();
             }
-            Some(_) => self.tried_dirs = Some((key, download_dir, install_dir)),
+            Some(job) if job.state == State::Ready => self.tried_dirs = Some((key, download_dir, install_dir)),
+            Some(_) => {}
             None => {}
         }
         self.chosen_dirs = None;

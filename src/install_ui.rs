@@ -81,7 +81,7 @@ impl App {
             let _ = self.installer.forget(key);
             self.install_failures.remove(key);
             crate::audio::play(crate::audio::Sound::Select);
-            return self.toast("Installs next", "It installs as soon as the game installing now is done.", 1);
+            return self.toast("Waiting to install", "It installs by itself once the game installing now is done.", 1);
         }
         match self.start_install(key, to) {
             Ok(()) => { crate::audio::play(crate::audio::Sound::Select); self.push_installs(); }

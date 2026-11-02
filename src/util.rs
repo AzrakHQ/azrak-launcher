@@ -103,7 +103,8 @@ pub fn finish_deletes(dirs: Vec<PathBuf>) {
             if ours {
                 if let Err(error) = std::fs::remove_dir_all(&path) { crate::log!("deleting {} failed: {error}", path.display()); continue; }
             }
-            if noted.contains(&path) && std::fs::symlink_metadata(&path).is_err() { note_delete(&path, false); }
+            // Gone, or not one of ours to delete: no longer noted.
+            if noted.contains(&path) && (!ours || std::fs::symlink_metadata(&path).is_err()) { note_delete(&path, false); }
         }
     });
 }
