@@ -369,6 +369,26 @@ fabricated local snapshots in a network-disabled namespace. In addition to the
 catalog test prerequisites, it requires Tesseract and ImageMagick. Screenshots
 are retained for visual inspection; these UI fixtures do not perform transfers.
 
+### Catching layout mistakes
+
+Screens are easy to break at window sizes nobody tried (a number cut off at 1737×1047 looked
+fine at 1920×1080). Two tools catch that without a person checking every screen:
+
+- `node scripts/lint-ui.mjs` reads the `.slint` files and reports text whose line is taller
+  than the fixed height around it. Text sized in `S.t` grows faster than boxes sized in `S.k`
+  on small windows, so it is checked at the smallest one (1280×720). It takes a second; run it
+  before every release (`node --test scripts/lint-ui.test.mjs` tests it). A deliberate overflow
+  is marked `// ui-lint: allow (reason)` on its line.
+- `node scripts/ui-shots.mjs [--art]` renders Home and its top bar, every Settings section and
+  the Downloads page (a download at 0%, one stopped, one cancelled) at 1280×720, 1366×768,
+  1600×900, 1737×1047, 1920×1080 and 2560×1440, in the same offline sandbox as the tests above.
+  `--art` uses this PC's image cache (read only) so screens have key art and glass. It puts
+  every size of a screen side by side in `target/ui-shots/sheets/` (to look at, or to hand to
+  a model with a checklist: cut or overlapping text, misalignment, things that move between
+  states) and compares each screenshot with the approved one in `target/ui-golden/`; a screen
+  that changed fails, with a diff image beside it. `--approve` makes the current screenshots
+  the approved ones; `--sizes 1280x720,1920x1080` picks sizes.
+
 ## PC games (details)
 
 Two more RuTracker forums are collected: native Linux games (f=1992) and Linux games with Wine,

@@ -1042,8 +1042,9 @@ export component AppWindow inherits Window {
                     TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.tabs, i); } }
                 }
             }
+            // The same distance from the right edge as the tabs from the left.
             HorizontalLayout {
-                x: root.width - self.width - (96px * S.k);
+                x: root.width - self.width - (100px * S.k);
                 y: 0;
                 width: self.preferred-width;
                 height: (104px * S.k);
@@ -1081,8 +1082,9 @@ export component AppWindow inherits Window {
                 // way in the same place.
                 bar := Rectangle {
                     property <color> tint: root.ring-kind == 2 ? #c4b5fd : root.ring-kind == 3 ? #ffb547 : #8dbaff;
-                    y: (24px * S.k);
-                    height: (56px * S.k);
+                    // As tall as the tabs' row reads (the old 64px icons), centred on it.
+                    y: (20px * S.k);
+                    height: (64px * S.k);
                     width: bar-row.preferred-width;
                     border-radius: self.height / 2;
                     clip: true;
@@ -1101,7 +1103,7 @@ export component AppWindow inherits Window {
                     }
                     Rectangle { x: parent.height / 2; y: 1px; width: parent.width - parent.height; height: 1px; background: #ffffff33; }
                     bar-row := HorizontalLayout {
-                        padding: (6px * S.k);
+                        padding: (7px * S.k);
                         spacing: 0;
                         // Downloads.
                         dl := Rectangle {
@@ -1115,7 +1117,7 @@ export component AppWindow inherits Window {
                                 padding-right: root.ring-kind > 0 ? (18px * S.k) : (12px * S.k);
                                 spacing: (12px * S.k);
                                 if root.ring-kind > 0: Rectangle {
-                                    width: (28px * S.k); height: self.width; y: (parent.height - self.height) / 2;
+                                    width: (32px * S.k); height: self.width; y: (parent.height - self.height) / 2;
                                     Path {
                                         width: parent.width; height: parent.height;
                                         viewbox-width: 36; viewbox-height: 36;
@@ -1134,19 +1136,19 @@ export component AppWindow inherits Window {
                                 }
                                 if root.ring-kind > 0: Text {
                                     text: root.ring-label;
-                                    font-size: (19px * S.k); font-weight: 600;
+                                    font-size: (22px * S.k); font-weight: 600;
                                     color: dl.f ? #05070f : #f5f7fb;
                                     vertical-alignment: center;
                                 }
                                 if root.ring-kind == 0: Image {
                                     y: (parent.height - self.height) / 2;
                                     source: Icons.disk; colorize: dl.f ? #0a0d18 : Theme.text2;
-                                    width: (24px * S.k); height: self.width;
+                                    width: (28px * S.k); height: self.width;
                                 }
                             }
                             ta-dl := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, 4); } }
                         }
-                        Rectangle { width: (13px * S.k); Rectangle { width: 1px; height: (24px * S.k); background: #ffffff29; } }
+                        Rectangle { width: (13px * S.k); Rectangle { width: 1px; height: (28px * S.k); background: #ffffff29; } }
                         // Settings.
                         gear := Rectangle {
                             property <bool> f: root.zone == Zone.top && root.idx == 3 && root.overlay == 0;
@@ -1154,10 +1156,10 @@ export component AppWindow inherits Window {
                             border-radius: self.height / 2;
                             background: self.f ? #f5f7fb : ta-gear.has-hover ? #ffffff1a : transparent;
                             animate background { duration: 120ms; }
-                            Image { source: Icons.gear; colorize: gear.f ? #0a0d18 : Theme.text2; width: (24px * S.k); height: self.width; }
+                            Image { source: Icons.gear; colorize: gear.f ? #0a0d18 : Theme.text2; width: (28px * S.k); height: self.width; }
                             ta-gear := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, 3); } }
                         }
-                        Rectangle { width: (13px * S.k); Rectangle { width: 1px; height: (24px * S.k); background: #ffffff29; } }
+                        Rectangle { width: (13px * S.k); Rectangle { width: 1px; height: (28px * S.k); background: #ffffff29; } }
                         // The battery: green, amber at 20% or less, red at 10% or less (unless charging).
                         if root.battery-shown: bat := HorizontalLayout {
                             property <color> level: root.battery-plugged ? Theme.ok
@@ -1168,8 +1170,8 @@ export component AppWindow inherits Window {
                             alignment: center;
                             // Upright, like a phone's: the cap on top, filled from the bottom.
                             Rectangle {
-                                width: (14px * S.k);
-                                height: (24px * S.k);
+                                width: (16px * S.k);
+                                height: (28px * S.k);
                                 y: (parent.height - self.height) / 2;
                                 Rectangle {
                                     x: (4.5px * S.k); y: 0;
@@ -1204,19 +1206,19 @@ export component AppWindow inherits Window {
                             }
                             Text {
                                 text: root.battery-percent + "%";
-                                font-size: (19px * S.k); font-weight: 600;
+                                font-size: (22px * S.k); font-weight: 600;
                                 color: bat.level == Theme.text ? Theme.text2 : bat.level;
                                 vertical-alignment: center;
                             }
                         }
-                        if root.battery-shown: Rectangle { width: (13px * S.k); Rectangle { width: 1px; height: (24px * S.k); background: #ffffff29; } }
+                        if root.battery-shown: Rectangle { width: (13px * S.k); Rectangle { width: 1px; height: (28px * S.k); background: #ffffff29; } }
                         Text {
                             text: root.clock;
-                            font-size: (20px * S.k); font-weight: 600;
+                            font-size: (24px * S.k); font-weight: 600;
                             color: Theme.text;
                             vertical-alignment: center;
                             horizontal-alignment: center;
-                            min-width: (84px * S.k);
+                            min-width: (104px * S.k);
                         }
                         Rectangle { width: (12px * S.k); }
                     }

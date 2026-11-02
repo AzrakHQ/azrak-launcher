@@ -194,10 +194,10 @@ export component DownloadsPage inherits Rectangle {
                 letter-spacing: -(1.5px * S.k); wrap: word-wrap; overflow: elide; vertical-alignment: center;
             }
         }
-        Rectangle { height: (22px * S.k); }
-        // The big number and the few facts that matter.
+        // The big number and the few facts that matter. As tall as the number's line: a shorter
+        // row cut the top off a round 0 (scripts/lint-ui.mjs checks this).
         HorizontalLayout {
-            height: (96px * S.k); spacing: (52px * S.k); alignment: start;
+            height: (126px * S.k); spacing: (52px * S.k); alignment: start;
             if root.s.big == "" && root.s.stats.length == 0 && root.s.note != "": Text {
                 width: (900px * S.k); text: root.s.note; font-size: (22px * S.k); color: root.kind-color(root.s.kind);
                 wrap: word-wrap; overflow: elide; vertical-alignment: bottom;
