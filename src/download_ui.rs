@@ -573,7 +573,12 @@ impl App {
         match result {
             Ok(()) => {
                 // Gone from the install queue at once (the worker removes it a moment later).
-                if matches!(choice, "download" | "forget") { let _ = self.downloads.set_install_to(&key, None); }
+                if matches!(choice, "download" | "forget") {
+                    let _ = self.downloads.set_install_to(&key, None);
+                    // An install that failed goes with it: downloaded again, it installs afresh.
+                    let _ = self.installer.forget(&key);
+                    self.install_failures.remove(&key);
+                }
                 audio::play(Sound::Select);
                 let what = match choice { "both" => "The game and its download are deleted", "game" => "The game is deleted; its download stays",
                     "download" => "The download is deleted", _ => "Removed from Downloads; every file is kept" };

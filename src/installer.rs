@@ -213,6 +213,16 @@ impl Manager {
         Ok(path)
     }
 
+    /// Forget a failed or cancelled install (its download is gone; one downloaded again
+    /// installs afresh).
+    pub fn forget(&self, key: &str) -> Result<()> {
+        let mut jobs = self.core.jobs.lock().unwrap();
+        let before = jobs.len();
+        jobs.retain(|j| j.key != key || j.state.active() || j.state == State::Installed);
+        if jobs.len() != before { self.core.save(&jobs)?; }
+        Ok(())
+    }
+
     pub fn cancel(&self, key: &str) -> Result<()> {
         let worker = self.worker.lock().unwrap();
         let jobs = self.core.jobs.lock().unwrap();
@@ -455,10 +465,14 @@ impl Source {
             let st = dir.metadata(&name)?;
             let kind = st.st_mode & libc::S_IFMT;
             if kind == libc::S_IFDIR {
-                self.plan.add(Entry::file(path.clone(), true, 0))?;
                 let child = dir.child(name.as_bytes(), false)?;
                 ensure!(child.0.metadata()?.ino() == st.st_ino && child.0.metadata()?.dev() == st.st_dev, "Source directory changed during inspection");
+                let before = self.plan.entries.len();
                 self.walk(&child, &path, cancel)?;
+                // A folder the engine made only for files left out isn't the game's.
+                let inside = format!("{path}/");
+                let left_out = self.plan.entries.len() == before && self.skip.iter().any(|skipped| skipped.starts_with(&inside));
+                if !left_out { self.plan.add(Entry::file(path.clone(), true, 0))?; }
             } else if self.skip.contains(&path) {
                 continue;
             } else {
@@ -1804,8 +1818,11 @@ mod tests {
         fs::write(req.source.join("update.pkg"), b"").unwrap();
         fs::write(req.source.join("game/extra.bin"), b"half").unwrap();
         req.skip = ["update.pkg".to_string(), "game/extra.bin".to_string()].into();
+        fs::create_dir_all(req.source.join("Extras")).unwrap();
+        fs::write(req.source.join("Extras/artbook.bin"), b"").unwrap();
+        req.skip.insert("Extras/artbook.bin".into());
         let p = run(&req, &AtomicBool::new(false), &|_, _, _| {}).unwrap();
-        assert_eq!(fs::read(p.join("data")).unwrap(), b"fixture contents");
+        assert_eq!(fs::read(p.join("data")).unwrap(), b"fixture contents", "the game is still found alone");
         assert!(!p.join("extra.bin").exists() && !p.join("update.pkg").exists());
     }
 

@@ -200,8 +200,8 @@ impl Manager {
 
     /// The files of a download the player left out (paths inside its folder).
     pub fn left_out(&self, key: &str) -> Result<std::collections::BTreeSet<String>> {
-        let job = self.jobs.lock().unwrap().iter().find(|job| job.key == key).cloned().context("Transfer not found")?;
-        let Some(selected) = job.selected.as_deref() else { return Ok(Default::default()) };
+        let selected = self.jobs.lock().unwrap().iter().find(|job| job.key == key).map(|job| job.selected.clone()).context("Transfer not found")?;
+        let Some(selected) = selected.as_deref() else { return Ok(Default::default()) };
         let (_, files) = inspect_metadata(&read_torrent(&self.store, key)?, key, None)?;
         let chosen = chosen(Some(selected));
         Ok(files.into_iter().enumerate().filter(|(i, _)| !chosen(*i)).map(|(_, (path, _))| path).collect())
@@ -492,8 +492,8 @@ fn entries_of(platform: Option<crate::platform::Platform>, files: Vec<(String, u
 
 /// An error as the player sees it. Engine errors can contain tracker/magnet URLs: redacted.
 fn shown(error: &anyhow::Error) -> String {
-    regex::Regex::new(r"(?:https?://|udp://|magnet:\?)[^\s]+")
-        .unwrap().replace_all(&error.to_string(), "[network URL]").chars().take(500).collect()
+    static URL: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"(?:https?://|udp://|magnet:\?)[^\s]+").unwrap());
+    URL.replace_all(&error.to_string(), "[network URL]").chars().take(500).collect()
 }
 
 /// The file list of a download waiting for its files to be chosen, from its saved torrent. One
@@ -602,8 +602,9 @@ pub struct Drive {
 }
 
 pub fn drive(path: &Path) -> Option<Drive> {
-    use std::os::unix::fs::MetadataExt;
-    let existing = path.ancestors().find(|p| p.is_dir())?;
+    // Through links, to the folder itself: its drive is where it really is.
+    let existing = path.ancestors().find(|p| p.is_dir())?.canonicalize().ok()?;
+    let existing = existing.as_path();
     let dev = std::fs::metadata(existing).ok()?.dev();
     let mount = existing.ancestors()
         .take_while(|p| std::fs::metadata(p).is_ok_and(|m| m.dev() == dev))
@@ -784,7 +785,8 @@ impl Worker {
         let job = self.job(&resolved.key).context("Missing transfer")?;
         if job.state != State::Resolving { return Ok(()); }
         let checked = (|| -> Result<(u64, Vec<Entry>)> {
-            let (total, files) = inspect_metadata(&resolved.bytes, &job.key, Some(&job.folder))?;
+            // The folder may still change (and is checked when it starts): only the release here.
+            let (total, files) = inspect_metadata(&resolved.bytes, &job.key, None)?;
             // Nothing is downloaded yet: a release the launcher couldn't install stops here.
             if let Some(why) = job.platform.and_then(|platform| crate::package::unsupported(platform, &files)) {
                 bail!("Azrak can't install this release: {why}. Nothing was downloaded; choose another release of this game.");
@@ -911,8 +913,9 @@ impl Worker {
             .map(|job| job.key.clone()).collect();
         for key in keys {
             if let Err(error) = self.seed(&key).await {
-                // Shared by hand, and it can't share now: it waits for Share again.
-                self.update(&key, |job| job.shared_by_hand = false);
+                // Shared by hand, and its files are gone: it waits for Share again (anything
+                // else may pass, and it tries again next time).
+                if error.to_string() == FILES_CHANGED { self.update(&key, |job| job.shared_by_hand = false); }
                 self.fail(&key, error);
             }
         }
@@ -982,8 +985,10 @@ impl Worker {
         });
         self.persist();
         // The folder now, even if the download waits for the VPN: later it couldn't be changed.
+        // Without its saved torrent, starting would look it up again and forget the choice.
         let started = match self.job(key).map(|job| owned_folder(&job)) {
             Some(Err(error)) => Err(error),
+            _ if !self.store.join(format!("{key}.torrent")).is_file() => Err(anyhow::anyhow!("Its file list is gone. Close this and press Download again.")),
             _ => self.start(key).await,
         };
         if let Err(error) = started {
