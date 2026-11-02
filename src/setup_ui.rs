@@ -76,11 +76,19 @@ struct View {
 
 impl App {
     /// Download pressed: open the panel and look the torrent up.
-    pub fn open_setup(&mut self, target: Target) {
-        let Some(index) = target.game else { return };
-        let game = &self.games[index];
-        let (topic, name, magnet, platform) = (game.g.id, game.name.clone(), game.g.magnet.clone(), game.g.platform);
-        let existing = self.download_for_target(target);
+    pub fn open_setup(&mut self, target: Target) { self.open_setup_with(target, None) }
+
+    /// `chosen`: the download whose files are chosen (Choose files on Downloads), whichever the
+    /// Game Hub would pick, and even if its game left the catalog.
+    pub fn open_setup_with(&mut self, target: Target, chosen: Option<downloads::Job>) {
+        let game = target.game.map(|index| &self.games[index]);
+        let existing = chosen.or_else(|| self.download_for_target(target));
+        let (topic, name, magnet, platform) = match (game, &existing) {
+            (Some(game), _) => (game.g.id, game.name.clone(), game.g.magnet.clone(), game.g.platform),
+            // An existing download is never looked up again: no magnet needed.
+            (None, Some(job)) => (job.topic, job.name.clone(), String::new(), job.platform.unwrap_or_default()),
+            (None, None) => return,
+        };
         let (download_dir, install_dir) = { let cfg = self.cfg.lock().unwrap(); (cfg.download_dir.clone(), cfg.install_dir.clone()) };
         // Already open lower down (Choose files from Downloads opened over it): this one replaces
         // it, and still forgets the lookup on closing if the first one would have.

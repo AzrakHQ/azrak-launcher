@@ -169,8 +169,7 @@ impl Manager {
     }
 
     fn new(store: PathBuf, policy: Policy) -> Self {
-        let mut jobs = load_manifest(&store);
-        for job in jobs.iter_mut().filter(|job| job.state == State::Ready) { restore_entries(&store, job); }
+        let jobs = load_manifest(&store);
         let jobs = Arc::new(Mutex::new(jobs));
         let (tx, rx) = mpsc::channel(64);
         let shared = jobs.clone();
@@ -197,8 +196,16 @@ impl Manager {
     }
 
     /// The file list of a download whose files are being chosen.
+    /// The file list of a download whose files are being chosen. Not saved (it can be long): the
+    /// first time after a start it's read back from the saved torrent.
     pub fn entries(&self, key: &str) -> Vec<Entry> {
-        self.jobs.lock().unwrap().iter().find(|job| job.key == key).map(|job| job.entries.clone()).unwrap_or_default()
+        let mut jobs = self.jobs.lock().unwrap();
+        let Some(job) = jobs.iter_mut().find(|job| job.key == key) else { return vec![] };
+        if job.state == State::Ready && job.entries.is_empty() {
+            restore_entries(&self.store, job);
+            let _ = self.tx.try_send(Command::Save);
+        }
+        job.entries.clone()
     }
 
     /// The files of a download the player left out (paths inside its folder).
@@ -530,18 +537,24 @@ fn restore_entries(store: &Path, job: &mut Job) {
         let (_, files, padding) = inspect_metadata(&read_torrent(store, &job.key)?, &job.key, None)?;
         Ok(entries_of(job.platform, files, padding))
     };
-    match read() {
+    let torrent = store.join(format!("{}.torrent", job.key));
+    let error = match read() {
         Ok(entries) if entries.iter().any(|entry| !entry.blocked) => {
             if job.selected.is_none() { job.selected = Some((0..entries.len()).filter(|&i| !entries[i].blocked).collect()); }
             job.entries = entries;
+            return;
         }
+        // Gone, or not a release it can download: Retry looks it up again.
+        _ if !torrent.exists() => "Its file list is missing. Retry looks it up again.".to_string(),
+        Err(error) if error.downcast_ref::<std::io::Error>().is_some() => format!("Its file list couldn't be read ({error}). Retry when its drive is back."),
         _ => {
-            let _ = std::fs::remove_file(store.join(format!("{}.torrent", job.key)));
-            job.state = State::Failed;
-            job.error = "Its file list couldn't be read. Retry looks it up again.".into();
-            job.problem = Problem::Other;
+            let _ = std::fs::remove_file(&torrent);
+            "Its file list couldn't be read. Retry looks it up again.".into()
         }
-    }
+    };
+    job.state = State::Failed;
+    job.error = error;
+    job.problem = Problem::Other;
 }
 
 /// Whether the engine's numbers are the download's: an error reports nothing done, and while
@@ -620,16 +633,26 @@ fn required_space(bytes: &[u8], folder: &Path, selected: Option<&[usize]>) -> Re
     Ok(required)
 }
 
-fn available_space(folder: &Path) -> Result<u64> { Ok(space(folder)?.0) }
-
-/// A folder's filesystem: free space and whole size.
-fn space(folder: &Path) -> Result<(u64, u64)> {
+fn available_space(folder: &Path) -> Result<u64> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(folder.as_os_str().as_bytes())?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
     ensure!(unsafe { libc::statvfs(path.as_ptr(), stat.as_mut_ptr()) } == 0, "Cannot check destination free space");
     let stat = unsafe { stat.assume_init() };
-    Ok(((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64), (stat.f_blocks as u64).saturating_mul(stat.f_frsize as u64)))
+    Ok((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+}
+
+/// What's mounted at `mount` (the last mount there wins), from /proc/self/mountinfo.
+fn mount_source(mount: &Path) -> Option<String> {
+    let info = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+    // Spaces, tabs, newlines and backslashes in paths are written as octal escapes.
+    let unescape = |s: &str| s.replace("\\040", " ").replace("\\011", "\t").replace("\\012", "\n").replace("\\134", "\\");
+    info.lines().filter_map(|line| {
+        let (fields, rest) = line.split_once(" - ")?;
+        let point = fields.split(' ').nth(4)?;
+        let source = rest.split(' ').nth(1)?;
+        (Path::new(&unescape(point)) == mount).then(|| unescape(source))
+    }).last()
 }
 
 /// Free space where `path` is (or would be: the nearest folder that exists).
@@ -639,7 +662,9 @@ pub fn free_space(path: &Path) -> Option<u64> {
 
 impl Drive {
     /// The same filesystem: one's download takes the other's free space.
-    pub fn shares(&self, other: &Drive) -> bool { self.dev == other.dev || (self.size == other.size && self.free == other.free) }
+    pub fn shares(&self, other: &Drive) -> bool {
+        self.dev == other.dev || self.source.as_ref().is_some_and(|source| source.starts_with("/dev/") && other.source.as_ref() == Some(source))
+    }
 }
 
 /// The drive a folder is on (or would be on: the folder needn't exist yet).
@@ -648,8 +673,9 @@ pub struct Drive {
     pub free: u64,
     /// Which filesystem: two folders on the same one share its free space.
     pub dev: u64,
-    /// Its whole size: subvolumes of one pool (btrfs) differ in `dev` but not in size or free space.
-    pub size: u64,
+    /// The device mounted there (/dev/nvme0n1p2): subvolumes of one pool (btrfs) differ in
+    /// `dev` but come from the same one.
+    pub source: Option<String>,
     /// Where it's mounted ("/home", "/mnt/games"), for saying which drive.
     pub mount: PathBuf,
 }
@@ -662,8 +688,8 @@ pub fn drive(path: &Path) -> Option<Drive> {
     let mount = existing.ancestors()
         .take_while(|p| std::fs::metadata(p).is_ok_and(|m| m.dev() == dev))
         .last().unwrap_or(existing).to_path_buf();
-    let (free, size) = space(existing).ok()?;
-    Some(Drive { free, dev, size, mount })
+    let source = mount_source(&mount);
+    Some(Drive { free: available_space(existing).ok()?, dev, source, mount })
 }
 
 
@@ -853,7 +879,7 @@ impl Worker {
         secure_write(&self.store.join(format!("{}.torrent", job.key)), &resolved.bytes)?;
         self.peers.insert(job.key.clone(), resolved.peers);
         self.update(&job.key, |job| {
-            job.total = total; job.file_count = entries.len();
+            job.total = total; job.file_count = entries.iter().filter(|entry| !entry.padding).count();
             job.selected = Some((0..entries.len()).filter(|&i| !entries[i].blocked).collect());
             job.entries = entries;
             job.state = State::Ready; job.error.clear();
@@ -873,8 +899,19 @@ impl Worker {
             if !self.store.join(format!("{key}.torrent")).is_file() { return self.resolve(key).await; }
             let bytes = read_torrent(&self.store, key)?;
             let folder = owned_folder(&job)?;
-            let (total, files, _) = inspect_metadata(&bytes, key, Some(&folder))?;
-            let selected = job.selected.as_deref();
+            let (total, files, padding) = inspect_metadata(&bytes, key, Some(&folder))?;
+            // Files never chosen (an older launcher's download): never what's left out either.
+            let wanted = match job.selected.clone() {
+                Some(selected) => Some(selected),
+                None => {
+                    let entries = entries_of(job.platform, files.clone(), padding);
+                    let allowed: Vec<usize> = (0..entries.len()).filter(|&i| !entries[i].blocked).collect();
+                    ensure!(!allowed.is_empty(), "Nothing in this release can be downloaded: it only holds programs a console game never needs.");
+                    (allowed.len() < entries.len()).then_some(allowed)
+                }
+            };
+            if wanted != job.selected { self.update(key, |j| j.selected = wanted.clone()); }
+            let selected = wanted.as_deref();
             let chosen = chosen(selected);
             let total = if selected.is_some() { files.iter().enumerate().filter(|(i, _)| chosen(*i)).map(|(_, f)| f.1).sum() } else { total };
             ensure!(available_space(&folder)? >= required_space(&bytes, &folder, selected)?, "Not enough free space in the download folder");
@@ -883,7 +920,7 @@ impl Worker {
             let peers = self.peers.get(key).cloned().unwrap_or_else(|| self.policy.initial_peers.clone());
             let response = session.add_torrent(AddTorrent::from_bytes(bytes), Some(AddTorrentOptions {
                 paused: false, overwrite: true, output_folder: Some(folder.to_string_lossy().into_owned()),
-                trackers: Some(magnet.trackers), initial_peers: Some(peers), only_files: job.selected.clone(), ..Default::default()
+                trackers: Some(magnet.trackers), initial_peers: Some(peers), only_files: wanted.clone(), ..Default::default()
             })).await?;
             let handle = response.into_handle().context("No transfer handle")?;
             self.handles.insert(key.into(), handle);
@@ -1094,7 +1131,10 @@ impl Worker {
         // wait for it. remove_dir_all removes links, never what they point to.
         let doomed = job.folder.with_file_name(crate::util::deleting_name(key));
         if present { std::fs::rename(&job.folder, &doomed).with_context(|| format!("Delete {}", job.folder.display()))?; }
-        self.stop_job(key, job.state).await?;
+        if let Err(error) = self.stop_job(key, job.state).await {
+            if present { let _ = std::fs::rename(&doomed, &job.folder); }
+            return Err(error);
+        }
         if present {
             let gone = doomed.clone();
             crate::util::delete_in_background(doomed, move || Ok(std::fs::remove_dir_all(&gone)?));
@@ -1181,7 +1221,14 @@ impl Worker {
                             Some((key.clone(), self.stop_job(&key, State::Cancelled).await))
                         },
                         Some(Command::Remove(key)) => Some((key.clone(), self.remove(&key).await)),
-                        Some(Command::Delete(key)) => Some((key.clone(), self.delete(&key).await)),
+                        // A refused delete leaves it as it was, saying why.
+                        Some(Command::Delete(key)) => {
+                            if let Err(error) = self.delete(&key).await {
+                                self.update(&key, |job| job.error = shown(&error));
+                                self.persist();
+                            }
+                            None
+                        },
                         // The manager changed a download (at once, for the install queue): saved here.
                         Some(Command::Save) => {
                             self.persist();
@@ -2178,7 +2225,11 @@ mod tests {
         let exe = entries.iter().position(|e| e.path.ends_with("Setup.exe")).unwrap();
         assert!(entries.len() == 2 && entries[exe].blocked);
         assert_eq!(manager.job(&key).unwrap().selected, Some(vec![1 - exe]), "everything but the program is chosen");
-        assert_eq!(manager.job(&lost).unwrap().state, State::Failed, "Retry looks it up again");
+        // Read back when it's first wanted (the panel opening), not at start-up.
+        assert_eq!(manager.job(&lost).unwrap().state, State::Ready, "nothing read at start-up");
+        assert!(manager.entries(&lost).is_empty());
+        let gone = manager.job(&lost).unwrap();
+        assert!(gone.state == State::Failed && gone.error.contains("Retry looks it up again"), "{}", gone.error);
         manager.shutdown();
     }
 
@@ -2236,6 +2287,7 @@ mod tests {
         let b = drive(temp.path()).unwrap();
         assert_eq!(a.dev, b.dev);
         assert!(a.free > 0 && temp.path().starts_with(&a.mount));
+        assert!(a.shares(&b) && a.source.is_some(), "{a:?}");
     }
 
     #[test]

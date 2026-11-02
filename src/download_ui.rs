@@ -294,10 +294,9 @@ impl App {
                 else { audio::play(Sound::Select); }
             }
             "choose" => {
-                if let Some(game) = self.games.iter().position(|game| game.g.id == job.topic) {
-                    let local = self.games[game].local;
-                    self.open_setup(Target { game: Some(game), local });
-                }
+                let game = self.games.iter().position(|game| game.g.id == job.topic);
+                let target = Target { game, local: game.and_then(|g| self.games[g].local) };
+                self.open_setup_with(target, Some(job.clone()));
                 return;
             }
             _ if action != "stop_seed" && install.as_ref().is_some_and(|record| record.state.active()) => {
