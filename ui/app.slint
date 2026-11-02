@@ -1,6 +1,6 @@
 import { S, Theme, Icons, Zone, DownloadData, DlTab, DlChoice, SetupFile, BootStep, OsiDisk, WjKey, ChipData, ActionData, TileData, HeroData, CardData, CardRow, GenreChip, Fact, FactRow, Shot, HubData, SettingData, SettingSection, ToastData, MenuItem, RunningData } from "theme.slint";
 import { FocusRing, Chip, Btn, Kicker, Badge, Switch, KeyCap, KeyboardKey, BackButton, Shimmer, Cover } from "widgets.slint";
-import { DownloadsPage, DownloadConsent, DownloadPanel } from "downloads.slint";
+import { DownloadsPage, DownloadConsent, DownloadPanel, Capsule } from "downloads.slint";
 import { LibraryFilter, LibrarySortPicker } from "library.slint";
 import { AboutSlint, Palette } from "std-widgets.slint";
 
@@ -344,6 +344,7 @@ export component AppWindow inherits Window {
     // its arc (SVG path on a 36×36 box), and the art behind the bar, blurred, for its glass.
     in property <int> ring-kind;
     in property <string> ring-label;
+    in property <string> ring-sizer;
     in property <string> ring-path: "M 18 3";
     in property <image> bar-glass;
     in property <bool> bar-has-glass;
@@ -1074,28 +1075,16 @@ export component AppWindow inherits Window {
                 // (3), the battery, the clock. Downloads is the ring while something's happening
                 // (what's downloading or installing, or what needs you), its icon otherwise; either
                 // way in the same place.
-                bar := Rectangle {
-                    property <color> tint: root.ring-kind == 2 ? #c4b5fd : root.ring-kind == 3 ? #ffb547 : root.ring-kind == 4 ? #5eead4 : #8dbaff;
+                bar := Capsule {
+                    property <color> ring-tint: root.ring-kind == 2 ? #c4b5fd : root.ring-kind == 3 ? #ffb547 : root.ring-kind == 4 ? #5eead4 : #8dbaff;
                     // As tall as the tabs' row reads (the old 64px icons), centred on it.
                     y: (20px * S.k);
                     height: (64px * S.k);
                     width: bar-row.preferred-width;
-                    border-radius: self.height / 2;
-                    clip: true;
-                    drop-shadow-blur: (24px * S.k);
-                    drop-shadow-color: #0000004d;
-                    background: root.bar-has-glass ? transparent : #0e1424d9;
-                    if root.bar-has-glass: Image {
-                        x: -bar.absolute-position.x; y: -bar.absolute-position.y;
-                        width: root.width; height: root.height;
-                        source: root.bar-glass; image-fit: cover;
-                    }
-                    Rectangle {
-                        border-radius: parent.border-radius;
-                        background: #161c2e6b;
-                        border-width: 1px; border-color: #ffffff29;
-                    }
-                    Rectangle { x: parent.height / 2; y: 1px; width: parent.width - parent.height; height: 1px; background: #ffffff33; }
+                    glass: root.bar-glass; has-glass: root.bar-has-glass;
+                    glass-w: root.width; glass-h: root.height;
+                    // Lighter than the Downloads page's, as on the canvas.
+                    tint: #161c2e6b;
                     bar-row := HorizontalLayout {
                         padding: (7px * S.k);
                         spacing: 0;
@@ -1123,16 +1112,22 @@ export component AppWindow inherits Window {
                                         width: parent.width; height: parent.height;
                                         viewbox-width: 36; viewbox-height: 36;
                                         commands: root.ring-path;
-                                        stroke: dl.f ? (root.ring-kind == 2 ? #7c5cff : root.ring-kind == 3 ? #d98a00 : root.ring-kind == 4 ? #0f9e8e : Theme.accent) : bar.tint;
+                                        stroke: dl.f ? (root.ring-kind == 2 ? #7c5cff : root.ring-kind == 3 ? #d98a00 : root.ring-kind == 4 ? #0f9e8e : Theme.accent) : bar.ring-tint;
                                         stroke-width: (3.2px * S.k);
                                         stroke-line-cap: round;
                                     }
                                 }
-                                if root.ring-kind > 0: Text {
-                                    text: root.ring-label;
-                                    font-size: (22px * S.k); font-weight: 600;
-                                    color: dl.f ? #05070f : #f5f7fb;
-                                    vertical-alignment: center;
+                                // As wide as the label with every digit a 0, so the numbers changing
+                                // don't move the ring.
+                                if root.ring-kind > 0: Rectangle {
+                                    width: max(ring-text.preferred-width, ring-sizer.preferred-width);
+                                    ring-text := Text {
+                                        x: 0; text: root.ring-label;
+                                        font-size: (22px * S.k); font-weight: 600;
+                                        color: dl.f ? #05070f : #f5f7fb;
+                                        vertical-alignment: center;
+                                    }
+                                    ring-sizer := Text { text: root.ring-sizer; font-size: (22px * S.k); font-weight: 600; visible: false; }
                                 }
                                 if root.ring-kind == 0: Image {
                                     y: (parent.height - self.height) / 2;
@@ -1882,7 +1877,7 @@ export component AppWindow inherits Window {
                     // What the buttons do here.
                     set-hints := HorizontalLayout {
                         x: parent.pad-x; width: parent.width - 2 * parent.pad-x;
-                        height: (26px * S.k); y: parent.height - (36px * S.k) - self.height;
+                        height: (26px * S.t); y: parent.height - (36px * S.k) - self.height;
                         alignment: end;
                         spacing: (22px * S.k);
                         // Back/Close can be clicked too: from the rows to the sections, else closed.

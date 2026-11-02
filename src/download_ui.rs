@@ -266,7 +266,7 @@ impl App {
 
     pub fn open_downloads(&mut self, key: Option<&str>) {
         // Looked at: the ring stops asking about what stopped.
-        let needs = self.ring_needs();
+        let needs = self.ring_needs(&self.downloads.snapshot(), &self.installer.snapshot());
         self.ring_seen.extend(needs);
         if self.overlay != Overlay::Downloads {
             self.push_overlay(Overlay::Downloads, Z_DOWNLOADS, 0);
@@ -661,14 +661,13 @@ impl App {
     }
 
     /// Downloads that need the player: stopped ones, and finished ones that couldn't install.
-    fn ring_needs(&self) -> Vec<String> {
-        let installs = self.installer.snapshot();
-        self.downloads.snapshot().into_iter().filter(|job| match job.state {
+    fn ring_needs(&self, jobs: &[Job], installs: &[Record]) -> Vec<String> {
+        jobs.iter().filter(|job| match job.state {
             State::Failed => job.total > 0,
             State::Complete => self.install_failures.contains_key(&job.key)
                 || installs.iter().any(|r| r.key == job.key && r.state == Install::Failed),
             _ => false,
-        }).map(|job| job.key).collect()
+        }).map(|job| job.key.clone()).collect()
     }
 
     /// The top bar's ring: what needs you (until you've looked), else what's downloading, else
@@ -677,8 +676,10 @@ impl App {
     pub fn push_ring(&mut self) {
         let jobs = self.downloads.snapshot();
         let installs = self.installer.snapshot();
-        let needs = self.ring_needs();
+        let needs = self.ring_needs(&jobs, &installs);
         self.ring_seen.retain(|key| needs.contains(key));
+        // Seen as it happens on the Downloads page: nothing to ask about after.
+        if self.overlay == Overlay::Downloads { self.ring_seen.extend(needs.iter().cloned()); }
         let unseen: Vec<&Job> = jobs.iter().filter(|job| needs.contains(&job.key) && !self.ring_seen.contains(&job.key)).collect();
         let active: Vec<&Job> = jobs.iter().filter(|job| matches!(job.state, State::Checking | State::Downloading)).collect();
         let (kind, label, frac) = if let Some(job) = unseen.first() {
@@ -689,24 +690,34 @@ impl App {
             let verifying = active.len() == 1 && active[0].state == State::Checking;
             let (done, total) = active.iter().fold((0u64, 0u64), |(d, t), job| if verifying { (d + job.checked, t + job.check_total) } else { (d + job.done, t + job.total) });
             let frac = if total > 0 { (done as f32 / total as f32).min(1.0) } else { 0.0 };
-            let pct = (frac * 100.0).floor();
-            let label = if active.len() > 1 { format!("{} downloads · {pct:.0}%", active.len()) }
-                else if verifying { format!("Verifying · {pct:.0}%") }
-                else { format!("{} · {pct:.0}%", short_name(&active[0].name)) };
+            let pct = pct(frac);
+            let label = if active.len() > 1 { format!("{} downloads · {pct}%", active.len()) }
+                else if verifying { format!("Verifying · {pct}%") }
+                else { format!("{} · {pct}%", short_name(&active[0].name)) };
             (if verifying { 4 } else { 1 }, label, frac)
         } else if let Some(record) = installs.iter().find(|r| r.state.active()) {
-            (2, format!("Installing · {:.0}%", (record.progress() * 100.0).floor()), record.progress())
+            (2, format!("Installing · {}%", pct(record.progress())), record.progress())
         } else if let Some(job) = jobs.iter().find(|job| job.waiting_vpn && job.state != State::Complete) {
             (3, "Waiting for your VPN".to_string(), job.progress())
         } else {
             (0, String::new(), 0.0)
         };
-        // A focus that was on the ring stays on Downloads (the icon in its place).
-        let glass = if self.view == 0 { let key = self.bg_key.clone(); self.frost_of(&key) } else { None };
+        // A focus that was on the ring stays on Downloads (the icon in its place). Its width is
+        // the label's with every digit a 0, so it doesn't jiggle as the numbers change.
+        let sizer: String = label.chars().map(|c| if c.is_ascii_digit() { '0' } else { c }).collect();
         let ui = self.ui();
         ui.set_ring_kind(kind);
         ui.set_ring_label(label.into());
+        ui.set_ring_sizer(sizer.into());
         ui.set_ring_path(ring_path(frac).into());
+        self.push_bar_glass();
+    }
+
+    /// The top bar's glass: the art behind it, blurred (none over the dimmed Library). Also when
+    /// the art changes, so it never shows the one before.
+    pub fn push_bar_glass(&mut self) {
+        let glass = if self.view == 0 { let key = self.bg_key.clone(); self.frost_of(&key) } else { None };
+        let ui = self.ui();
         ui.set_bar_has_glass(glass.is_some());
         ui.set_bar_glass(glass.unwrap_or_default());
     }

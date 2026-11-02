@@ -118,7 +118,14 @@ async function shoot([w, h]) {
     console.error(`${w}x${h}: the launcher didn't reach its home screen\n${log.slice(-2000)}`);
     process.exit(1);
   }
-  const win = run('xdotool', ['search', '--sync', '--onlyvisible', '--name', '^Azrak Launcher$']).stdout.trim().split('\n')[0];
+  // Found within 20 s, or the run stops (keys must never go to some other window).
+  const found = spawnSync('xdotool', ['search', '--sync', '--onlyvisible', '--name', '^Azrak Launcher$'], { encoding: 'utf8', timeout: 20_000 });
+  const win = (found.stdout || '').trim().split('\n')[0];
+  if (!win) {
+    child.kill();
+    console.error(`${w}x${h}: no window titled "Azrak Launcher" appeared`);
+    process.exit(1);
+  }
   run('xdotool', ['windowfocus', '--sync', win]);
   run('xdotool', ['windowsize', win, String(w), String(h)]);
   run('xdotool', ['windowmove', win, '0', '0']);
@@ -147,8 +154,9 @@ rmSync(profile, { recursive: true, force: true });
 // Contact sheets: each screen at every size, side by side.
 mkdirSync(join(out, 'sheets'), { recursive: true });
 for (const [name] of steps) {
-  const files = sizes.map(([w, h]) => join(out, `${w}x${h}`, `${name}.png`)).filter(existsSync);
-  run('montage', [...files.flatMap((f, i) => ['-label', `${sizes[i][0]}×${sizes[i][1]}`, f]),
+  // Each picture with its own size (one missing doesn't shift the labels).
+  const files = sizes.map(([w, h]) => [`${w}×${h}`, join(out, `${w}x${h}`, `${name}.png`)]).filter(([, f]) => existsSync(f));
+  run('montage', [...files.flatMap(([label, f]) => ['-label', label, f]),
     '-tile', '3x', '-geometry', '800x450+6+6', '-pointsize', '18', '-background', '#222', '-fill', '#ddd',
     join(out, 'sheets', `${name}.png`)]);
 }

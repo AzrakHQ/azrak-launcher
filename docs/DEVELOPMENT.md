@@ -376,7 +376,7 @@ fine at 1920×1080). Two tools catch that without a person checking every screen
 
 - `node scripts/lint-ui.mjs` reads the `.slint` files and reports text whose line is taller
   than the fixed height around it. Text sized in `S.t` grows faster than boxes sized in `S.k`
-  on small windows, so it is checked at the smallest one (1280×720). It takes a second; run it
+  on small windows, so it is checked at the smallest the window goes (640×360). It takes a second; run it
   before every release (`node --test scripts/lint-ui.test.mjs` tests it). A deliberate overflow
   is marked `// ui-lint: allow (reason)` on its line.
 - `node scripts/ui-shots.mjs [--art]` renders Home and its top bar, every Settings section and

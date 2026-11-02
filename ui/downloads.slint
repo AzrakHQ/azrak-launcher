@@ -21,11 +21,13 @@ component TransferButton inherits Rectangle {
 // Frosted glass for text over key art: a blurred copy of the art (`glass`, drawn at the art's
 // size `glass-w`×`glass-h` from the page's corner) lined up behind it, a dark tint so the text
 // reads, and a light along the top edge.
-component Capsule inherits Rectangle {
+// Frosted glass, as a pill: the art behind it, blurred, under a tint (Downloads page, top bar).
+export component Capsule inherits Rectangle {
     in property <image> glass;
     in property <bool> has-glass;
     in property <length> glass-w;
     in property <length> glass-h;
+    in property <color> tint: #121828a6;
     // Hovered: the tint lightens.
     in property <bool> lit;
     height: (52px * S.k);
@@ -41,7 +43,7 @@ component Capsule inherits Rectangle {
     }
     Rectangle {
         border-radius: root.border-radius;
-        background: root.lit ? #2a3550a6 : root.has-glass ? #121828a6 : transparent;
+        background: root.lit ? #2a3550a6 : root.has-glass ? root.tint : transparent;
         border-width: 1px; border-color: #ffffff2e;
         animate background { duration: 120ms; }
     }
@@ -475,8 +477,9 @@ component Destination inherits VerticalLayout {
     alignment: start;
     vertical-stretch: 0;
     Text { text: root.label; font-size: (16px * S.t); color: Theme.hint; }
+    // Its height follows the text (S.t), which outgrows the layout on small windows.
     HorizontalLayout {
-        spacing: (16px * S.k); height: (40px * S.k);
+        spacing: (16px * S.k); height: (40px * S.t);
         Rectangle {
             horizontal-stretch: 1;
             border-radius: (10px * S.k);
@@ -607,7 +610,7 @@ export component DownloadPanel inherits Rectangle {
             Rectangle { height: (22px * S.k); }
             // Files, straight from the torrent.
             HorizontalLayout {
-                height: (40px * S.k); spacing: (16px * S.k);
+                height: (40px * S.t); spacing: (16px * S.k);
                 if root.state == 1: Check {
                     y: (7px * S.k); state: root.all-state;
                     TouchArea { mouse-cursor: pointer; clicked => { root.toggle(-1); } }
@@ -657,7 +660,7 @@ export component DownloadPanel inherits Rectangle {
                 if root.state == 0: VerticalLayout {
                     y: (8px * S.k); alignment: start; spacing: (22px * S.k); padding-left: (12px * S.k);
                     HorizontalLayout {
-                        spacing: (12px * S.k); height: (40px * S.k); alignment: start;
+                        spacing: (12px * S.k); height: (40px * S.t); alignment: start;
                         Image {
                             source: Icons.spinner; colorize: #8dbaff; width: (20px * S.k); height: (20px * S.k); y: (10px * S.k);
                             transform-rotation: animation-tick() / 2.5ms * 1deg;

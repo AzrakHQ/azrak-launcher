@@ -348,6 +348,7 @@ impl App {
         }
         titles.push("ABOUT".into());
         self.settings_sections = titles.iter().map(|t| self.section_info(t)).collect();
+        self.settings_headers = titles;
         self.settings_section = self.settings_section.min(self.settings_sections.len() - 1);
         self.settings_ids = rows.iter().map(|(id, _)| *id).collect();
         self.settings_rows = rows.into_iter().map(|(_, r)| r).collect();
@@ -424,10 +425,8 @@ impl App {
 
     /// The notes beside the sections ("1 active", "1 ready") as they are now.
     pub fn refresh_settings_notes(&mut self) {
-        let sections: Vec<SettingSection> = self.settings_sections.iter().map(|s| self.section_info(&s.label.to_uppercase())).collect();
-        let seen: String = sections.iter().map(|s| format!("{}|", s.note)).collect();
-        if seen != self.settings_notes_seen {
-            self.settings_notes_seen = seen;
+        let sections: Vec<SettingSection> = self.settings_headers.iter().map(|h| self.section_info(h)).collect();
+        if sections != self.settings_sections {
             self.settings_sections = sections;
             self.ui().set_settings_sections(model(self.settings_sections.clone()));
         }

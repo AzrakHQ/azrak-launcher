@@ -14,8 +14,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // A line of text is about 1.2 × its font size (Inter 1.21, DejaVu Sans 1.16).
 const LINE = 1.2;
 // S.t is at least 0.75 (present.rs TEXT_SCALE_MIN) while S.k follows the window: on the
-// smallest supported window (1280×720, k = 0.667) text is 1.125× bigger relative to boxes.
-const T_OVER_K = 0.75 / (720 / 1080);
+// smallest window the launcher allows (640×360, app.slint min-height; k = 0.333) text is 2.25×
+// bigger relative to boxes.
+const T_OVER_K = 0.75 / (360 / 1080);
 
 /// Elements with their properties and children, from Slint source. Not a full parser: enough
 /// for `Type { prop: value; … }`, `id := Type {`, `if cond: Type {`, `for x in list: Type {`.

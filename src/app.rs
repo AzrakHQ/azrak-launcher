@@ -316,8 +316,8 @@ pub struct App {
     /// Settings' sections (the left column), and the one shown.
     pub settings_sections: Vec<crate::SettingSection>,
     pub settings_section: usize,
-    /// The section notes last shown (they're refreshed each second while Settings is open).
-    pub settings_notes_seen: String,
+    /// Each section's header (GAMES, DOWNLOADS…): what its notes are worked out from.
+    pub settings_headers: Vec<String>,
     /// Downloads that stopped or couldn't install, already seen on the Downloads page: the top
     /// bar's ring stops asking for them.
     pub ring_seen: HashSet<String>,
@@ -621,7 +621,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         settings_ids: Vec::new(),
         settings_sections: Vec::new(),
         settings_section: 0,
-        settings_notes_seen: String::new(),
+        settings_headers: Vec::new(),
         ring_seen: HashSet::new(),
         vpn_busy: String::new(),
         vpn_seen: String::new(),
@@ -2031,7 +2031,8 @@ impl App {
             self.finish_edit(Some(cur));
         }
         if zone == Z_SETTINGS_NAV && self.overlay == Overlay::Settings && idx >= 0 {
-            audio::play(Sound::Move);
+            // Back from the rows (the hint clicked) sounds like Back, as on a controller.
+            audio::play(if self.zone == Z_SETTINGS { Sound::Back } else { Sound::Move });
             self.focus_settings_nav(idx as usize);
             if idx as usize >= self.settings_sections.len() { self.act(Act::Confirm); }
             return;
@@ -2649,6 +2650,8 @@ impl App {
         let ui = self.ui();
         ui.set_view(v);
         ui.set_bg_dim(v == 1);
+        // The glass shows the art only where it isn't dimmed.
+        self.bg_changed();
         if v == 1 {
             self.push_library();
             if focus {
@@ -3222,7 +3225,6 @@ impl App {
         // The first section, with the sections in focus.
         self.settings_section = 0;
         self.build_settings();
-        self.settings_notes_seen = String::new();
         self.ui().set_settings_y(0.0);
         self.push_overlay(Overlay::Settings, Z_SETTINGS_NAV, 0);
         self.push_settings();

@@ -559,6 +559,13 @@ impl App {
             ui.set_bg_a(img);
         }
         ui.set_bg_show_b(self.bg_show_b);
+        self.bg_changed();
+    }
+
+    /// The glass over the art follows it at once.
+    pub fn bg_changed(&mut self) {
+        self.push_bar_glass();
+        if self.overlay == Overlay::Settings { self.push_settings_glass(); }
     }
 
     fn apply_bg(&mut self, key: String, img: Image) {
@@ -572,6 +579,7 @@ impl App {
             ui.set_bg_a(img);
         }
         ui.set_bg_show_b(self.bg_show_b);
+        self.bg_changed();
     }
 
     /// An image finished loading: update whatever shows it.

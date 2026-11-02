@@ -18,7 +18,7 @@ test('a number taller than its row is caught (the cut-off 0 on the Downloads pag
 });
 
 test('text scale against a layout-scaled box is checked at the smallest window', () => {
-  // 32px (a 38px line) fits 40px at 1920×1080, but S.t outgrows S.k on 1280×720.
+  // 32px (a 38px line) fits 40px at 1920×1080, but S.t outgrows S.k on small windows.
   const ui = 'Rectangle { height: (40px * S.k); Text { font-size: (32px * S.t); } }';
   assert.equal(lint(ui).length, 1);
   assert.equal(lint(ui.replace('S.t', 'S.k')).length, 0);
