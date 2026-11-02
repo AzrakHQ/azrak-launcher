@@ -36,6 +36,8 @@ struct Desc {
     actions: Vec<(&'static str, &'static str, &'static str)>,
     line: String,
     tile: f32,
+    /// Downloading or verifying right now.
+    working: bool,
 }
 
 fn mbps(v: f64) -> String { format!("{v:.1} MB/s") }
@@ -87,7 +89,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
     let mut d = Desc { group: 0, kind: 0, status: String::new(), big: String::new(), unit: String::new(), stats: vec![], spark: false,
         note: String::new(), dl: job.progress(), inst: 0.0, ready: false, dl_label: "Downloading".into(),
         inst_label: if job.install_to.is_some() { "Install".into() } else { "Install by hand".into() }, bar: 0, actions: vec![],
-        line: String::new(), tile: job.progress() };
+        line: String::new(), tile: job.progress(), working: matches!(job.state, State::Checking | State::Downloading) };
     let size = size_label(job.total);
     let progress = |d: &mut Desc, f: f32| { d.big = pct(f); d.unit = "%".into(); };
     match job.state {
@@ -455,7 +457,7 @@ impl App {
                 note: d.note.clone().into(),
                 dl_frac: d.dl, inst_frac: d.inst, ready: d.ready, dl_label: d.dl_label.clone().into(), inst_label: d.inst_label.clone().into(), bar_kind: d.bar,
                 actions: ModelRc::new(VecModel::from(actions)),
-                line: d.line.clone().into(), tile_frac: d.tile,
+                line: d.line.clone().into(), tile_frac: d.tile, working: d.working,
                 group: d.group, group_first: first, group_label: GROUPS[d.group as usize].into(),
             });
         }

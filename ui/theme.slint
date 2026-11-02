@@ -148,6 +148,8 @@ export struct DownloadData {
     actions: [ActionData],
     // The shelf tile: its line under the title, and its progress.
     line: string, tile-frac: float,
+    // Downloading or verifying right now: the bars move (a light sweeps across them).
+    working: bool,
     group: int, group-first: bool, group-label: string,
 }
 export struct DlTab { label: string, count: string, warn: bool }

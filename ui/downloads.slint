@@ -226,26 +226,34 @@ export component DownloadsPage inherits Rectangle {
         Rectangle { height: (30px * S.k); }
         HorizontalLayout {
             width: (780px * S.k); spacing: (8px * S.k); alignment: start;
-            for seg[i] in [
-                { label: root.s.dl-label, frac: root.s.dl-frac, stretch: 6 },
-                { label: root.s.inst-label, frac: root.s.inst-frac, stretch: 3 },
-                { label: "Play", frac: root.s.ready ? 1.0 : 0.0, stretch: 1 },
-            ]: VerticalLayout {
-                horizontal-stretch: seg.stretch; width: (780px * S.k - 16px * S.k) * seg.stretch / 10;
+            // A fixed list (only the widths): built from the download's data, it was rebuilt on
+            // every update, and a rebuilt bar can't glide.
+            for stretch[i] in [6, 3, 1]: VerticalLayout {
+                property <string> label: i == 0 ? root.s.dl-label : i == 1 ? root.s.inst-label : "Play";
+                property <float> frac: i == 0 ? root.s.dl-frac : i == 1 ? root.s.inst-frac : root.s.ready ? 1.0 : 0.0;
+                horizontal-stretch: stretch; width: (780px * S.k - 16px * S.k) * stretch / 10;
                 spacing: (12px * S.k);
                 Rectangle {
-                    height: (4px * S.k); border-radius: (2px * S.k); background: #ffffff26; clip: true;
-                    Rectangle {
-                        x: 0; width: parent.width * seg.frac; border-radius: (2px * S.k);
+                    height: (6px * S.k); border-radius: (3px * S.k); background: #ffffff26; clip: true;
+                    fill := Rectangle {
+                        x: 0; width: parent.width * frac; border-radius: (3px * S.k);
                         background: i == 2 ? Theme.ok : root.bar-color();
-                        animate width { duration: 400ms; }
+                        clip: true;
+                        // Glides between the once-a-second updates.
+                        animate width { duration: 1000ms; easing: linear; }
+                        // While it's working, a light sweeps across what's done (as Steam's does).
+                        if i == 0 && root.s.working: Rectangle {
+                            width: (160px * S.k);
+                            x: mod(animation-tick() / 1ms * 0.25px * S.k, fill.width + self.width) - self.width;
+                            background: @linear-gradient(90deg, #ffffff00 0%, #ffffff8c 50%, #ffffff00 100%);
+                        }
                     }
                 }
                 Text {
-                    text: (seg.frac >= 1.0 && i < 2 ? "✓ " : "") + seg.label;
+                    text: (frac >= 1.0 && i < 2 ? "✓ " : "") + label;
                     font-size: (16px * S.k); overflow: elide;
-                    font-weight: seg.frac > 0 && seg.frac < 1 ? 600 : 500;
-                    color: i == 2 && root.s.ready ? Theme.ok : seg.frac >= 1.0 ? Theme.text2 : seg.frac > 0 ? Theme.text : Theme.text3;
+                    font-weight: frac > 0 && frac < 1 ? 600 : 500;
+                    color: i == 2 && root.s.ready ? Theme.ok : frac >= 1.0 ? Theme.text2 : frac > 0 ? Theme.text : Theme.text3;
                 }
             }
         }
@@ -314,7 +322,16 @@ export component DownloadsPage inherits Rectangle {
                         if t.has-tile-art: Image { width: parent.width; height: parent.height; source: t.tile-art; image-fit: cover; opacity: t.group == 2 && root.sel != i ? 0.75 : 1; }
                         Rectangle {
                             y: parent.height - self.height; height: (4px * S.k); background: #00000080;
-                            Rectangle { x: 0; width: parent.width * t.tile-frac; background: t.kind == 2 ? Theme.danger : t.kind == 3 ? #3ddc9799 : t.kind == 1 ? Theme.hint : t.kind == 4 ? #2dd4bf : #4d94ff; }
+                            tfill := Rectangle {
+                                x: 0; width: parent.width * t.tile-frac; clip: true;
+                                background: t.kind == 2 ? Theme.danger : t.kind == 3 ? #3ddc9799 : t.kind == 1 ? Theme.hint : t.kind == 4 ? #2dd4bf : #4d94ff;
+                                animate width { duration: 1000ms; easing: linear; }
+                                if t.working: Rectangle {
+                                    width: (90px * S.k);
+                                    x: mod(animation-tick() / 1ms * 0.2px * S.k, tfill.width + self.width) - self.width;
+                                    background: @linear-gradient(90deg, #ffffff00 0%, #ffffff99 50%, #ffffff00 100%);
+                                }
+                            }
                         }
                     }
                     TouchArea { mouse-cursor: pointer; clicked => { root.select(i); } }
