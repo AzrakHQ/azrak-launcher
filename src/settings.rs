@@ -366,7 +366,7 @@ impl App {
                 None => (String::new(), 0),
             }),
             "DOWNLOADS" => ("How games are downloaded and shared", {
-                let active = self.downloads.snapshot().iter().filter(|j| matches!(j.state, crate::downloads::State::Checking | crate::downloads::State::Downloading)).count();
+                let active = self.downloads.snapshot().iter().filter(|j| j.state.active()).count();
                 if active > 0 { (format!("{active} active"), 1) } else { (String::new(), 0) }
             }),
             "UPDATES" => ("The launcher and its emulators", {
@@ -434,7 +434,7 @@ impl App {
 
     /// The glass behind the sheet: the art behind it, blurred (none over the dimmed Library).
     pub fn push_settings_glass(&mut self) {
-        let glass = if self.view == 0 { let key = self.bg_key.clone(); self.frost_of(&key) } else { None };
+        let glass = self.bg_glass();
         let ui = self.ui();
         ui.set_settings_has_glass(glass.is_some());
         ui.set_settings_glass(glass.unwrap_or_default());
@@ -534,7 +534,8 @@ impl App {
             let row = &self.settings_rows[i];
             // Hints wrap at about 95 characters (the column's width at 17 px), or about 55 beside
             // a long value (a folder takes up to half the row).
-            let per_line = if row.kind == 1 || row.value.chars().count() > 24 { 55 } else { 95 };
+            // Text grows faster than the column on small windows (r), so fewer fit on a line.
+            let per_line = (if row.kind == 1 || row.value.chars().count() > 24 { 55.0 } else { 95.0 } / r).max(10.0) as usize;
             let hint_lines = row.hint.chars().count().div_ceil(per_line) as f32;
             let h = 32.0 + 26.0 * r + if hint_lines > 0.0 { 5.0 + hint_lines * 22.0 * r } else { 0.0 } + if self.edit_index == i as i32 { 60.0 * r } else { 0.0 };
             y += f32::max(h, 84.0) + 10.0;
@@ -542,7 +543,7 @@ impl App {
         // The rows' window on the sheet (as tall as the window allows): under the title, above
         // the button hints. A little room to spare at the end, as the heights are estimates.
         let (_, h) = self.logical_size();
-        let view = f32::min(960.0, h - 40.0) - 48.0 - (42.0 + 8.0 + 24.0) * r - 26.0 - 74.0;
+        let view = f32::min(960.0, h - 40.0) - 48.0 - (42.0 + 24.0) * r - 8.0 - 26.0 - 26.0 * r - 48.0;
         let max = (y + 24.0 - view).max(0.0);
         self.ui().set_settings_y(-(target - view * 0.35).clamp(0.0, max) * self.scale);
     }

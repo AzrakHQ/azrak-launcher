@@ -562,8 +562,23 @@ impl App {
         self.bg_changed();
     }
 
-    /// The glass over the art follows it at once.
+    /// The glass over the art follows it: at once when its blur is made already, otherwise once
+    /// the art has stayed a moment (moving along a row doesn't blur every tile's art on the way).
     pub fn bg_changed(&mut self) {
+        let key = self.bg_key.clone();
+        if self.view != 0 || self.frost.iter().any(|(k, _)| *k == key) { return self.push_glass(); }
+        slint::Timer::single_shot(std::time::Duration::from_millis(400), move || with_app(move |app| {
+            if app.bg_key == key { app.push_glass(); }
+        }));
+    }
+
+    /// The glass over the art: the art behind it, blurred (none over the dimmed Library).
+    pub fn bg_glass(&mut self) -> Option<Image> {
+        if self.view == 0 { let key = self.bg_key.clone(); self.frost_of(&key) } else { None }
+    }
+
+    /// Every glass on screen: the top bar's, and Settings' while it's open.
+    fn push_glass(&mut self) {
         self.push_bar_glass();
         if self.overlay == Overlay::Settings { self.push_settings_glass(); }
     }

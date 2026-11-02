@@ -18,10 +18,9 @@ component TransferButton inherits Rectangle {
     touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 
-// Frosted glass for text over key art: a blurred copy of the art (`glass`, drawn at the art's
-// size `glass-w`×`glass-h` from the page's corner) lined up behind it, a dark tint so the text
-// reads, and a light along the top edge.
-// Frosted glass, as a pill: the art behind it, blurred, under a tint (Downloads page, top bar).
+// Frosted glass, as a pill (Downloads page, top bar): a blurred copy of the art (`glass`, drawn
+// at the art's size `glass-w`×`glass-h` from the page's corner) lined up behind it, a tint so the
+// text reads, and a light along the top edge.
 export component Capsule inherits Rectangle {
     in property <image> glass;
     in property <bool> has-glass;
@@ -228,8 +227,8 @@ export component DownloadsPage inherits Rectangle {
         Rectangle { height: (30px * S.k); }
         HorizontalLayout {
             width: (780px * S.k); spacing: (8px * S.k); alignment: start;
-            // A fixed list (only the widths): built from the download's data, it was rebuilt on
-            // every update, and a rebuilt bar can't glide.
+            // A fixed list (only the widths): one built from the download's data was rebuilt on
+            // every update, which restarted the light sweeping across it.
             for stretch[i] in [6, 3, 1]: VerticalLayout {
                 property <string> label: i == 0 ? root.s.dl-label : i == 1 ? root.s.inst-label : "Play";
                 property <float> frac: i == 0 ? root.s.dl-frac : i == 1 ? root.s.inst-frac : root.s.ready ? 1.0 : 0.0;
@@ -612,7 +611,7 @@ export component DownloadPanel inherits Rectangle {
             HorizontalLayout {
                 height: (40px * S.t); spacing: (16px * S.k);
                 if root.state == 1: Check {
-                    y: (7px * S.k); state: root.all-state;
+                    y: (parent.height - self.height) / 2; state: root.all-state;
                     TouchArea { mouse-cursor: pointer; clicked => { root.toggle(-1); } }
                 }
                 Text { text: "Files"; font-size: (22px * S.t); font-weight: 600; color: Theme.text; vertical-alignment: center; }
@@ -662,7 +661,7 @@ export component DownloadPanel inherits Rectangle {
                     HorizontalLayout {
                         spacing: (12px * S.k); height: (40px * S.t); alignment: start;
                         Image {
-                            source: Icons.spinner; colorize: #8dbaff; width: (20px * S.k); height: (20px * S.k); y: (10px * S.k);
+                            source: Icons.spinner; colorize: #8dbaff; width: (20px * S.k); height: (20px * S.k); y: (parent.height - self.height) / 2;
                             transform-rotation: animation-tick() / 2.5ms * 1deg;
                         }
                         Text { text: "Getting the file list from other players…"; font-size: (17px * S.t); color: Theme.text2; vertical-alignment: center; }

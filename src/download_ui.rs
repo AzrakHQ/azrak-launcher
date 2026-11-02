@@ -321,7 +321,7 @@ impl App {
                 }
                 return;
             }
-            "vpn" => { self.open_settings(); return; }
+            "vpn" => { self.open_setting(crate::settings::SId::VpnOnly); return; }
             "delete" => return self.open_delete(key),
             "discard" => {
                 if let Err(error) = self.downloads.discard(key) { self.toast("Transfer unavailable", &error.to_string(), 2); }
@@ -681,7 +681,7 @@ impl App {
         // Seen as it happens on the Downloads page: nothing to ask about after.
         if self.overlay == Overlay::Downloads { self.ring_seen.extend(needs.iter().cloned()); }
         let unseen: Vec<&Job> = jobs.iter().filter(|job| needs.contains(&job.key) && !self.ring_seen.contains(&job.key)).collect();
-        let active: Vec<&Job> = jobs.iter().filter(|job| matches!(job.state, State::Checking | State::Downloading)).collect();
+        let active: Vec<&Job> = jobs.iter().filter(|job| job.state.active()).collect();
         let (kind, label, frac) = if let Some(job) = unseen.first() {
             let what = if job.state == State::Failed { "Download stopped" } else { "Couldn't install" };
             (3, if unseen.len() > 1 { format!("{} need you", unseen.len()) } else { what.to_string() }, job.progress())
@@ -693,6 +693,8 @@ impl App {
             let pct = pct(frac);
             let label = if active.len() > 1 { format!("{} downloads · {pct}%", active.len()) }
                 else if verifying { format!("Verifying · {pct}%") }
+                // Just pressed Download: being looked up.
+                else if active[0].state == State::Resolving { "Getting the file list".to_string() }
                 else { format!("{} · {pct}%", short_name(&active[0].name)) };
             (if verifying { 4 } else { 1 }, label, frac)
         } else if let Some(record) = installs.iter().find(|r| r.state.active()) {
@@ -716,7 +718,7 @@ impl App {
     /// The top bar's glass: the art behind it, blurred (none over the dimmed Library). Also when
     /// the art changes, so it never shows the one before.
     pub fn push_bar_glass(&mut self) {
-        let glass = if self.view == 0 { let key = self.bg_key.clone(); self.frost_of(&key) } else { None };
+        let glass = self.bg_glass();
         let ui = self.ui();
         ui.set_bar_has_glass(glass.is_some());
         ui.set_bar_glass(glass.unwrap_or_default());

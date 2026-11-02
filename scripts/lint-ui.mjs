@@ -46,7 +46,9 @@ export function parse(text) {
       const head = statement();
       // The element's type: the last name before the brace (after `:=`, `if …:`, `for …:`).
       const m = head.match(/([A-Za-z_][\w-]*)\s*$/);
-      const el = { type: m ? m[1] : '?', head, props: {}, children: [], line: startLine, parent: stack.at(-1) };
+      // `animate x, y { … }` is an animation, not an element named after its last property.
+      const type = /^animate\b/.test(head) ? 'animate' : m ? m[1] : '?';
+      const el = { type, head, props: {}, children: [], line: startLine, parent: stack.at(-1) };
       stack.at(-1).children.push(el);
       stack.push(el);
       i++; start = i; startLine = line;
@@ -94,21 +96,25 @@ export function lint(text) {
       if (font) {
         // The box it gets: its own fixed height, else the nearest fixed one around it, through
         // containers that give it their whole height (not a column that shares it out).
-        let box = null, from = el;
+        // Padding (top and bottom) of a container: less room inside it.
+        const vpad = e => {
+          const px = name => length(e.props[name]?.value)?.px ?? 0;
+          return (e.props['padding-top'] ? px('padding-top') : px('padding')) + (e.props['padding-bottom'] ? px('padding-bottom') : px('padding'));
+        };
+        let box = null, between = 0;
         if (el.props.height) box = { len: length(el.props.height.value), el };
         for (let p = el.parent; !box && p && p.type !== 'root'; p = p.parent) {
           if (p.props.height) { box = { len: length(p.props.height.value), el: p }; break; }
-          const stacks = p.type === 'VerticalLayout' && p.children.length > 1;
+          // `animate` blocks aren't elements.
+          const stacks = p.type === 'VerticalLayout' && p.children.filter(c => c.type !== 'animate').length > 1;
           if (stacks) break;
-          from = p;
+          between += vpad(p);
         }
         if (box?.len && !(wraps && box.el !== el)) {
           const ratio = font.scale === 't' && box.len.scale === 'k' ? T_OVER_K : 1;
           const need = font.px * LINE * ratio;
-          // A box's own padding (top and bottom) leaves less room inside it.
-          const pad = name => length(box.el.props[name]?.value)?.px ?? 0;
-          const room = box.el === el ? box.len.px
-            : box.len.px - (box.el.props['padding-top'] ? pad('padding-top') : pad('padding')) - (box.el.props['padding-bottom'] ? pad('padding-bottom') : pad('padding'));
+          // The box's own padding, and any between it and the text, leave less room.
+          const room = box.el === el ? box.len.px : box.len.px - vpad(box.el) - between;
           if (need > room + 0.5 && !allowed(el.line) && !allowed(el.props['font-size'].line)) {
             problems.push({
               line: el.props['font-size'].line,
