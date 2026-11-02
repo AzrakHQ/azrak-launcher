@@ -1075,136 +1075,151 @@ export component AppWindow inherits Window {
                         }
                     }
                 }
-                // The download ring: what's downloading or installing, or what needs you; it opens
-                // Downloads (4). On the same glass as the Downloads page. Gone when nothing is
-                // happening: the Downloads icon is there then.
-                if root.ring-kind > 0: ring := Rectangle {
-                    property <bool> f: root.zone == Zone.top && root.idx == 4 && root.overlay == 0;
-                    property <color> tint: root.ring-kind == 2 ? (f ? #7c5cff : #c4b5fd) : root.ring-kind == 3 ? (f ? #d98a00 : #ffb547) : (f ? Theme.accent : #8dbaff);
+                // One glass pill (on the same glass as the Downloads page): Downloads (4), Settings
+                // (3), the battery, the clock. Downloads is the ring while something's happening
+                // (what's downloading or installing, or what needs you), its icon otherwise; either
+                // way in the same place.
+                bar := Rectangle {
+                    property <color> tint: root.ring-kind == 2 ? #c4b5fd : root.ring-kind == 3 ? #ffb547 : #8dbaff;
                     y: (24px * S.k);
                     height: (56px * S.k);
-                    width: ring-row.preferred-width;
+                    width: bar-row.preferred-width;
                     border-radius: self.height / 2;
                     clip: true;
                     drop-shadow-blur: (24px * S.k);
                     drop-shadow-color: #0000004d;
-                    background: f ? #f5f7fb : root.bar-has-glass ? transparent : #0e1424d9;
-                    if root.bar-has-glass && !f: Image {
-                        x: -ring.absolute-position.x; y: -ring.absolute-position.y;
+                    background: root.bar-has-glass ? transparent : #0e1424d9;
+                    if root.bar-has-glass: Image {
+                        x: -bar.absolute-position.x; y: -bar.absolute-position.y;
                         width: root.width; height: root.height;
                         source: root.bar-glass; image-fit: cover;
                     }
-                    if !f: Rectangle {
-                        border-radius: parent.border-radius;
-                        background: ta-ring.has-hover ? #2a3550b3 : #161c2e6b;
-                        border-width: 1px; border-color: #ffffff29;
-                        animate background { duration: 120ms; }
-                    }
-                    if !f: Rectangle { x: parent.height / 2; y: 1px; width: parent.width - parent.height; height: 1px; background: #ffffff33; }
-                    ring-row := HorizontalLayout {
-                        padding-left: (14px * S.k); padding-right: (22px * S.k);
-                        spacing: (12px * S.k);
-                        Rectangle {
-                            width: (28px * S.k); height: self.width; y: (14px * S.k);
-                            Path {
-                                width: parent.width; height: parent.height;
-                                viewbox-width: 36; viewbox-height: 36;
-                                commands: "M 18 3 A 15 15 0 0 1 18 33 A 15 15 0 0 1 18 3";
-                                stroke: f ? #05070f24 : #ffffff2e;
-                                stroke-width: (3.2px * S.k);
-                            }
-                            Path {
-                                width: parent.width; height: parent.height;
-                                viewbox-width: 36; viewbox-height: 36;
-                                commands: root.ring-path;
-                                stroke: ring.tint;
-                                stroke-width: (3.2px * S.k);
-                                stroke-line-cap: round;
-                            }
-                        }
-                        Text {
-                            text: root.ring-label;
-                            font-size: (19px * S.k); font-weight: 600;
-                            color: f ? #05070f : #f5f7fb;
-                            vertical-alignment: center;
-                        }
-                    }
-                    ta-ring := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, 4); } }
-                }
-                // A quarter bigger than a desktop app's: read from the sofa. Downloads (4) always
-                // sits before Settings (3): the ring above while something's happening, this icon
-                // in the same place otherwise. No search button: the Library has its own.
-                for ic in root.ring-kind > 0 ? [{ icon: Icons.gear, id: 3 }] : [{ icon: Icons.disk, id: 4 }, { icon: Icons.gear, id: 3 }]: Rectangle {
-                    property <int> id: ic.id;
-                    width: (64px * S.k);
-                    height: (64px * S.k);
-                    y: (20px * S.k);
-                    border-radius: (32px * S.k);
-                    property <bool> f: root.zone == Zone.top && root.idx == self.id && root.overlay == 0;
-                    background: f ? #ffffff : ta.has-hover ? #ffffff14 : transparent;
-                    Image { source: ic.icon; colorize: f ? #0a0d18 : Theme.text2; width: (32px * S.k); height: (32px * S.k); }
-                    ta := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, parent.id); } }
-                }
-                // The battery: green, amber at 20% or less, red at 10% or less (unless charging).
-                if root.battery-shown: bat := HorizontalLayout {
-                    property <color> level: root.battery-plugged ? Theme.ok
-                        : root.battery-percent <= 10 ? Theme.danger : root.battery-percent <= 20 ? Theme.warn : Theme.text;
-                    y: (20px * S.k);
-                    height: (64px * S.k);
-                    spacing: (6px * S.k);
-                    alignment: center;
-                    // Upright, like a phone's: the cap on top, filled from the bottom.
                     Rectangle {
-                        width: (18px * S.k);
-                        height: (30px * S.k);
-                        y: (17px * S.k);
-                        Rectangle {
-                            x: (6px * S.k);
-                            y: 0;
-                            width: (6px * S.k);
-                            height: (3px * S.k);
-                            border-radius: (1px * S.k);
-                            background: bat.level.with-alpha(0.85);
+                        border-radius: parent.border-radius;
+                        background: #161c2e6b;
+                        border-width: 1px; border-color: #ffffff29;
+                    }
+                    Rectangle { x: parent.height / 2; y: 1px; width: parent.width - parent.height; height: 1px; background: #ffffff33; }
+                    bar-row := HorizontalLayout {
+                        padding: (6px * S.k);
+                        spacing: 0;
+                        // Downloads.
+                        dl := Rectangle {
+                            property <bool> f: root.zone == Zone.top && root.idx == 4 && root.overlay == 0;
+                            width: dl-row.preferred-width;
+                            border-radius: self.height / 2;
+                            background: self.f ? #f5f7fb : ta-dl.has-hover ? #ffffff1a : transparent;
+                            animate background { duration: 120ms; }
+                            dl-row := HorizontalLayout {
+                                padding-left: root.ring-kind > 0 ? (10px * S.k) : (12px * S.k);
+                                padding-right: root.ring-kind > 0 ? (18px * S.k) : (12px * S.k);
+                                spacing: (12px * S.k);
+                                if root.ring-kind > 0: Rectangle {
+                                    width: (28px * S.k); height: self.width; y: (parent.height - self.height) / 2;
+                                    Path {
+                                        width: parent.width; height: parent.height;
+                                        viewbox-width: 36; viewbox-height: 36;
+                                        commands: "M 18 3 A 15 15 0 0 1 18 33 A 15 15 0 0 1 18 3";
+                                        stroke: dl.f ? #05070f24 : #ffffff2e;
+                                        stroke-width: (3.2px * S.k);
+                                    }
+                                    Path {
+                                        width: parent.width; height: parent.height;
+                                        viewbox-width: 36; viewbox-height: 36;
+                                        commands: root.ring-path;
+                                        stroke: dl.f ? (root.ring-kind == 2 ? #7c5cff : root.ring-kind == 3 ? #d98a00 : Theme.accent) : bar.tint;
+                                        stroke-width: (3.2px * S.k);
+                                        stroke-line-cap: round;
+                                    }
+                                }
+                                if root.ring-kind > 0: Text {
+                                    text: root.ring-label;
+                                    font-size: (19px * S.k); font-weight: 600;
+                                    color: dl.f ? #05070f : #f5f7fb;
+                                    vertical-alignment: center;
+                                }
+                                if root.ring-kind == 0: Image {
+                                    y: (parent.height - self.height) / 2;
+                                    source: Icons.disk; colorize: dl.f ? #0a0d18 : Theme.text2;
+                                    width: (24px * S.k); height: self.width;
+                                }
+                            }
+                            ta-dl := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, 4); } }
                         }
-                        Rectangle {
-                            y: (3px * S.k);
-                            height: parent.height - (3px * S.k);
-                            border-radius: (4px * S.k);
-                            border-width: (2px * S.k);
-                            border-color: bat.level.with-alpha(0.85);
+                        Rectangle { width: (13px * S.k); Rectangle { width: 1px; height: (24px * S.k); background: #ffffff29; } }
+                        // Settings.
+                        gear := Rectangle {
+                            property <bool> f: root.zone == Zone.top && root.idx == 3 && root.overlay == 0;
+                            width: self.height;
+                            border-radius: self.height / 2;
+                            background: self.f ? #f5f7fb : ta-gear.has-hover ? #ffffff1a : transparent;
+                            animate background { duration: 120ms; }
+                            Image { source: Icons.gear; colorize: gear.f ? #0a0d18 : Theme.text2; width: (24px * S.k); height: self.width; }
+                            ta-gear := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, 3); } }
+                        }
+                        Rectangle { width: (13px * S.k); Rectangle { width: 1px; height: (24px * S.k); background: #ffffff29; } }
+                        // The battery: green, amber at 20% or less, red at 10% or less (unless charging).
+                        if root.battery-shown: bat := HorizontalLayout {
+                            property <color> level: root.battery-plugged ? Theme.ok
+                                : root.battery-percent <= 10 ? Theme.danger : root.battery-percent <= 20 ? Theme.warn : Theme.text;
+                            padding-left: (12px * S.k);
+                            padding-right: (12px * S.k);
+                            spacing: (6px * S.k);
+                            alignment: center;
+                            // Upright, like a phone's: the cap on top, filled from the bottom.
                             Rectangle {
-                                x: (3px * S.k);
-                                width: parent.width - (6px * S.k);
-                                height: max(2px * S.k, (parent.height - (6px * S.k)) * root.battery-percent / 100);
-                                y: parent.height - (3px * S.k) - self.height;
-                                border-radius: (2px * S.k);
-                                background: bat.level;
-                                animate height { duration: 400ms; }
-                            }
-                            // Charging: a white bolt inside, which shows on the fill and on the
-                            // empty part alike (a dark one vanished when the battery was low).
-                            if root.battery-plugged: Image {
-                                source: Icons.bolt;
-                                colorize: #ffffff;
                                 width: (14px * S.k);
-                                height: self.width;
+                                height: (24px * S.k);
+                                y: (parent.height - self.height) / 2;
+                                Rectangle {
+                                    x: (4.5px * S.k); y: 0;
+                                    width: (5px * S.k); height: (3px * S.k);
+                                    border-radius: (1px * S.k);
+                                    background: bat.level.with-alpha(0.85);
+                                }
+                                Rectangle {
+                                    y: (3px * S.k);
+                                    height: parent.height - (3px * S.k);
+                                    border-radius: (3px * S.k);
+                                    border-width: (2px * S.k);
+                                    border-color: bat.level.with-alpha(0.85);
+                                    Rectangle {
+                                        x: (3px * S.k);
+                                        width: parent.width - (6px * S.k);
+                                        height: max(2px * S.k, (parent.height - (6px * S.k)) * root.battery-percent / 100);
+                                        y: parent.height - (3px * S.k) - self.height;
+                                        border-radius: (1.5px * S.k);
+                                        background: bat.level;
+                                        animate height { duration: 400ms; }
+                                    }
+                                    // Charging: a white bolt inside, which shows on the fill and on the
+                                    // empty part alike.
+                                    if root.battery-plugged: Image {
+                                        source: Icons.bolt;
+                                        colorize: #ffffff;
+                                        width: (11px * S.k);
+                                        height: self.width;
+                                    }
+                                }
+                            }
+                            Text {
+                                text: root.battery-percent + "%";
+                                font-size: (19px * S.k); font-weight: 600;
+                                color: bat.level == Theme.text ? Theme.text2 : bat.level;
+                                vertical-alignment: center;
                             }
                         }
+                        if root.battery-shown: Rectangle { width: (13px * S.k); Rectangle { width: 1px; height: (24px * S.k); background: #ffffff29; } }
+                        Text {
+                            text: root.clock;
+                            font-size: (20px * S.k); font-weight: 600;
+                            color: Theme.text;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            min-width: (84px * S.k);
+                        }
+                        Rectangle { width: (12px * S.k); }
                     }
-                    Text {
-                        text: root.battery-percent + "%";
-                        font-size: (24px * S.k);
-                        color: bat.level == Theme.text ? Theme.text2 : bat.level;
-                        vertical-alignment: center;
-                    }
-                }
-                Text {
-                    text: root.clock;
-                    font-size: (32px * S.k);
-                    color: Theme.text;
-                    vertical-alignment: center;
-                    min-width: (80px * S.k);
-                    horizontal-alignment: right;
                 }
             }
         }
