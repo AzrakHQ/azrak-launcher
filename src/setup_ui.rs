@@ -142,7 +142,9 @@ impl App {
         let failed = |title: &str, message: &str| (title.to_string(), message.to_string());
         // No problem kind: nothing could be looked up at all (too many downloads, say).
         let error = if !setup.error.is_empty() { Some((setup.error.clone(), None)) }
-            else { job.as_ref().filter(|job| job.state == State::Failed && setup.entries.is_empty()).map(|job| (job.error.clone(), Some(job.problem))) };
+            // Failed, or waiting to be chosen but its file list couldn't be read back.
+            else { job.as_ref().filter(|job| setup.entries.is_empty() && (job.state == State::Failed || (job.state == State::Ready && !job.error.is_empty())))
+                .map(|job| (job.error.clone(), Some(job.problem))) };
         if let Some((error, problem)) = error {
             let retry = matches!(problem, Some(Problem::NoAnswer | Problem::Other));
             let (title, message) = if problem.is_none() {
@@ -156,7 +158,7 @@ impl App {
                 } else {
                     failed("The file list didn't arrive", &error)
                 }
-            } else if error.starts_with("Azrak can't install") {
+            } else if problem == Some(Problem::Unsupported) {
                 view.go_label = "Can't install this release".into();
                 failed("This release can't be installed", &error)
             } else {
@@ -402,7 +404,8 @@ impl App {
         let Some(key) = self.setup.as_ref().and_then(|setup| setup.key.clone()) else { return };
         if view.state == 2 {
             if let Some(setup) = self.setup.as_mut() { setup.moved = false; }
-            let _ = self.downloads.action(&key, "retry");
+            // Waiting to be chosen: its file list is read again (push_setup asks); else look again.
+            if self.downloads.job(&key).is_some_and(|job| job.state != State::Ready) { let _ = self.downloads.action(&key, "retry"); }
             audio::play(Sound::Select);
             self.push_setup();
             return;

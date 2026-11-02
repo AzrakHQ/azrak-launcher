@@ -145,8 +145,9 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             // Sharing goes on and off; Delete (which asks what to delete) sits beside it.
             let share = if sharing { ("stop_seed", "Stop sharing", "unshare") } else { ("share", "Share again", "share") };
             let remove = ("delete", "Delete…", "trash");
-            // Why it isn't sharing (its files changed, say); an install problem says more below.
-            if !sharing { d.note = job.error.clone(); }
+            // Why it isn't sharing (its files changed, say), or a delete that didn't happen; an
+            // install problem says more below.
+            d.note = job.error.clone();
             let failed = match install {
                 // The latest attempt's reason (one that couldn't even start is newer than the record).
                 Some(record) if record.state == Install::Failed => Some(failure.cloned().unwrap_or_else(|| record.error.clone())),
@@ -553,14 +554,14 @@ impl App {
             }
             // First, so the install queue never reinstalls it while (or after) it's deleted.
             let install_to = self.downloads.job(&key).and_then(|job| job.install_to);
-            let _ = self.downloads.set_install_to(&key, None);
+            self.downloads.set_install_to(&key, None);
             match self.installer.uninstall(&key) {
                 Ok(_) => {
                     self.install_states.remove(&key);
                     self.rescan_library();
                 }
                 Err(error) => {
-                    let _ = self.downloads.set_install_to(&key, install_to);
+                    self.downloads.set_install_to(&key, install_to);
                     self.toast("Couldn't delete the game", &format!("{error:#}"), 2);
                     return self.push_downloads();
                 }
@@ -576,7 +577,7 @@ impl App {
             Ok(()) => {
                 // Gone from the install queue at once (the worker removes it a moment later).
                 if matches!(choice, "download" | "forget") {
-                    let _ = self.downloads.set_install_to(&key, None);
+                    self.downloads.set_install_to(&key, None);
                     // An install that failed goes with it: downloaded again, it installs afresh.
                     let _ = self.installer.forget(&key);
                     self.install_failures.remove(&key);

@@ -89,7 +89,7 @@ impl App {
         if let Err(error) = self.start_install(&job.key, destination) {
             self.install_failures.insert(job.key.clone(), format!("{error:#}"));
             // It waits for Install by hand from now on (not tried again at every start).
-            let _ = self.downloads.set_install_to(&job.key, None);
+            self.downloads.set_install_to(&job.key, None);
             self.toast_action("Couldn't install", &job.name, 2, "downloads", "See why");
         } else {
             self.push_installs();

@@ -30,8 +30,10 @@ pub enum Problem {
     Other,
     /// Nobody answered in time: nobody shares it now, or this PC is offline.
     NoAnswer,
-    /// The release itself: it can't be installed, or its torrent is unsafe.
+    /// The release itself: its torrent is unsafe, or holds nothing it can download.
     Release,
+    /// The launcher can't install this kind of release.
+    Unsupported,
 }
 
 /// Marks a lookup error as the release's own problem; reads as the error itself.
@@ -41,6 +43,22 @@ impl std::fmt::Display for ReleaseProblem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
 }
 impl std::error::Error for ReleaseProblem {}
+
+/// The release can't be installed by the launcher (its kind, not its torrent).
+#[derive(Debug)]
+struct Unsupported(String);
+impl std::fmt::Display for Unsupported {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
+}
+impl std::error::Error for Unsupported {}
+
+/// A finished download's files aren't all there as they were.
+#[derive(Debug)]
+struct FilesChanged;
+impl std::fmt::Display for FilesChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(FILES_CHANGED) }
+}
+impl std::error::Error for FilesChanged {}
 
 #[derive(Debug)]
 struct NoAnswer;
@@ -126,6 +144,10 @@ impl Job {
 #[derive(Default, Serialize, Deserialize)]
 struct Manifest { schema: u32, jobs: Vec<Job> }
 
+/// The manifest as saved, without copying the jobs.
+#[derive(Serialize)]
+struct ManifestRef<'a> { schema: u32, jobs: &'a [Job] }
+
 #[derive(Clone)]
 struct Policy {
     local_only: bool,
@@ -195,14 +217,21 @@ impl Manager {
         self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key).map(light)
     }
 
-    /// The file list of a download whose files are being chosen.
     /// The file list of a download whose files are being chosen. Not saved (it can be long): the
-    /// first time after a start it's read back from the saved torrent.
+    /// first time after a start it's read back from the saved torrent (outside the lock, which
+    /// the worker uses every second).
     pub fn entries(&self, key: &str) -> Vec<Entry> {
+        let job = {
+            let mut jobs = self.jobs.lock().unwrap();
+            let Some(job) = jobs.iter_mut().find(|job| job.key == key) else { return vec![] };
+            if job.state != State::Ready || !job.entries.is_empty() { return job.entries.clone(); }
+            light(job)
+        };
+        let read = read_entries(&self.store, &job);
         let mut jobs = self.jobs.lock().unwrap();
         let Some(job) = jobs.iter_mut().find(|job| job.key == key) else { return vec![] };
         if job.state == State::Ready && job.entries.is_empty() {
-            restore_entries(&self.store, job);
+            restore_entries(&self.store, job, read);
             let _ = self.tx.try_send(Command::Save);
         }
         job.entries.clone()
@@ -255,11 +284,10 @@ impl Manager {
 
     /// Where it installs by itself (`None`: it doesn't, its game is being deleted). Takes effect
     /// at once, so the install queue can't pick it up in between; the worker saves it.
-    pub fn set_install_to(&self, key: &str, to: Option<PathBuf>) -> Result<()> {
+    pub fn set_install_to(&self, key: &str, to: Option<PathBuf>) {
         if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key) { job.install_to = to; }
         // Saved by the worker now, or with its next save (it saves on quitting too).
         let _ = self.tx.try_send(Command::Save);
-        Ok(())
     }
 
     /// Forget a download that never started (the player closed the Download & install panel):
@@ -287,7 +315,12 @@ impl Manager {
             "pause" if matches!(job.state, State::Checking | State::Downloading) => Command::Pause(key.into()),
             "cancel" if !matches!(job.state, State::Complete | State::Cancelled) => Command::Cancel(key.into()),
             "remove" if !job.state.active() => Command::Remove(key.into()),
-            "delete" if !job.state.active() => Command::Delete(key.into()),
+            "delete" if !job.state.active() => {
+                // Refused here, so the player hears it (the worker checks again before deleting).
+                let own = job.folder.file_name().is_some_and(|name| name == format!("torrent-{key}").as_str()) && check_owned(&job.folder, key).is_ok();
+                ensure!(own || !job.folder.exists(), "{} isn't this download's own folder, so it's left alone", job.folder.display());
+                Command::Delete(key.into())
+            }
             "remove" | "delete" => bail!("It's downloading; cancel it first"),
             "stop_seed" if job.state == State::Complete && (job.seeding || job.verifying) => Command::StopSeed(key.into()),
             "share" if job.state == State::Complete && !job.seeding && !job.verifying => Command::Seed(key.into()),
@@ -529,24 +562,31 @@ fn shown(error: &anyhow::Error) -> String {
     URL.replace_all(&error.to_string(), "[network URL]").chars().take(500).collect()
 }
 
-/// The file list of a download waiting for its files to be chosen, from its saved torrent. One
-/// looked up by an older launcher gets its files chosen like a new one (Windows programs left
-/// out); one whose list can't be read is looked up again on Retry.
-fn restore_entries(store: &Path, job: &mut Job) {
-    let read = || -> Result<Vec<Entry>> {
-        let (_, files, padding) = inspect_metadata(&read_torrent(store, &job.key)?, &job.key, None)?;
-        Ok(entries_of(job.platform, files, padding))
-    };
+/// A download's file list, from its saved torrent.
+fn read_entries(store: &Path, job: &Job) -> Result<Vec<Entry>> {
+    let (_, files, padding) = inspect_metadata(&read_torrent(store, &job.key)?, &job.key, None)?;
+    Ok(entries_of(job.platform, files, padding))
+}
+
+/// The file list of a download waiting for its files to be chosen, as read back. One looked up
+/// by an older launcher gets its files chosen like a new one (Windows programs left out). One
+/// whose torrent is gone or bad is looked up again on Retry; one that just couldn't be read
+/// stays to be chosen, and is read again when next wanted.
+fn restore_entries(store: &Path, job: &mut Job, read: Result<Vec<Entry>>) {
     let torrent = store.join(format!("{}.torrent", job.key));
-    let error = match read() {
+    let error = match read {
         Ok(entries) if entries.iter().any(|entry| !entry.blocked) => {
             if job.selected.is_none() { job.selected = Some((0..entries.len()).filter(|&i| !entries[i].blocked).collect()); }
             job.entries = entries;
+            job.error.clear();
             return;
         }
-        // Gone, or not a release it can download: Retry looks it up again.
         _ if !torrent.exists() => "Its file list is missing. Retry looks it up again.".to_string(),
-        Err(error) if error.downcast_ref::<std::io::Error>().is_some() => format!("Its file list couldn't be read ({error}). Retry when its drive is back."),
+        Err(error) if error.downcast_ref::<std::io::Error>().is_some() => {
+            job.error = format!("Its file list couldn't be read ({error}).");
+            job.problem = Problem::Other;
+            return;
+        }
         _ => {
             let _ = std::fs::remove_file(&torrent);
             "Its file list couldn't be read. Retry looks it up again.".into()
@@ -609,7 +649,7 @@ fn payload_present(bytes: &[u8], folder: &Path, selected: Option<&[usize]>) -> R
     let chosen = chosen(selected);
     for (_, file) in info.iter_file_details().enumerate().filter(|(i, file)| chosen(*i) && !file.attrs().padding) {
         let found = std::fs::symlink_metadata(folder.join(file.filename.to_pathbuf())).ok();
-        ensure!(found.is_some_and(|m| m.is_file() && m.len() == file.len), FILES_CHANGED);
+        if !found.is_some_and(|m| m.is_file() && m.len() == file.len) { return Err(FilesChanged.into()); }
     }
     Ok(())
 }
@@ -719,7 +759,7 @@ impl Worker {
         if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key) { f(job); }
     }
     fn persist(&self) {
-        let bytes = serde_json::to_vec_pretty(&Manifest { schema: 1, jobs: self.jobs.lock().unwrap().clone() });
+        let bytes = serde_json::to_vec_pretty(&ManifestRef { schema: 1, jobs: &self.jobs.lock().unwrap() });
         if let Err(error) = bytes.context("Cannot serialize transfers").and_then(|bytes| secure_write(&self.store.join("jobs.json"), &bytes)) {
             // Local path/IO errors only: never log magnets or tracker credentials.
             crate::log!("Could not save transfer state: {error}");
@@ -856,7 +896,12 @@ impl Worker {
             Err(_) => Err(anyhow::anyhow!("Metadata lookup task stopped unexpectedly; retry")),
         };
         if let Err(error) = resolved.and_then(|resolved| self.resolved(resolved)) {
-            let problem = if error.is::<NoAnswer>() { Problem::NoAnswer } else if error.is::<ReleaseProblem>() { Problem::Release } else { Problem::Other };
+            let problem = match error.downcast_ref::<ReleaseProblem>() {
+                Some(release) if release.0.is::<Unsupported>() => Problem::Unsupported,
+                Some(_) => Problem::Release,
+                None if error.is::<NoAnswer>() => Problem::NoAnswer,
+                None => Problem::Other,
+            };
             self.fail_as(&key, error, problem);
         }
     }
@@ -868,7 +913,7 @@ impl Worker {
             let (total, files, padding) = inspect_metadata(&resolved.bytes, &job.key, None)?;
             // Nothing is downloaded yet: a release the launcher couldn't install stops here.
             if let Some(why) = job.platform.and_then(|platform| crate::package::unsupported(platform, &files.iter().zip(&padding).filter(|(_, pad)| !**pad).map(|(file, _)| file.clone()).collect::<Vec<_>>())) {
-                bail!("Azrak can't install this release: {why}. Nothing was downloaded; choose another release of this game.");
+                return Err(Unsupported(format!("Azrak can't install this release: {why}. Nothing was downloaded; choose another release of this game.")).into());
             }
             let entries = entries_of(job.platform, files, padding);
             ensure!(entries.iter().any(|entry| !entry.blocked), "Nothing in this release can be downloaded: it only holds programs a console game never needs.");
@@ -971,10 +1016,9 @@ impl Worker {
     fn may_seed(&self, key: &str) -> bool { self.policy.seed_after_download || self.job(key).is_some_and(|job| job.shared_by_hand) }
 
     async fn set_seed_after_download(&mut self, enabled: bool) -> Result<()> {
-        // Settings sends it on every press, even when it's already so: nothing changes then.
-        if enabled == self.policy.seed_after_download { return Ok(()); }
-        // Turning the setting off stops every seed, the ones shared by hand too.
-        if !enabled {
+        // Turning the setting off stops every seed, the ones shared by hand too. Settings sends it
+        // on every press: pressed again while off, it only finishes stopping what isn't by hand.
+        if !enabled && self.policy.seed_after_download {
             for job in self.jobs.lock().unwrap().iter_mut() { job.shared_by_hand = false; }
             self.persist();
         }
@@ -984,7 +1028,7 @@ impl Worker {
             return Ok(());
         }
         let keys: Vec<_> = self.handles.iter().filter(|(key, handle)| {
-            handle.stats().finished || self.job(key).is_some_and(|job| job.state == State::Complete)
+            (handle.stats().finished || self.job(key).is_some_and(|job| job.state == State::Complete)) && !self.may_seed(key)
         }).map(|(key, _)| key.clone()).collect();
         let mut first_error = None;
         for key in keys {
@@ -1007,7 +1051,7 @@ impl Worker {
             if let Err(error) = self.seed(&key).await {
                 // Shared by hand, and its files are gone: it waits for Share again (anything
                 // else may pass, and it tries again next time).
-                if error.to_string() == FILES_CHANGED { self.update(&key, |job| job.shared_by_hand = false); }
+                if error.is::<FilesChanged>() { self.update(&key, |job| job.shared_by_hand = false); }
                 self.fail(&key, error);
             }
         }
@@ -1021,7 +1065,7 @@ impl Worker {
         if self.vpn_route().is_err() { self.wait_for_vpn(key); return Ok(()); }
         let bytes = read_torrent(&self.store, key)?;
         // Never create a folder just to find it empty.
-        ensure!(job.folder.is_dir(), FILES_CHANGED);
+        if !job.folder.is_dir() { return Err(FilesChanged.into()); }
         let folder = owned_folder(&job)?;
         inspect_metadata(&bytes, key, Some(&folder))?;
         payload_present(&bytes, &folder, job.selected.as_deref())?;
@@ -1059,7 +1103,7 @@ impl Worker {
                 let _ = self.stop_job(key, State::Complete).await;
                 // Shared by hand: not checked all over again at every start; Share again tries.
                 self.update(key, |job| job.shared_by_hand = false);
-                self.fail(key, anyhow::anyhow!(FILES_CHANGED));
+                self.fail(key, FilesChanged.into());
             }
         }
     }
@@ -1106,8 +1150,8 @@ impl Worker {
         Ok(())
     }
 
-    /// Forget a download that never started, and the empty folder looking it up made.
-    /// Clean up after a discarded download (already out of the list): stop looking it up.
+    /// Clean up after a discarded download (already out of the list): stop looking it up, and
+    /// remove the empty folder looking it up made.
     async fn forget(&mut self, job: Job) -> Result<()> {
         let key = job.key.as_str();
         self.stop_job(key, State::Cancelled).await?;
