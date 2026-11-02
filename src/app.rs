@@ -282,10 +282,14 @@ pub struct App {
     /// device keeps its note as the list around it changes).
     pub setting_notes: HashMap<crate::settings::SId, (String, i32, String)>,
     /// Something about one game (it crashed, it couldn't start), under its buttons on Home and in
-    /// its Game Hub, by `game_key`; true: a problem. See `note_game`.
-    /// Notes on games: (text, a problem, brief). Brief ones last only while that game is on
-    /// screen; the others until it's played again.
-    pub game_notes: HashMap<String, (String, bool, bool)>,
+    /// its Game Hub, by `game_key`, until it's played again; true: a problem. See `note_game`.
+    pub game_notes: HashMap<String, (String, bool)>,
+    /// What was just pressed for the game on screen did (key, text, a problem): over its lasting
+    /// note, and gone once another game is shown. See `note_game_brief`.
+    pub brief_note: Option<(String, String, bool)>,
+    /// The last note made about any game (key, text, a problem), for a page that starts a game
+    /// from elsewhere (Downloads) to show why it couldn't.
+    pub last_game_note: Option<(String, String, bool)>,
     /// A note on the running game's pill in the top bar (Resume couldn't switch to it).
     pub running_note: String,
     /// A line for the Home screen's status that stays until the launcher restarts (AzrakOS was
@@ -393,10 +397,10 @@ thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
 }
 
-/// Run `f` with the app. If the app is busy (re-entrant callback), retry on the next loop turn.
 /// A note's text on one line (an error can carry line breaks).
-fn one_line(text: &str) -> String { text.split_whitespace().collect::<Vec<_>>().join(" ") }
+pub fn one_line(text: &str) -> String { text.split_whitespace().collect::<Vec<_>>().join(" ") }
 
+/// Run `f` with the app. If the app is busy (re-entrant callback), retry on the next loop turn.
 pub fn with_app(f: impl FnOnce(&mut App) + 'static) {
     let f = RefCell::new(Some(f));
     let done = APP.with(|a| match a.try_borrow_mut() {
@@ -610,6 +614,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         edit_index: -1,
         setting_notes: HashMap::new(),
         game_notes: HashMap::new(),
+        brief_note: None,
+        last_game_note: None,
         running_note: String::new(),
         sticky_status: String::new(),
         trailer_key: String::new(),
@@ -2922,6 +2928,7 @@ impl App {
         }
         // A note from the last time (it crashed, it couldn't start) is old news now.
         self.game_notes.remove(&game.id);
+        if self.brief_note.as_ref().is_some_and(|(k, _, _)| *k == game.id) { self.brief_note = None; }
         // PS4 games run on shadPS4, which is installed the first time one is played.
         if game.platform == crate::platform::Platform::Ps4 && !crate::shad::installed() {
             self.shad_install_then_launch(game.id.clone());
@@ -3263,8 +3270,16 @@ impl App {
     /// arrive with Settings closed wait for the next time it's open.
     pub fn note_setting(&mut self, id: crate::settings::SId, text: &str, kind: i32) {
         let label = self.settings_ids.iter().position(|s| *s == id).and_then(|i| self.settings_rows.get(i)).map(|r| r.label.to_string()).unwrap_or_default();
-        self.setting_notes.insert(id, (text.to_string(), kind, label));
-        if self.overlay == Overlay::Settings || self.stack.iter().any(|s| s.0 == Overlay::Settings) {
+        self.note_setting_named(id, &label, text, kind);
+    }
+
+    /// The same, for a row in a list that can change while its result is awaited (a network, a
+    /// device): shown on the row of that name, wherever it is by then.
+    pub fn note_setting_named(&mut self, id: crate::settings::SId, label: &str, text: &str, kind: i32) {
+        self.setting_notes.insert(id, (one_line(text), kind, label.to_string()));
+        // Not while a row is being typed in (new rows would select its text again): the tick shows
+        // it once the edit is done.
+        if self.edit_index < 0 && (self.overlay == Overlay::Settings || self.stack.iter().any(|s| s.0 == Overlay::Settings)) {
             self.refresh_settings();
         }
     }
@@ -3272,15 +3287,18 @@ impl App {
     /// Something about one game under its buttons on Home and in its Game Hub, until it's
     /// played again or another note replaces it. `warn`: a problem (amber, with ⚠).
     pub fn note_game(&mut self, key: &str, text: &str, warn: bool) {
-        self.game_notes.insert(key.to_string(), (one_line(text), warn, false));
+        self.game_notes.insert(key.to_string(), (one_line(text), warn));
+        if self.brief_note.as_ref().is_some_and(|(k, _, _)| k == key) { self.brief_note = None; }
+        self.last_game_note = Some((key.to_string(), one_line(text), warn));
         self.push_game_notes();
     }
 
     /// A note about what was just pressed for a game (a trailer that can't play, a rating saved):
-    /// gone once another game is shown. It never covers a lasting problem (a crash's reason).
+    /// shown over its lasting note (a crash's reason, which comes back), gone once another game
+    /// is shown.
     pub fn note_game_brief(&mut self, key: &str, text: &str, warn: bool) {
-        if self.game_notes.get(key).is_some_and(|(_, warn, brief)| *warn && !*brief) { return; }
-        self.game_notes.insert(key.to_string(), (one_line(text), warn, true));
+        self.brief_note = Some((key.to_string(), one_line(text), warn));
+        self.last_game_note = self.brief_note.clone();
         self.push_game_notes();
     }
 
@@ -3291,9 +3309,17 @@ impl App {
         }
     }
 
-    /// Brief notes only for the game shown now.
+    /// A brief note only for the game shown now.
     pub fn keep_brief_notes_for(&mut self, key: &str) {
-        self.game_notes.retain(|k, (_, _, brief)| !*brief || k == key);
+        if self.brief_note.as_ref().is_some_and(|(k, _, _)| k != key) { self.brief_note = None; }
+    }
+
+    /// The note under a game's buttons: what was just pressed, else what lasts.
+    pub fn game_note(&self, key: &str) -> Option<(String, bool)> {
+        match &self.brief_note {
+            Some((k, text, warn)) if k == key => Some((text.clone(), *warn)),
+            _ => self.game_notes.get(key).cloned(),
+        }
     }
 
     /// A game's key for its notes: an installed game's folder id, else its catalog id.

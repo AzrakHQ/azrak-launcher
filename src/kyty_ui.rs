@@ -247,7 +247,7 @@ impl App {
                 self.note_setting(crate::settings::SId::KytyUpdate, &format!("Rolled back to {}", kyty::pretty(&tag)), 1);
                 self.kyty_refresh_version();
             }
-            Err(e) => self.note_setting(crate::settings::SId::KytyUpdate, &format!("Couldn't roll back: {e}"), 2),
+            Err(e) => self.note_setting(crate::settings::SId::KytyRollback, &format!("Couldn't roll back: {e}"), 2),
         }
     }
 

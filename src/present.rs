@@ -441,8 +441,8 @@ impl App {
                 h.desc = truncate(&desc, 260).into();
                 let key = self.game_key(t);
                 if self.hub.is_none() { self.keep_brief_notes_for(&key); }
-                if let Some((note, warn, _)) = self.game_notes.get(&key) {
-                    (h.note, h.note_warn) = (note.into(), *warn);
+                if let Some((note, warn)) = self.game_note(&key) {
+                    (h.note, h.note_warn) = (note.into(), warn);
                 }
                 self.hero_actions = self.actions_for(t, false);
             }
@@ -1226,7 +1226,7 @@ impl App {
         // Something about this game (it crashed, it couldn't start) comes before what Download means.
         let key = self.game_key(t);
         self.keep_brief_notes_for(&key);
-        if let Some((note, warn)) = self.game_notes.get(&key).map(|(n, w, _)| (n.clone(), *w)).or_else(|| self.download_note(t)) {
+        if let Some((note, warn)) = self.game_note(&key).or_else(|| self.download_note(t)) {
             h.download_note = note.into();
             h.download_note_warn = warn;
         }

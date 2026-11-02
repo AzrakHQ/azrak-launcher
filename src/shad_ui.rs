@@ -186,7 +186,7 @@ impl App {
     pub fn shad_rollback(&mut self) {
         match shad::rollback() {
             Ok(tag) => self.note_setting(crate::settings::SId::ShadUpdate, &format!("Rolled back to {}", shad::pretty(&tag)), 1),
-            Err(e) => self.note_setting(crate::settings::SId::ShadUpdate, &format!("Couldn't roll back: {e}"), 2),
+            Err(e) => self.note_setting(crate::settings::SId::ShadRollback, &format!("Couldn't roll back: {e}"), 2),
         }
         self.refresh_settings();
     }

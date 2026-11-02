@@ -351,16 +351,22 @@ impl App {
         self.settings_headers = titles;
         self.settings_section = self.settings_section.min(self.settings_sections.len() - 1);
         // What a row just did, in place of its hint (see App::note_setting): on the row of that
-        // name (a network, a device), and never over a problem the row shows itself.
+        // name in a list (a network, a device), and never over a problem the row shows itself.
         for (id, r) in rows.iter_mut() {
-            let kind = std::mem::discriminant(id);
-            let found = self.setting_notes.iter().find(|(nid, (_, _, label))| std::mem::discriminant(*nid) == kind && (label.is_empty() || label.as_str() == r.label.as_str()));
+            let found = self.setting_notes.iter().find(|(nid, (_, _, label))| note_row(**nid, label, *id, &r.label));
             if let Some((_, (note, note_kind, _))) = found {
                 if r.hint_kind != 2 || *note_kind == 2 { (r.hint, r.hint_kind) = (note.into(), *note_kind); }
             }
         }
         self.settings_ids = rows.iter().map(|(id, _)| *id).collect();
         self.settings_rows = rows.into_iter().map(|(_, r)| r).collect();
+    }
+
+    /// What row `i` said last time goes (it's being pressed again).
+    fn forget_setting_note(&mut self, i: usize) {
+        let (Some(id), Some(r)) = (self.settings_ids.get(i).copied(), self.settings_rows.get(i)) else { return };
+        let label = r.label.to_string();
+        self.setting_notes.retain(|nid, (_, _, l)| !note_row(*nid, l, id, &label));
     }
 
     /// A section's name in the left column, what it's for, and a note beside it (what needs you).
@@ -601,7 +607,7 @@ impl App {
     pub fn settings_change(&mut self, i: usize, dir: i32) {
         let Some(id) = self.settings_ids.get(i).copied() else { return };
         // Pressed again: what it said last time goes.
-        self.setting_notes.remove(&id);
+        self.forget_setting_note(i);
         if self.system_change(id, dir) {
             return;
         }
@@ -674,7 +680,7 @@ impl App {
     pub fn settings_activate(&mut self, i: usize) {
         let Some(id) = self.settings_ids.get(i).copied() else { return };
         // Pressed again: what it said last time goes.
-        self.setting_notes.remove(&id);
+        self.forget_setting_note(i);
         if self.system_activate(id, i) {
             return;
         }
@@ -932,5 +938,15 @@ mod tests {
         assert_eq!(same_row((SId::BtDevice(0), "Xbox"), &rows), Some(4));
         // A network row that's gone has no place.
         assert_eq!(same_row((SId::WifiNet(3), "Office"), &rows), None);
+    }
+}
+
+/// Whether a note left on row `noted` (named `noted_label` then) belongs on row `id` (named
+/// `label`): the same row, or in a list (a network, a device), the one of that name now.
+fn note_row(noted: SId, noted_label: &str, id: SId, label: &str) -> bool {
+    match (noted, id) {
+        (SId::WifiNet(_), SId::WifiNet(_)) | (SId::BtFound(_), SId::BtFound(_)) | (SId::BtDevice(_), SId::BtDevice(_)) =>
+            !noted_label.is_empty() && noted_label == label,
+        _ => noted == id,
     }
 }

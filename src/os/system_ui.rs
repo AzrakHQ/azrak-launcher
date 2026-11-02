@@ -256,7 +256,7 @@ impl App {
                                 }
                             }
                         }
-                        Err(e) => app.note_setting(SId::BtFound(i), &format!("Couldn't pair: {e}"), 2),
+                        Err(e) => app.note_setting_named(SId::BtFound(i), &d.name, &format!("Couldn't pair: {e}"), 2),
                     }
                     app.sys_changed();
                 }, move || system::bt_pair(&address));
@@ -272,7 +272,7 @@ impl App {
                     self.sys.forget = None;
                     let address = d.address.clone();
                     self.sys_task(SId::BtDevice(i as u16), "Forgetting…", move |app, r: Result<(), String>| {
-                        if let Err(e) = r { app.note_setting(SId::BtDevice(i as u16), &format!("Couldn't forget it: {e}"), 2) }
+                        if let Err(e) = r { app.note_setting_named(SId::BtDevice(i as u16), &d.name, &format!("Couldn't forget it: {e}"), 2) }
                         app.sys_changed();
                     }, move || system::bt_remove(&address));
                 } else if !on {
@@ -351,7 +351,7 @@ impl App {
         self.sys_task(SId::WifiNet(i), "Connecting…", move |app, r: Result<(), String>| {
             match r {
                 Ok(()) => app.wifi_joined(&w.ssid),
-                Err(e) => app.note_setting(SId::WifiNet(i), &if e.contains("Secrets were required") || e.contains("password") {
+                Err(e) => app.note_setting_named(SId::WifiNet(i), &w.ssid, &if e.contains("Secrets were required") || e.contains("password") {
                     "Couldn't connect: check the password and try again".to_string() } else { format!("Couldn't connect: {e}") }, 2),
             }
             app.sys_changed();

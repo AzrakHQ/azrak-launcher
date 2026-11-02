@@ -1592,6 +1592,19 @@ export component AppWindow inherits Window {
                         ta-sec := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.settings-nav, i); } }
                     }
                     Rectangle { vertical-stretch: 1; }
+                    // What Restart or Shut down just said (a game is still running, it failed).
+                    // (Empty ones take no room: the stretch above gives up their spacing.)
+                    for q in root.settings-footer: VerticalLayout {
+                        padding-left: (18px * S.k); padding-right: (18px * S.k);
+                        if q.hint != "": Text {
+                            text: q.hint;
+                            font-size: (15px * S.t);
+                            color: q.hint-kind == 1 ? Theme.ok : q.hint-kind == 2 ? Theme.danger : #9ba6c0;
+                            wrap: word-wrap;
+                            max-height: (60px * S.k);
+                            overflow: elide;
+                        }
+                    }
                     for q[k] in root.settings-footer: Rectangle {
                         property <bool> f: root.zone == Zone.settings-nav && root.idx == root.settings-sections.length + k;
                         height: (54px * S.k);

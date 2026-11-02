@@ -313,7 +313,7 @@ impl App {
             }
             "install" => self.install_download(key),
             "cancel_install" => {
-                if let Err(error) = self.installer.cancel(key) { self.dl_notes.insert(key.into(), format!("Couldn't cancel it: {error}")); }
+                if let Err(error) = self.installer.cancel(key) { self.note_download_quiet(key, format!("Couldn't cancel it: {error}")); }
             }
             "play_install" => {
                 self.push_installs();
@@ -321,9 +321,9 @@ impl App {
                     if let Some(local) = self.locals.iter().position(|game| &game.l.path == path) {
                         // A game that can't start says why here, on its row (not behind this page).
                         let id = self.locals[local].l.id.clone();
-                        let before = self.game_notes.get(&id).cloned();
+                        self.last_game_note = None;
                         self.run_action("play", Target { game: self.locals[local].cat, local: Some(local) });
-                        if let Some((text, true, _)) = self.game_notes.get(&id).cloned().filter(|n| Some(n) != before.as_ref()) {
+                        if let Some((_, text, true)) = self.last_game_note.take().filter(|(k, _, _)| *k == id) {
                             self.note_download(key, &text);
                         }
                     } else { self.note_download(key, "Its folder is missing: check Game folders in Settings"); }
@@ -334,7 +334,7 @@ impl App {
             "vpn" => { self.open_setting(crate::settings::SId::Vpn); return; }
             "delete" => return self.open_delete(key),
             "discard" => {
-                if let Err(error) = self.downloads.discard(key) { self.dl_notes.insert(key.into(), format!("Couldn't do that: {error}")); }
+                if let Err(error) = self.downloads.discard(key) { self.note_download_quiet(key, format!("Couldn't do that: {error}")); }
                 else { audio::play(Sound::Select); }
             }
             "choose" => {
@@ -344,7 +344,7 @@ impl App {
                 return;
             }
             _ => {
-                if let Err(error) = self.downloads.action(key, action) { self.dl_notes.insert(key.into(), format!("Couldn't do that: {error}")); }
+                if let Err(error) = self.downloads.action(key, action) { self.note_download_quiet(key, format!("Couldn't do that: {error}")); }
                 else { audio::play(Sound::Select); }
             }
         }
@@ -353,9 +353,13 @@ impl App {
 
     /// What pressing something on a download just did, on its row until the next press there.
     pub fn note_download(&mut self, key: &str, text: &str) {
-        // One line (an error can carry line breaks, which would spill out of the row).
-        self.dl_notes.insert(key.to_string(), text.split_whitespace().collect::<Vec<_>>().join(" "));
+        self.note_download_quiet(key, text);
         self.push_downloads();
+    }
+
+    /// The same, for the page to show on its next push.
+    fn note_download_quiet(&mut self, key: &str, text: impl AsRef<str>) {
+        self.dl_notes.insert(key.to_string(), crate::app::one_line(text.as_ref()));
     }
 
     pub fn push_downloads(&mut self) {
