@@ -119,12 +119,9 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             d.status = if verifying { "Verifying what's already downloaded".into() } else { "Downloading".into() };
             if verifying { d.dl_label = "Verifying".into(); (d.kind, d.bar) = (4, 4); }
             let checked = if job.total > 0 { (job.checked as f32 / job.total as f32).min(1.0) } else { 0.0 };
-            progress(&mut d, job.progress());
-            // The bars fill with the check itself (the big number stays what's downloaded).
-            if verifying {
-                d.stats.push((format!("{}%", pct(checked)), "Verified".into()));
-                (d.dl, d.tile) = (checked, checked);
-            }
+            // Verifying, the number and the bars are the check's; then back to what's downloaded.
+            progress(&mut d, if verifying { checked } else { job.progress() });
+            if verifying { (d.dl, d.tile) = (checked, checked); }
             if job.state == State::Downloading {
                 d.stats.push((mbps(job.speed), "Download speed".into()));
                 d.spark = true;

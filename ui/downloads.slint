@@ -239,8 +239,6 @@ export component DownloadsPage inherits Rectangle {
                         x: 0; width: parent.width * frac; border-radius: (3px * S.k);
                         background: i == 2 ? Theme.ok : root.bar-color();
                         clip: true;
-                        // Glides between the once-a-second updates.
-                        animate width { duration: 1000ms; easing: linear; }
                         // While it's working, a light sweeps across what's done (as Steam's does).
                         if i == 0 && root.s.working: Rectangle {
                             width: (160px * S.k);
@@ -325,7 +323,6 @@ export component DownloadsPage inherits Rectangle {
                             tfill := Rectangle {
                                 x: 0; width: parent.width * t.tile-frac; clip: true;
                                 background: t.kind == 2 ? Theme.danger : t.kind == 3 ? #3ddc9799 : t.kind == 1 ? Theme.hint : t.kind == 4 ? #2dd4bf : #4d94ff;
-                                animate width { duration: 1000ms; easing: linear; }
                                 if t.working: Rectangle {
                                     width: (90px * S.k);
                                     x: mod(animation-tick() / 1ms * 0.2px * S.k, tfill.width + self.width) - self.width;
