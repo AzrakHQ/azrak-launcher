@@ -120,7 +120,8 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             let verifying = job.state == State::Checking && job.check_total > 0 && job.done > 0;
             d.status = if verifying { "Verifying what's already downloaded".into() } else { "Downloading".into() };
             if verifying { d.dl_label = "Verifying".into(); (d.kind, d.bar) = (4, 4); }
-            let checked = if job.check_total > 0 { (job.checked as f32 / job.check_total as f32).min(1.0) } else { 0.0 };
+            // Never shown as done (a ✓) before the download goes on.
+            let checked = if job.check_total > 0 { (job.checked as f32 / job.check_total as f32).min(0.99) } else { 0.0 };
             // Verifying, the number and the bars are the check's; then back to what's downloaded.
             progress(&mut d, if verifying { checked } else { job.progress() });
             if verifying { (d.dl, d.tile) = (checked, checked); }
@@ -323,7 +324,8 @@ impl App {
                 }
                 return;
             }
-            "vpn" => { self.open_setting(crate::settings::SId::VpnOnly); return; }
+            // On Your VPN (✕ connects it), not on the switch (✕ there would turn protection off).
+            "vpn" => { self.open_setting(crate::settings::SId::Vpn); return; }
             "delete" => return self.open_delete(key),
             "discard" => {
                 if let Err(error) = self.downloads.discard(key) { self.dl_notes.insert(key.into(), format!("Couldn't do that: {error}")); }
@@ -684,37 +686,40 @@ impl App {
         if self.overlay == Overlay::Downloads { self.ring_seen.extend(needs.iter().cloned()); }
         let unseen: Vec<&Job> = jobs.iter().filter(|job| needs.contains(&job.key) && !self.ring_seen.contains(&job.key)).collect();
         let active: Vec<&Job> = jobs.iter().filter(|job| job.state.active()).collect();
-        self.ring_key = unseen.first().map(|job| job.key.clone())
-            .or_else(|| (active.len() == 1).then(|| active[0].key.clone()))
-            .or_else(|| jobs.iter().find(|job| job.waiting_vpn && job.state != State::Complete).map(|job| job.key.clone()));
-        let (kind, label, frac) = if let Some(job) = unseen.first() {
+        // What the ring says (its words, then a percentage), and the download it opens: worked
+        // out together, so pressing it opens what it says.
+        let none = || -> Option<String> { None };
+        let (kind, words, suffix, frac, key) = if let Some(job) = unseen.first() {
             let what = if job.state == State::Failed { "Download stopped" } else { "Couldn't install" };
-            (3, if unseen.len() > 1 { format!("{} need you", unseen.len()) } else { what.to_string() }, job.progress())
+            (3, if unseen.len() > 1 { format!("{} need you", unseen.len()) } else { what.to_string() }, String::new(), job.progress(), Some(job.key.clone()))
         } else if !active.is_empty() {
             // One that's verifying shows how far the check is.
             let verifying = active.len() == 1 && active[0].state == State::Checking && active[0].check_total > 0 && active[0].done > 0;
             let (done, total) = active.iter().fold((0u64, 0u64), |(d, t), job| if verifying { (d + job.checked, t + job.check_total) } else { (d + job.done, t + job.total) });
             let frac = if total > 0 { (done as f32 / total as f32).min(1.0) } else { 0.0 };
-            let pct = pct(frac);
-            let label = if active.len() > 1 { format!("{} downloads · {pct}%", active.len()) }
-                else if verifying { format!("Verifying · {pct}%") }
+            let one = (active.len() == 1).then(|| active[0].key.clone());
+            let suffix = format!(" · {}%", pct(frac));
+            let (words, suffix) = if active.len() > 1 { (format!("{} downloads", active.len()), suffix) }
+                else if verifying { ("Verifying".to_string(), suffix) }
                 // Just pressed Download: being looked up.
-                else if active[0].state == State::Resolving { "Getting the file list".to_string() }
-                else { format!("{} · {pct}%", short_name(&active[0].name)) };
-            (if verifying { 4 } else { 1 }, label, frac)
+                else if active[0].state == State::Resolving { ("Getting the file list".to_string(), String::new()) }
+                else { (short_name(&active[0].name), suffix) };
+            (if verifying { 4 } else { 1 }, words, suffix, frac, one)
         } else if let Some(record) = installs.iter().find(|r| r.state.active()) {
-            (2, format!("Installing · {}%", pct(record.progress())), record.progress())
+            (2, "Installing".to_string(), format!(" · {}%", pct(record.progress())), record.progress(), Some(record.key.clone()))
         } else if let Some(job) = jobs.iter().find(|job| job.waiting_vpn && job.state != State::Complete) {
-            (3, "Waiting for your VPN".to_string(), job.progress())
+            (3, "Waiting for your VPN".to_string(), String::new(), job.progress(), Some(job.key.clone()))
         } else {
-            (0, String::new(), 0.0)
+            (0, String::new(), String::new(), 0.0, none())
         };
-        // A focus that was on the ring stays on Downloads (the icon in its place). Its width is
-        // the label's with every digit a 0, so it doesn't jiggle as the numbers change.
-        let sizer: String = label.chars().map(|c| if c.is_ascii_digit() { '0' } else { c }).collect();
+        self.ring_key = key;
+        // A focus that was on the ring stays on Downloads (the icon in its place). The
+        // percentage's width is with every digit a 0, so it doesn't jiggle as numbers change.
+        let sizer: String = suffix.chars().map(|c| if c.is_ascii_digit() { '0' } else { c }).collect();
         let ui = self.ui();
         ui.set_ring_kind(kind);
-        ui.set_ring_label(label.into());
+        ui.set_ring_label(words.into());
+        ui.set_ring_suffix(suffix.into());
         ui.set_ring_sizer(sizer.into());
         ui.set_ring_path(ring_path(frac).into());
     }
