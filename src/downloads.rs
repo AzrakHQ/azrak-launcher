@@ -147,7 +147,7 @@ impl Default for Policy {
     }
 }
 
-enum Command { Prepare(Job), Begin { key: String, base: PathBuf, selected: Vec<usize>, install_to: Option<PathBuf> }, Discard(String), Start(String), Pause(String), Cancel(String), Remove(String), Delete(String), InstallTo(String, Option<PathBuf>), StopSeed(String), Seed(String), SetSeedAfterDownload(bool), SetVpn(Option<String>), Shutdown }
+enum Command { Prepare(Job), Begin { key: String, base: PathBuf, selected: Vec<usize>, install_to: Option<PathBuf> }, Discard(String), Start(String), Pause(String), Cancel(String), Remove(String), Delete(String), Save, StopSeed(String), Seed(String), SetSeedAfterDownload(bool), SetVpn(Option<String>), Shutdown }
 
 const VPN_WAIT: &str = "Waiting for your VPN: downloads only run through it (Settings → Downloads)";
 const FILES_CHANGED: &str = "The downloaded files were moved, changed or deleted, so this download can't seed. Remove it, or download it again.";
@@ -202,11 +202,7 @@ impl Manager {
     pub fn left_out(&self, key: &str) -> Result<std::collections::BTreeSet<String>> {
         let job = self.jobs.lock().unwrap().iter().find(|job| job.key == key).cloned().context("Transfer not found")?;
         let Some(selected) = job.selected.as_deref() else { return Ok(Default::default()) };
-        use std::io::Read;
-        let mut bytes = Vec::new();
-        std::fs::File::open(self.store.join(format!("{key}.torrent"))).context("Torrent metadata is missing")?
-            .take(MAX_METADATA + 1).read_to_end(&mut bytes)?;
-        let (_, files) = inspect_metadata(&bytes, key, &job.folder)?;
+        let (_, files) = inspect_metadata(&read_torrent(&self.store, key)?, key, &job.folder)?;
         let chosen = chosen(Some(selected));
         Ok(files.into_iter().enumerate().filter(|(i, _)| !chosen(*i)).map(|(_, (path, _))| path).collect())
     }
@@ -251,7 +247,7 @@ impl Manager {
     /// at once, so the install queue can't pick it up in between; the worker saves it.
     pub fn set_install_to(&self, key: &str, to: Option<PathBuf>) -> Result<()> {
         if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key) { job.install_to = to.clone(); }
-        self.tx.try_send(Command::InstallTo(key.into(), to)).context("Download worker is busy or unavailable")
+        self.tx.try_send(Command::Save).context("Download worker is busy or unavailable")
     }
 
     /// Forget a download that never started (the player closed the Download & install panel):
@@ -469,6 +465,20 @@ fn inspect_metadata(bytes: &[u8], key: &str, folder: &Path) -> Result<(u64, Vec<
     Ok((total, files))
 }
 
+/// A download's saved torrent (from its lookup).
+fn read_torrent(store: &Path, key: &str) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(store.join(format!("{key}.torrent"))).context("Torrent metadata is missing")?
+        .take(MAX_METADATA + 1).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// A torrent's files as the player chooses from them.
+fn entries_of(platform: Option<crate::platform::Platform>, files: Vec<(String, u64)>) -> Vec<Entry> {
+    files.into_iter().map(|(path, size)| Entry { blocked: blocked(platform, &path), path, size }).collect()
+}
+
 /// An error as the player sees it. Engine errors can contain tracker/magnet URLs: redacted.
 fn shown(error: &anyhow::Error) -> String {
     regex::Regex::new(r"(?:https?://|udp://|magnet:\?)[^\s]+")
@@ -479,13 +489,9 @@ fn shown(error: &anyhow::Error) -> String {
 /// looked up by an older launcher gets its files chosen like a new one (Windows programs left
 /// out); one whose list can't be read is looked up again on Retry.
 fn restore_entries(store: &Path, job: &mut Job) {
-    use std::io::Read;
-    let torrent = store.join(format!("{}.torrent", job.key));
     let read = || -> Result<Vec<Entry>> {
-        let mut bytes = Vec::new();
-        std::fs::File::open(&torrent)?.take(MAX_METADATA + 1).read_to_end(&mut bytes)?;
-        let (_, files) = inspect_metadata(&bytes, &job.key, &job.folder)?;
-        Ok(files.into_iter().map(|(path, size)| Entry { blocked: blocked(job.platform, &path), path, size }).collect())
+        let (_, files) = inspect_metadata(&read_torrent(store, &job.key)?, &job.key, &job.folder)?;
+        Ok(entries_of(job.platform, files))
     };
     match read() {
         Ok(entries) if entries.iter().any(|entry| !entry.blocked) => {
@@ -493,11 +499,16 @@ fn restore_entries(store: &Path, job: &mut Job) {
             job.entries = entries;
         }
         _ => {
-            let _ = std::fs::remove_file(&torrent);
+            let _ = std::fs::remove_file(store.join(format!("{}.torrent", job.key)));
             job.state = State::Failed;
             job.error = "Its file list couldn't be read. Retry looks it up again.".into();
         }
     }
+}
+
+/// Whether only some of a download's files are downloaded.
+fn job_partial(jobs: &Mutex<Vec<Job>>, key: &str) -> bool {
+    jobs.lock().unwrap().iter().any(|job| job.key == key && job.selected.is_some())
 }
 
 /// A copy of a download without its file list (it can be long), for the UI.
@@ -618,11 +629,12 @@ impl Worker {
             crate::log!("Could not save transfer state: {error}");
         }
     }
-    fn fail(&self, key: &str, error: anyhow::Error) {
+    fn fail(&self, key: &str, error: anyhow::Error) { self.fail_as(key, error, Problem::Other) }
+    fn fail_as(&self, key: &str, error: anyhow::Error, problem: Problem) {
         let message = shown(&error);
         self.update(key, |job| {
             if job.state != State::Complete { job.state = State::Failed; }
-            job.error = message; job.problem = Problem::Other; job.clear_runtime();
+            job.error = message; job.problem = problem; job.clear_runtime();
         });
         self.persist();
     }
@@ -749,9 +761,7 @@ impl Worker {
         };
         if let Err(error) = resolved.and_then(|resolved| self.resolved(resolved)) {
             let problem = if error.is::<NoAnswer>() { Problem::NoAnswer } else if error.is::<ReleaseProblem>() { Problem::Release } else { Problem::Other };
-            self.fail(&key, error);
-            self.update(&key, |job| job.problem = problem);
-            self.persist();
+            self.fail_as(&key, error, problem);
         }
     }
     fn resolved(&mut self, resolved: Resolved) -> Result<()> {
@@ -763,8 +773,7 @@ impl Worker {
             if let Some(why) = job.platform.and_then(|platform| crate::package::unsupported(platform, &files)) {
                 bail!("Azrak can't install this release: {why}. Nothing was downloaded; choose another release of this game.");
             }
-            let entries: Vec<Entry> = files.into_iter()
-                .map(|(path, size)| Entry { blocked: blocked(job.platform, &path), path, size }).collect();
+            let entries = entries_of(job.platform, files);
             ensure!(entries.iter().any(|entry| !entry.blocked), "Nothing in this release can be downloaded: it only holds programs a console game never needs.");
             Ok((total, entries))
         })();
@@ -790,11 +799,8 @@ impl Worker {
             self.session().await?.unpause(&handle).await?;
             self.update(key, |job| { job.state = State::Checking; job.error.clear(); });
         } else {
-            let path = self.store.join(format!("{key}.torrent"));
-            if !path.is_file() { return self.resolve(key).await; }
-            use std::io::Read;
-            let mut bytes = Vec::new();
-            std::fs::File::open(path)?.take(MAX_METADATA + 1).read_to_end(&mut bytes)?;
+            if !self.store.join(format!("{key}.torrent")).is_file() { return self.resolve(key).await; }
+            let bytes = read_torrent(&self.store, key)?;
             let folder = owned_folder(&job)?;
             let (total, files) = inspect_metadata(&bytes, key, &folder)?;
             let selected = job.selected.as_deref();
@@ -829,9 +835,11 @@ impl Worker {
                 let stats = handle.stats();
                 // Completion can race a pause/shutdown command before the next tick.
                 if state == State::Paused && stats.finished { state = State::Complete; }
+                // While checking, the engine counts the whole torrent: a partial download keeps its own.
+                let whole = job_partial(&self.jobs, key) && matches!(stats.state, TorrentStatsState::Initializing { .. });
                 self.update(key, |job| {
                     // Error/None engine states report zero progress even for a previously verified seed.
-                    if job.state != State::Complete || stats.finished {
+                    if (job.state != State::Complete || stats.finished) && !whole {
                         job.done = stats.progress_bytes; job.total = stats.total_bytes;
                     }
                 });
@@ -902,10 +910,7 @@ impl Worker {
         let Some(job) = self.job(key) else { return Ok(()) };
         if job.state != State::Complete || self.handles.contains_key(key) || !self.may_seed(key) { return Ok(()); }
         if self.vpn_route().is_err() { self.wait_for_vpn(key); return Ok(()); }
-        use std::io::Read;
-        let mut bytes = Vec::new();
-        std::fs::File::open(self.store.join(format!("{key}.torrent"))).context("Torrent metadata is missing")?
-            .take(MAX_METADATA + 1).read_to_end(&mut bytes)?;
+        let bytes = read_torrent(&self.store, key)?;
         // Never create a folder just to find it empty.
         ensure!(job.folder.is_dir(), FILES_CHANGED);
         let folder = owned_folder(&job)?;
@@ -954,15 +959,20 @@ impl Worker {
         if job.state != State::Ready { return Ok(()); }
         // The lookup's folder is canonical: the same folder reached another way is the same.
         let folder = base.canonicalize().unwrap_or_else(|_| base.to_path_buf()).join(format!("torrent-{key}"));
-        // Every file chosen is `None`; the size is what's chosen.
+        // The size is what's chosen; every file chosen is `None` once it started.
         let all = selected.len() == job.entries.len();
         let total = selected.iter().filter_map(|&i| job.entries.get(i)).map(|entry| entry.size).sum();
         self.update(key, |j| {
-            j.folder = folder.clone(); j.selected = if all { None } else { Some(selected) }; j.install_to = install_to;
+            j.folder = folder.clone(); j.selected = Some(selected); j.install_to = install_to;
             j.total = total; j.error.clear();
         });
         self.persist();
-        if let Err(error) = self.start(key).await {
+        // The folder now, even if the download waits for the VPN: later it couldn't be changed.
+        let started = match self.job(key).map(|job| owned_folder(&job)) {
+            Some(Err(error)) => Err(error),
+            _ => self.start(key).await,
+        };
+        if let Err(error) = started {
             // Back to choosing, saying why: another folder (or fewer files) may work.
             if folder != job.folder { remove_unused(&folder, key); }
             self.update(key, |j| { j.state = State::Ready; j.folder = job.folder.clone(); j.error = shown(&error); j.clear_runtime(); });
@@ -972,7 +982,7 @@ impl Worker {
         // Started (or waiting for the VPN). Looking it up made an empty folder where downloads
         // went by default: not there now. The file list was only for choosing.
         if folder != job.folder { remove_unused(&job.folder, key); }
-        self.update(key, |j| j.entries = vec![]);
+        self.update(key, |j| { j.entries = vec![]; if all { j.selected = None; } });
         self.persist();
         Ok(())
     }
@@ -1053,8 +1063,10 @@ impl Worker {
                 (live.download_speed.mbps, live.upload_speed.mbps, peers, live.time_remaining.as_ref().map(ToString::to_string).unwrap_or_default())
             }).unwrap_or_default();
             let newly_complete = stats.finished && !was_complete;
+            // While checking, the engine counts the whole torrent: a partial download keeps its own.
+            let whole = job_partial(&self.jobs, &key) && matches!(stats.state, TorrentStatsState::Initializing { .. });
             self.update(&key, |job| {
-                if !was_complete || stats.finished { job.done = stats.progress_bytes; job.total = stats.total_bytes; }
+                if (!was_complete || stats.finished) && !whole { job.done = stats.progress_bytes; job.total = stats.total_bytes; }
                 job.state = state;
                 job.speed = if complete { 0.0 } else { speed }; job.peers = peers;
                 job.eta = if complete { String::new() } else { eta };
@@ -1100,8 +1112,8 @@ impl Worker {
                         },
                         Some(Command::Remove(key)) => Some((key.clone(), self.remove(&key).await)),
                         Some(Command::Delete(key)) => Some((key.clone(), self.delete(&key).await)),
-                        Some(Command::InstallTo(key, to)) => {
-                            self.update(&key, |job| job.install_to = to);
+                        // The manager changed a download (at once, for the install queue): saved here.
+                        Some(Command::Save) => {
                             self.persist();
                             None
                         },
@@ -1938,9 +1950,10 @@ mod tests {
         // A folder it can't use (someone else's torrent-<key> is there): back to choosing, saying why.
         let taken = temp.path().join("taken");
         std::fs::create_dir_all(taken.join(format!("torrent-{key}"))).unwrap();
-        manager.begin(&key, taken, vec![pkg], Some(install_to.clone())).unwrap();
+        manager.begin(&key, taken, vec![0, 1], Some(install_to.clone())).unwrap();
         let back = rt.block_on(wait_job(&manager, &key, |job| job.state == State::Ready && !job.error.is_empty()));
         assert!(back.error.contains("ownership marker"), "{}", back.error);
+        assert_eq!(back.selected, Some(vec![0, 1]), "every file stays chosen, so it's still chosen from");
         assert_eq!(manager.entries(&key).len(), 2, "its files can be chosen again");
         manager.begin(&key, temp.path().join("chosen"), vec![pkg], Some(install_to.clone())).unwrap();
         let done = rt.block_on(wait_job(&manager, &key, |job| job.state == State::Complete));

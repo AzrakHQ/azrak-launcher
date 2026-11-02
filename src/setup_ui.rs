@@ -198,11 +198,8 @@ impl App {
                 else if paths_bad { ("Choose the folders".into(), false) }
                 else { (format!("Download & install · {}", size_label(total)), true) };
         }
-        // It couldn't start (the panel's own check, or the download's when it tried).
-        let begin_error = if !setup.begin_error.is_empty() { setup.begin_error.clone() }
-            else { job.as_ref().filter(|job| job.state == State::Ready).map(|job| job.error.clone()).unwrap_or_default() };
-        if !begin_error.is_empty() && view.state == 1 {
-            view.notice = begin_error;
+        if !setup.begin_error.is_empty() && view.state == 1 {
+            view.notice = setup.begin_error.clone();
             view.notice_kind = 2;
         }
         Some(view)
@@ -225,6 +222,8 @@ impl App {
                     }
                     setup.on = on;
                     setup.entries = entries;
+                    // Why it couldn't start last time, until the player changes something.
+                    setup.begin_error = job.error.clone();
                 }
             }
         }

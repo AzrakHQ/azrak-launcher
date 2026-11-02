@@ -456,7 +456,8 @@ impl App {
                 if !same { self.download_model.set_row_data(n, row); }
             }
         }
-        ui.set_download_tabs(ModelRc::new(VecModel::from(tabs)));
+        // Set only when they change: new models rebuild their rows (and lose hover).
+        if !ui.get_download_tabs().iter().eq(tabs.iter().cloned()) { ui.set_download_tabs(ModelRc::new(VecModel::from(tabs))); }
         ui.set_download_filter(self.dl_filter as i32);
         ui.set_download_sel(sel as i32);
         ui.set_download_focus_btn(self.dl_btn);
@@ -466,7 +467,8 @@ impl App {
         let (vpn_text, vpn_kind) = match vpn { None => ("", 0), Some(Some(_)) => ("VPN on", 1), Some(None) => ("Waiting for your VPN", 2) };
         ui.set_download_delete_open(self.dl_delete.is_some());
         ui.set_download_delete_title(self.dl_delete.as_ref().and_then(|(key, _)| jobs.iter().find(|job| &job.key == key)).map(|job| job.name.clone()).unwrap_or_default().into());
-        ui.set_download_delete_choices(ModelRc::new(VecModel::from(self.delete_choices())));
+        let choices = self.delete_choices();
+        if !ui.get_download_delete_choices().iter().eq(choices.iter().cloned()) { ui.set_download_delete_choices(ModelRc::new(VecModel::from(choices))); }
         ui.set_download_delete_sel(self.dl_delete_sel as i32);
         ui.set_download_has_glass(glass.is_some());
         ui.set_download_glass(glass.unwrap_or_default());

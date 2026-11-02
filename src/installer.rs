@@ -208,7 +208,8 @@ impl Manager {
             if let Err(e) = hide(&patch) { crate::log!("The update beside {} wasn't deleted: {e:#}", path.display()); }
         }
         jobs.retain(|j| j.key != key);
-        self.core.save(&jobs)?;
+        // The game is already going: an error now would read as if it weren't.
+        if let Err(e) = self.core.save(&jobs) { crate::log!("Deleted {}, but its record couldn't be saved: {e:#}", path.display()); }
         Ok(path)
     }
 
