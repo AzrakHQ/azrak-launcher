@@ -136,8 +136,7 @@ impl App {
                 (cfg.download_dir, cfg.install_dir) = (download_dir, install_dir);
                 cfg.save();
             }
-            Some(job) if job.state == State::Ready => self.tried_dirs = Some((key, download_dir, install_dir)),
-            Some(_) => {}
+            Some(_) => self.tried_dirs = Some((key, download_dir, install_dir)),
             None => {}
         }
         self.chosen_dirs = None;

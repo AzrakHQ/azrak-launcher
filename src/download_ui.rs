@@ -79,7 +79,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             d.status = "Getting the file list".into();
             d.line = "Getting the file list".into();
             // Looked up again after it had started: cancelling keeps what it has.
-            d.actions = vec![(if job.total == 0 && job.done == 0 { "discard" } else { "cancel" }, "Cancel", "close")];
+            d.actions = vec![(if crate::downloads::unstarted(job) { "discard" } else { "cancel" }, "Cancel", "close")];
         }
         State::Ready => {
             (d.group, d.kind) = (1, 1);
@@ -92,7 +92,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                 d.line = "Choose its files".into();
                 // It couldn't start where (or with what) the player chose.
                 d.note = job.error.clone();
-                d.actions = vec![("choose", "Choose files", "check"), (if job.done == 0 { "discard" } else { "remove" }, "Remove", "trash")];
+                d.actions = vec![("choose", "Choose files", "check"), (if crate::downloads::unstarted(job) { "discard" } else { "remove" }, "Remove", "trash")];
             }
         }
         State::Checking | State::Downloading => {
@@ -136,7 +136,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             d.line = "Stopped".into();
             // A release it can never download or install: nothing to retry, only to remove.
             let hopeless = job.done == 0 && matches!(job.problem, crate::downloads::Problem::Release | crate::downloads::Problem::Unsupported);
-            d.actions = if hopeless { vec![("discard", "Remove", "trash")] } else { vec![("retry", "Retry", "retry"), ("delete", "Delete…", "trash")] };
+            d.actions = if hopeless { vec![(if crate::downloads::unstarted(job) { "discard" } else { "remove" }, "Remove", "trash")] } else { vec![("retry", "Retry", "retry"), ("delete", "Delete…", "trash")] };
         }
         State::Cancelled => {
             (d.group, d.kind, d.bar) = (1, 1, 1);
@@ -630,7 +630,7 @@ impl App {
                     Err(error) => self.toast("Its download is deleted, but the game couldn't be", &format!("{error:#}"), 2),
                 }
             }
-            Some(job) if !job.error.is_empty() => {
+            Some(job) if job.error.starts_with(crate::downloads::NOT_DELETED) => {
                 self.pending_uninstall = None;
                 self.downloads.set_install_to(&key, install_to);
                 self.toast("Couldn't delete its download, so the game stays", &job.error, 2);

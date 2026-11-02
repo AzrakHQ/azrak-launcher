@@ -596,6 +596,9 @@ fn shown(error: &anyhow::Error) -> String {
 /// The files that can be chosen (all but programs a console game never needs, and padding).
 fn allowed(entries: &[Entry]) -> Vec<usize> { (0..entries.len()).filter(|&i| !entries[i].blocked).collect() }
 
+/// How a refused delete's note starts (Delete the game and its download waits for it).
+pub const NOT_DELETED: &str = "Not deleted: ";
+
 const UNREADABLE: &str = "Its file list couldn't be read";
 
 const NOTHING_ALLOWED: &str = "Nothing in this release can be downloaded: it only holds programs a console game never needs.";
@@ -676,7 +679,7 @@ fn counts(stats: &librqbit::TorrentStats, job: &Job) -> bool {
 }
 
 /// A download that never started: nothing downloaded, so closing the panel forgets it.
-fn unstarted(job: &Job) -> bool {
+pub fn unstarted(job: &Job) -> bool {
     let state = match job.state {
         State::Ready => true,
         // Before its file list arrived (only that has no size; one looked up again after it
@@ -1201,7 +1204,8 @@ impl Worker {
         let (all, total) = {
             let jobs = self.jobs.lock().unwrap();
             let entries = jobs.iter().find(|j| j.key == key).map_or(&[][..], |j| &j.entries[..]);
-            (selected.len() == entries.len(), selected.iter().filter_map(|&i| entries.get(i)).map(|entry| entry.size).sum())
+            let all = entries.iter().enumerate().all(|(i, entry)| entry.padding || selected.contains(&i));
+            (all, selected.iter().filter_map(|&i| entries.get(i)).map(|entry| entry.size).sum())
         };
         self.update(key, |j| {
             j.folder = folder.clone(); j.selected = Some(selected); j.install_to = install_to;
@@ -1359,7 +1363,7 @@ impl Worker {
                         // A refused delete leaves it as it was, saying why.
                         Some(Command::Delete(key)) => {
                             if let Err(error) = self.delete(&key).await {
-                                self.update(&key, |job| job.error = shown(&error));
+                                self.update(&key, |job| job.error = format!("{NOT_DELETED}{}", shown(&error)));
                                 self.persist();
                             }
                             None
