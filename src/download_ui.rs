@@ -83,18 +83,11 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
         State::Ready => {
             (d.group, d.kind) = (1, 1);
             d.stats = vec![(size.clone(), format!("{} files", job.file_count))];
-            // One looked up before files could be chosen downloads them all.
-            if job.selected.is_none() {
-                d.status = "Ready to download".into();
-                d.line = "Ready to download".into();
-                d.actions = vec![("start", "Start download", "disk"), ("discard", "Remove", "trash")];
-            } else {
-                d.status = "Waiting for you to choose its files".into();
-                d.line = "Choose its files".into();
-                // It couldn't start where (or with what) the player chose.
-                d.note = job.error.clone();
-                d.actions = vec![("choose", "Choose files", "check"), ("discard", "Remove", "trash")];
-            }
+            d.status = "Waiting for you to choose its files".into();
+            d.line = "Choose its files".into();
+            // It couldn't start where (or with what) the player chose.
+            d.note = job.error.clone();
+            d.actions = vec![("choose", "Choose files", "check"), ("discard", "Remove", "trash")];
         }
         State::Checking | State::Downloading => {
             d.status = if job.state == State::Checking { "Checking what's already downloaded".into() } else { "Downloading".into() };
@@ -226,7 +219,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
 impl App {
     /// Download pressed: the Download & install panel, or the download if it's already under way.
     pub fn prepare_download(&mut self, target: Target) {
-        if let Some(job) = self.download_for_target(target).filter(|job| job.state != State::Ready || job.selected.is_none()) {
+        if let Some(job) = self.download_for_target(target).filter(|job| job.state != State::Ready) {
             self.open_downloads(Some(&job.key));
             return;
         }
@@ -326,7 +319,7 @@ impl App {
                 if job.state == State::Complete {
                     if job.install_to.is_some() { self.toast_action("Download complete", &format!("{} · it installs by itself", job.name), 1, "downloads", "Show"); }
                     else { self.toast_action("Download complete", &job.name, 1, "downloads", "Install from Downloads"); }
-                } else if job.state == State::Failed && job.done > 0 {
+                } else if job.state == State::Failed && matches!(old, Some(State::Checking | State::Downloading | State::Paused)) {
                     self.toast_action("Download stopped", &job.name, 2, "downloads", "See why");
                 }
             }

@@ -208,6 +208,10 @@ impl App {
     /// Draw the panel from the transfer (called every second, and after every change).
     pub fn push_setup(&mut self) {
         if self.overlay != Overlay::Setup { return; }
+        // Its download was removed meanwhile (from Downloads, opened over the panel).
+        if self.setup.as_ref().is_some_and(|setup| setup.key.as_ref().is_some_and(|key| self.downloads.job(key).is_none())) {
+            return self.back();
+        }
         // The file list arrived: every file the player can choose starts ticked.
         if let Some(setup) = self.setup.as_mut() {
             if setup.entries.is_empty() {

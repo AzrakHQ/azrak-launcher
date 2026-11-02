@@ -202,7 +202,7 @@ impl Manager {
     pub fn left_out(&self, key: &str) -> Result<std::collections::BTreeSet<String>> {
         let job = self.jobs.lock().unwrap().iter().find(|job| job.key == key).cloned().context("Transfer not found")?;
         let Some(selected) = job.selected.as_deref() else { return Ok(Default::default()) };
-        let (_, files) = inspect_metadata(&read_torrent(&self.store, key)?, key, &job.folder)?;
+        let (_, files) = inspect_metadata(&read_torrent(&self.store, key)?, key, None)?;
         let chosen = chosen(Some(selected));
         Ok(files.into_iter().enumerate().filter(|(i, _)| !chosen(*i)).map(|(_, (path, _))| path).collect())
     }
@@ -267,6 +267,7 @@ impl Manager {
             "cancel" if !matches!(job.state, State::Complete | State::Cancelled) => Command::Cancel(key.into()),
             "remove" if !job.state.active() => Command::Remove(key.into()),
             "delete" if !job.state.active() => Command::Delete(key.into()),
+            "remove" | "delete" => bail!("It's downloading; cancel it first"),
             "stop_seed" if job.state == State::Complete && (job.seeding || job.verifying) => Command::StopSeed(key.into()),
             "share" if job.state == State::Complete && !job.seeding && !job.verifying => Command::Seed(key.into()),
             _ => return Ok(()),
@@ -378,15 +379,8 @@ fn owned_folder(job: &Job) -> Result<PathBuf> {
     let base = base.canonicalize()?;
     let folder = base.join(job.folder.file_name().context("Invalid destination")?);
     match std::fs::symlink_metadata(&folder) {
-        Ok(metadata) => {
-            ensure!(metadata.is_dir() && !metadata.file_type().is_symlink(), "Transfer folder is not a regular directory");
-            ensure!(metadata.uid() == unsafe { libc::geteuid() }, "Transfer folder belongs to another user");
-            let marker = std::fs::symlink_metadata(folder.join(MARKER)).context("Missing ownership marker")?;
-            ensure!(marker.is_file() && !marker.file_type().is_symlink() && marker.nlink() == 1
-                && marker.uid() == unsafe { libc::geteuid() } && marker.len() == job.key.len() as u64,
-                "Unsafe ownership marker");
-            ensure!(std::fs::read_to_string(folder.join(MARKER)).ok().as_deref() == Some(job.key.as_str()),
-                "Refusing to overwrite an existing folder not owned by this transfer");
+        Ok(_) => {
+            check_owned(&folder, &job.key)?;
             std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700))?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -397,6 +391,21 @@ fn owned_folder(job: &Job) -> Result<PathBuf> {
         Err(error) => return Err(error.into()),
     }
     Ok(folder)
+}
+
+/// An existing folder is this transfer's own: a real folder of this user's, with its marker
+/// (a plain file of this user's, not a link) naming it.
+fn check_owned(folder: &Path, key: &str) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(folder)?;
+    ensure!(metadata.is_dir() && !metadata.file_type().is_symlink(), "Transfer folder is not a regular directory");
+    ensure!(metadata.uid() == unsafe { libc::geteuid() }, "Transfer folder belongs to another user");
+    let marker = std::fs::symlink_metadata(folder.join(MARKER)).context("Missing ownership marker")?;
+    ensure!(marker.is_file() && !marker.file_type().is_symlink() && marker.nlink() == 1
+        && marker.uid() == unsafe { libc::geteuid() } && marker.len() == key.len() as u64,
+        "Unsafe ownership marker");
+    ensure!(std::fs::read_to_string(folder.join(MARKER)).ok().as_deref() == Some(key),
+        "Refusing to overwrite an existing folder not owned by this transfer");
+    Ok(())
 }
 
 /// Remove a transfer folder that holds nothing but its ownership marker. Anything else in it
@@ -438,7 +447,9 @@ fn check_path(folder: &Path, relative: &Path) -> Result<()> {
 }
 
 /// The torrent's total size and its files (paths inside the download, with sizes).
-fn inspect_metadata(bytes: &[u8], key: &str, folder: &Path) -> Result<(u64, Vec<(String, u64)>)> {
+/// A torrent's size and files, refusing unsafe ones. With `folder`, also what's already on disk
+/// where it would write (without, it only reads the torrent: for listing its files).
+fn inspect_metadata(bytes: &[u8], key: &str, folder: Option<&Path>) -> Result<(u64, Vec<(String, u64)>)> {
     ensure!(bytes.len() as u64 <= MAX_METADATA, "Torrent metadata is too large");
     let meta = librqbit::torrent_from_bytes(bytes).context("Invalid torrent metadata")?;
     ensure!(meta.info_hash.as_string() == key, "Metadata info hash does not match the magnet");
@@ -452,7 +463,7 @@ fn inspect_metadata(bytes: &[u8], key: &str, folder: &Path) -> Result<(u64, Vec<
         let components = file.filename.to_vec();
         ensure!(!components.is_empty() && components.iter().all(|part| !part.is_empty() && part != "." && part != ".." && !part.contains(['/', '\\'])), "Unsafe path component");
         let path = file.filename.to_pathbuf();
-        check_path(folder, &path)?;
+        if let Some(folder) = folder { check_path(folder, &path)?; }
         ensure!(paths.insert(path.clone()), "Duplicate torrent file path");
         total = total.checked_add(file.len).context("Torrent size overflow")?;
         ensure!(total <= i64::MAX as u64, "Torrent is too large");
@@ -490,7 +501,7 @@ fn shown(error: &anyhow::Error) -> String {
 /// out); one whose list can't be read is looked up again on Retry.
 fn restore_entries(store: &Path, job: &mut Job) {
     let read = || -> Result<Vec<Entry>> {
-        let (_, files) = inspect_metadata(&read_torrent(store, &job.key)?, &job.key, &job.folder)?;
+        let (_, files) = inspect_metadata(&read_torrent(store, &job.key)?, &job.key, None)?;
         Ok(entries_of(job.platform, files))
     };
     match read() {
@@ -506,9 +517,14 @@ fn restore_entries(store: &Path, job: &mut Job) {
     }
 }
 
-/// Whether only some of a download's files are downloaded.
-fn job_partial(jobs: &Mutex<Vec<Job>>, key: &str) -> bool {
-    jobs.lock().unwrap().iter().any(|job| job.key == key && job.selected.is_some())
+/// Whether the engine's numbers are the download's: an error reports nothing done, and while
+/// checking it counts the whole torrent (right only when every file is downloaded).
+fn counts(stats: &librqbit::TorrentStats, job: &Job) -> bool {
+    match stats.state {
+        TorrentStatsState::Live | TorrentStatsState::Paused => true,
+        TorrentStatsState::Initializing { .. } => job.selected.is_none(),
+        TorrentStatsState::Error => false,
+    }
 }
 
 /// A copy of a download without its file list (it can be long), for the UI.
@@ -768,7 +784,7 @@ impl Worker {
         let job = self.job(&resolved.key).context("Missing transfer")?;
         if job.state != State::Resolving { return Ok(()); }
         let checked = (|| -> Result<(u64, Vec<Entry>)> {
-            let (total, files) = inspect_metadata(&resolved.bytes, &job.key, &job.folder)?;
+            let (total, files) = inspect_metadata(&resolved.bytes, &job.key, Some(&job.folder))?;
             // Nothing is downloaded yet: a release the launcher couldn't install stops here.
             if let Some(why) = job.platform.and_then(|platform| crate::package::unsupported(platform, &files)) {
                 bail!("Azrak can't install this release: {why}. Nothing was downloaded; choose another release of this game.");
@@ -802,7 +818,7 @@ impl Worker {
             if !self.store.join(format!("{key}.torrent")).is_file() { return self.resolve(key).await; }
             let bytes = read_torrent(&self.store, key)?;
             let folder = owned_folder(&job)?;
-            let (total, files) = inspect_metadata(&bytes, key, &folder)?;
+            let (total, files) = inspect_metadata(&bytes, key, Some(&folder))?;
             let selected = job.selected.as_deref();
             let chosen = chosen(selected);
             let total = if selected.is_some() { files.iter().enumerate().filter(|(i, _)| chosen(*i)).map(|(_, f)| f.1).sum() } else { total };
@@ -835,11 +851,9 @@ impl Worker {
                 let stats = handle.stats();
                 // Completion can race a pause/shutdown command before the next tick.
                 if state == State::Paused && stats.finished { state = State::Complete; }
-                // While checking, the engine counts the whole torrent: a partial download keeps its own.
-                let whole = job_partial(&self.jobs, key) && matches!(stats.state, TorrentStatsState::Initializing { .. });
                 self.update(key, |job| {
                     // Error/None engine states report zero progress even for a previously verified seed.
-                    if (job.state != State::Complete || stats.finished) && !whole {
+                    if (job.state != State::Complete || stats.finished) && counts(&stats, job) {
                         job.done = stats.progress_bytes; job.total = stats.total_bytes;
                     }
                 });
@@ -914,7 +928,7 @@ impl Worker {
         // Never create a folder just to find it empty.
         ensure!(job.folder.is_dir(), FILES_CHANGED);
         let folder = owned_folder(&job)?;
-        inspect_metadata(&bytes, key, &folder)?;
+        inspect_metadata(&bytes, key, Some(&folder))?;
         payload_present(&bytes, &folder, job.selected.as_deref())?;
         let session = self.session().await?;
         let magnet = librqbit::Magnet::parse(&job.magnet)?;
@@ -1012,11 +1026,9 @@ impl Worker {
         let Some(job) = self.job(key).filter(|job| !job.state.active()) else { return Ok(()); };
         self.stop_job(key, job.state).await?;
         match std::fs::symlink_metadata(&job.folder) {
-            Ok(meta) => {
-                ensure!(meta.is_dir() && !meta.file_type().is_symlink() && meta.uid() == unsafe { libc::geteuid() }
-                    && job.folder.file_name().is_some_and(|name| name == format!("torrent-{key}").as_str())
-                    && std::fs::read_to_string(job.folder.join(MARKER)).ok().as_deref() == Some(key),
-                    "Refusing to delete {}: it isn't this download's own folder", job.folder.display());
+            Ok(_) => {
+                let own = job.folder.file_name().is_some_and(|name| name == format!("torrent-{key}").as_str()) && check_owned(&job.folder, key).is_ok();
+                ensure!(own, "Refusing to delete {}: it isn't this download's own folder", job.folder.display());
                 // Hidden at once, deleted in the background so other transfers never wait for it.
                 // remove_dir_all removes links, never what they point to.
                 let doomed = job.folder.with_file_name(crate::util::deleting_name(key));
@@ -1063,10 +1075,8 @@ impl Worker {
                 (live.download_speed.mbps, live.upload_speed.mbps, peers, live.time_remaining.as_ref().map(ToString::to_string).unwrap_or_default())
             }).unwrap_or_default();
             let newly_complete = stats.finished && !was_complete;
-            // While checking, the engine counts the whole torrent: a partial download keeps its own.
-            let whole = job_partial(&self.jobs, &key) && matches!(stats.state, TorrentStatsState::Initializing { .. });
             self.update(&key, |job| {
-                if (!was_complete || stats.finished) && !whole { job.done = stats.progress_bytes; job.total = stats.total_bytes; }
+                if (!was_complete || stats.finished) && counts(&stats, job) { job.done = stats.progress_bytes; job.total = stats.total_bytes; }
                 job.state = state;
                 job.speed = if complete { 0.0 } else { speed }; job.peers = peers;
                 job.eta = if complete { String::new() } else { eta };
@@ -1869,27 +1879,27 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         for part in ["", ".", "..", "/absolute", "dir/file", "dir\\file", "nul\0name", "control\nname", MARKER] {
             let (key, bytes) = metadata(&[&[part]], None, false);
-            assert!(inspect_metadata(&bytes, &key, temp.path()).is_err(), "accepted {part:?}");
+            assert!(inspect_metadata(&bytes, &key, Some(temp.path())).is_err(), "accepted {part:?}");
         }
         for paths in [&[&["same"][..], &["same"][..]][..], &[&["a"][..], &["a", "b"][..]][..]] {
             let (key, bytes) = metadata(paths, None, false);
-            assert!(inspect_metadata(&bytes, &key, temp.path()).is_err());
+            assert!(inspect_metadata(&bytes, &key, Some(temp.path())).is_err());
         }
         let (key, bytes) = metadata(&[&["safe"]], Some("l"), false);
-        assert!(inspect_metadata(&bytes, &key, temp.path()).is_err());
+        assert!(inspect_metadata(&bytes, &key, Some(temp.path())).is_err());
         let (key, bytes) = metadata(&[&["safe", "nested.bin"]], None, true);
         assert!(librqbit::torrent_from_bytes(&bytes).unwrap().info.data.private);
-        assert_eq!(inspect_metadata(&bytes, &key, temp.path()).unwrap().0, 65536);
-        assert!(inspect_metadata(&bytes, &"0".repeat(40), temp.path()).is_err());
-        assert!(inspect_metadata(b"bad", &key, temp.path()).is_err());
-        assert!(inspect_metadata(&vec![0; MAX_METADATA as usize + 1], &key, temp.path()).is_err());
+        assert_eq!(inspect_metadata(&bytes, &key, Some(temp.path())).unwrap().0, 65536);
+        assert!(inspect_metadata(&bytes, &"0".repeat(40), Some(temp.path())).is_err());
+        assert!(inspect_metadata(b"bad", &key, Some(temp.path())).is_err());
+        assert!(inspect_metadata(&vec![0; MAX_METADATA as usize + 1], &key, Some(temp.path())).is_err());
     }
 
     #[test]
     fn space_check_uses_missing_and_sparse_files_not_saved_verified_progress() {
         let temp = tempfile::tempdir().unwrap();
         let (key, bytes) = metadata(&[&["payload"]], None, false);
-        inspect_metadata(&bytes, &key, temp.path()).unwrap();
+        inspect_metadata(&bytes, &key, Some(temp.path())).unwrap();
         assert_eq!(required_space(&bytes, temp.path(), None).unwrap(), 65536);
         let path = temp.path().join("payload");
         std::fs::File::create(&path).unwrap().set_len(65536).unwrap();
