@@ -49,12 +49,12 @@ impl Setup {
     }
 }
 
-/// "21.6 GB", "84 MB", "2 KB", "0 KB".
+/// "21.6 GB", "84.0 MB", "2 KB", "0 KB" (the Game Hub too).
 pub fn size_label(bytes: u64) -> String {
     let b = bytes as f64;
     if bytes == 0 { return "0 KB".into(); }
     if bytes >= 1 << 30 { format!("{:.1} GB", b / (1u64 << 30) as f64) }
-    else if bytes >= 1 << 20 { format!("{:.0} MB", b / (1u64 << 20) as f64) }
+    else if bytes >= 1 << 20 { format!("{:.1} MB", b / (1u64 << 20) as f64) }
     else { format!("{} KB", (bytes / 1024).max(1)) }
 }
 
@@ -83,6 +83,8 @@ impl App {
     pub fn open_setup_with(&mut self, target: Target, chosen: Option<downloads::Job>) {
         let game = target.game.map(|index| &self.games[index]);
         let existing = chosen.or_else(|| self.download_for_target(target));
+        // A download that couldn't start with the folders it was given (it still says why).
+        let existing_failed = existing.as_ref().filter(|job| job.state == State::Ready && !job.error.is_empty()).map(|job| job.key.clone());
         let (topic, name, magnet, platform) = match (game, &existing) {
             (Some(game), _) => (game.g.id, game.name.clone(), game.g.magnet.clone(), game.g.platform),
             // An existing download is never looked up again: no magnet needed.
@@ -109,7 +111,8 @@ impl App {
         ui.set_setup_title(name.into());
         // One that couldn't start: the folders it was tried with (its error is about them).
         let (download_dir, install_dir) = match self.tried_dirs.clone() {
-            Some((tried, dl, inst)) if Some(&tried) == self.setup.as_ref().and_then(|setup| setup.key.as_ref()) => (dl, inst),
+            // Only while that attempt is the one shown (still waiting, saying why).
+            Some((tried, dl, inst)) if existing_failed.as_ref() == Some(&tried) => (dl, inst),
             _ => (download_dir, install_dir),
         };
         ui.set_setup_dl_path(download_dir.into());
@@ -197,7 +200,13 @@ impl App {
         // Where it goes, and the space on each drive.
         let (dl_path, inst_path) = (util::expand_home(ui.get_setup_dl_path().trim()), util::expand_home(ui.get_setup_inst_path().trim()));
         let known = view.state == 1;
-        let need = if known { total } else { 0 };
+        // What it needs: the chosen files, and what the engine writes beside them.
+        let spill = job.as_ref().filter(|_| known).map_or(0, |job| {
+            let mut files = vec![(0, false, true); setup.indices.last().map_or(0, |last| last + 1)];
+            for ((entry, on), &i) in setup.entries.iter().zip(&setup.on).zip(&setup.indices) { files[i] = (entry.size, *on, false); }
+            downloads::spill(&files, job.piece)
+        });
+        let need = if known { total + spill } else { 0 };
         let mut short = None;
         let dl_drive = dl_path.is_absolute().then(|| setup.drive(&dl_path)).flatten();
         let inst_drive = inst_path.is_absolute().then(|| setup.drive(&inst_path)).flatten();

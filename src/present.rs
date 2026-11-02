@@ -1390,7 +1390,7 @@ fn audio_move() {
 
 /// A release's download size, the same everywhere it's shown ("183.4 GB", "766.9 MB").
 pub fn size_label(g: &crate::catalog::Game) -> Option<String> {
-    g.size_gb.map(|gb| if gb >= 1.0 { format!("{gb:.1} GB") } else { format!("{:.1} MB", gb * 1024.0) })
+    g.size_gb.map(|gb| crate::setup_ui::size_label((gb * (1u64 << 30) as f64) as u64))
         .or_else(|| (!g.size.is_empty()).then(|| g.size.clone()))
 }
 

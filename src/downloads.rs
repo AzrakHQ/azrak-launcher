@@ -104,6 +104,8 @@ pub struct Job {
     #[serde(default)] pub install_to: Option<PathBuf>,
     /// When it was added (Unix seconds; 0 for downloads from before this was recorded).
     #[serde(default)] pub added: u64,
+    /// The torrent's piece size: what the engine writes into left-out files beside chosen ones.
+    #[serde(default)] pub piece: u64,
 }
 
 /// One file of a torrent, as the player sees it before downloading.
@@ -230,8 +232,7 @@ impl Manager {
         if job.state == State::Ready && job.entries.is_empty() {
             let unreadable = restore_entries(&self.store, job, read);
             let mut set = self.unreadable.lock().unwrap();
-            // Read at last: its "couldn't be read" goes.
-            if unreadable { set.insert(key.into()); } else if set.remove(key) && job.state == State::Ready { job.error.clear(); }
+            if unreadable { set.insert(key.into()); } else { set.remove(key); }
             let _ = self.tx.try_send(Command::Save);
         }
         job.entries.clone()
@@ -258,7 +259,7 @@ impl Manager {
             folder: base.join(format!("torrent-{key}")), key: key.clone(), topic,
             name: name.chars().filter(|c| !c.is_control()).take(200).collect(), magnet,
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, starting: false, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, starting: false, piece: 0, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
             platform: Some(platform), entries: vec![], selected: None, install_to: None, added: crate::util::now_secs() as u64,
         };
         self.tx.try_send(Command::Prepare(job.clone())).context("Download worker is busy or unavailable")?;
@@ -587,6 +588,8 @@ fn shown(error: &anyhow::Error) -> String {
 /// The files that can be chosen (all but programs a console game never needs, and padding).
 fn allowed(entries: &[Entry]) -> Vec<usize> { (0..entries.len()).filter(|&i| !entries[i].blocked).collect() }
 
+const UNREADABLE: &str = "Its file list couldn't be read";
+
 const NOTHING_ALLOWED: &str = "Nothing in this release can be downloaded: it only holds programs a console game never needs.";
 
 /// The folder is this download's own (named for it, with its marker): safe to delete.
@@ -594,10 +597,25 @@ fn own_folder(job: &Job) -> bool {
     job.folder.file_name().is_some_and(|name| name == format!("torrent-{}", job.key).as_str()) && check_owned(&job.folder, &job.key).is_ok()
 }
 
+/// Room for what the engine writes into left-out files beside chosen ones: the pieces they
+/// share, up to two each. `files`: every file in order, as (size, chosen, padding); padding
+/// between two files means they share no piece.
+pub fn spill(files: &[(u64, bool, bool)], piece: u64) -> u64 {
+    let beside = |k: Option<usize>| k.and_then(|k| files.get(k)).is_some_and(|&(_, chosen, padding)| chosen && !padding);
+    files.iter().enumerate()
+        .filter(|&(i, &(_, chosen, padding))| !chosen && !padding && (beside(i.checked_sub(1)) || beside(Some(i + 1))))
+        .map(|(_, &(size, _, _))| size.min(2 * piece)).sum()
+}
+
+fn piece_size(bytes: &[u8]) -> u64 {
+    librqbit::torrent_from_bytes(bytes).ok().and_then(|meta| meta.info.data.validate().ok()).map_or(0, |info| info.lengths().default_piece_length() as u64)
+}
+
 /// A download's file list, from its saved torrent.
-fn read_entries(store: &Path, job: &Job) -> Result<Vec<Entry>> {
-    let (_, files, padding) = inspect_metadata(&read_torrent(store, &job.key)?, &job.key, None)?;
-    Ok(entries_of(job.platform, files, padding))
+fn read_entries(store: &Path, job: &Job) -> Result<(Vec<Entry>, u64)> {
+    let bytes = read_torrent(store, &job.key)?;
+    let (_, files, padding) = inspect_metadata(&bytes, &job.key, None)?;
+    Ok((entries_of(job.platform, files, padding), piece_size(&bytes)))
 }
 
 /// The file list of a download waiting for its files to be chosen, as read back. One looked up
@@ -605,13 +623,15 @@ fn read_entries(store: &Path, job: &Job) -> Result<Vec<Entry>> {
 /// whose torrent is gone or bad is looked up again on Retry; one that just couldn't be read
 /// stays to be chosen, and is read again when next wanted.
 /// Returns whether it just couldn't be read (it stays to be chosen, saying so).
-fn restore_entries(store: &Path, job: &mut Job, read: Result<Vec<Entry>>) -> bool {
+fn restore_entries(store: &Path, job: &mut Job, read: Result<(Vec<Entry>, u64)>) -> bool {
     let torrent = store.join(format!("{}.torrent", job.key));
     let error = match read {
-        // Its error (why it couldn't start last time, say) stays.
-        Ok(entries) if entries.iter().any(|entry| !entry.blocked) => {
+        // Its error (why it couldn't start last time, say) stays; one about reading it goes.
+        Ok((entries, piece)) if entries.iter().any(|entry| !entry.blocked) => {
             if job.selected.is_none() { job.selected = Some(allowed(&entries)); }
+            if job.error.starts_with(UNREADABLE) { job.error.clear(); }
             job.entries = entries;
+            job.piece = piece;
             return false;
         }
         Ok(_) => {
@@ -622,7 +642,7 @@ fn restore_entries(store: &Path, job: &mut Job, read: Result<Vec<Entry>>) -> boo
         }
         _ if !torrent.exists() => "Its file list is missing. Retry looks it up again.".to_string(),
         Err(error) if error.downcast_ref::<std::io::Error>().is_some() => {
-            job.error = format!("Its file list couldn't be read ({error}).");
+            job.error = format!("{UNREADABLE} ({error}).");
             job.problem = Problem::Other;
             return true;
         }
@@ -700,15 +720,8 @@ fn required_space(bytes: &[u8], folder: &Path, selected: Option<&[usize]>) -> Re
     let info = meta.info.data.validate()?;
     let mut required = 0u64;
     let chosen = chosen(selected);
-    // A left-out file beside a chosen one gets the pieces they share written into it (up to two).
-    let files: Vec<_> = info.iter_file_details().enumerate().filter(|(_, file)| !file.attrs().padding).collect();
-    let piece = info.lengths().default_piece_length() as u64;
-    for (n, (i, file)) in files.iter().enumerate() {
-        let beside = |k: Option<usize>| k.and_then(|k| files.get(k)).is_some_and(|(j, _)| chosen(*j));
-        if !chosen(*i) && (beside(n.checked_sub(1)) || beside(Some(n + 1))) {
-            required = required.checked_add(file.len.min(2 * piece)).context("Torrent size overflow")?;
-        }
-    }
+    let files: Vec<(u64, bool, bool)> = info.iter_file_details().enumerate().map(|(i, file)| (file.len, chosen(i), file.attrs().padding)).collect();
+    required = required.checked_add(spill(&files, info.lengths().default_piece_length() as u64)).context("Torrent size overflow")?;
     for (_, file) in info.iter_file_details().enumerate().filter(|(i, file)| chosen(*i) && !file.attrs().padding) {
         let path = file.filename.to_pathbuf();
         check_path(folder, &path)?;
@@ -967,11 +980,12 @@ impl Worker {
         })();
         // Anything else wrong here is the release's own problem.
         let (total, entries) = checked.map_err(|error| if error.is::<LookupError>() { error } else { LookupError(Problem::Release, error).into() })?;
+        let piece = piece_size(&resolved.bytes);
         // Saved only once it passed every check: Retry downloads only what was saved.
         secure_write(&self.store.join(format!("{}.torrent", job.key)), &resolved.bytes)?;
         self.peers.insert(job.key.clone(), resolved.peers);
         self.update(&job.key, |job| {
-            job.total = total; job.file_count = entries.iter().filter(|entry| !entry.padding).count();
+            job.total = total; job.file_count = entries.iter().filter(|entry| !entry.padding).count(); job.piece = piece;
             job.selected = Some(allowed(&entries));
             job.entries = entries;
             job.state = State::Ready; job.error.clear();
@@ -1066,7 +1080,7 @@ impl Worker {
     }
 
     /// Whether a completed download may share: the setting, or the player asked for this one.
-    fn may_seed(&self, key: &str) -> bool { self.policy.seed_after_download || self.job(key).is_some_and(|job| job.shared_by_hand) }
+    fn may_seed(&self, key: &str) -> bool { self.policy.seed_after_download || self.jobs.lock().unwrap().iter().any(|job| job.key == key && job.shared_by_hand) }
 
     async fn set_seed_after_download(&mut self, enabled: bool) -> Result<()> {
         // Turning the setting off stops every seed, the ones shared by hand too. Settings sends it
@@ -1421,7 +1435,7 @@ mod tests {
             key: key.into(), topic: 0, name: "Generated public-domain fixture".into(),
             magnet: format!("magnet:?xt=urn:btih:{key}"), folder: base.join(format!("torrent-{key}")),
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, starting: false, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, starting: false, piece: 0, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
             platform: None, entries: vec![], selected: None, install_to: None, added: 0,
         }
     }
@@ -2368,6 +2382,14 @@ mod tests {
         for name in ["a.pkg", "b.pkg"] { std::fs::write(folder.join("Game").join(name), vec![0; 65536]).unwrap(); }
         payload_present(&bytes, &folder, None).unwrap();
         payload_present(&bytes, &folder, Some(&[0, 2])).unwrap();
+    }
+
+    #[test]
+    fn left_out_files_beside_chosen_ones_need_room_for_shared_pieces() {
+        const M: u64 = 1 << 20;
+        // A chosen, B left out (beside A), padding, C chosen, D left out (beside C), E left out alone.
+        let files = [(100 * M, true, false), (50 * M, false, false), (M, false, true), (80 * M, true, false), (10 * M, false, false), (20 * M, false, false)];
+        assert_eq!(spill(&files, 16 * M), 32 * M + 10 * M, "two pieces at most; padding shares none; E is beside nothing chosen");
     }
 
     #[test]
