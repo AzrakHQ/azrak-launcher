@@ -68,7 +68,7 @@ fn note_delete(path: &Path, going: bool) {
     lines.retain(|line| *line != shown);
     if going { lines.push(shown); }
     let result = if lines.is_empty() { std::fs::remove_file(&file).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }) }
-        else { std::fs::write(&file, lines.join("\n") + "\n") };
+        else { atomic_write(&file, (lines.join("\n") + "\n").as_bytes()) };
     if let Err(error) = result { crate::log!("could not note a delete: {error}"); }
 }
 

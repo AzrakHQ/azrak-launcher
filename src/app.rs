@@ -197,6 +197,9 @@ pub struct App {
     pub install_states: HashMap<String, crate::installer::State>,
     /// Installs that couldn't start by themselves (why), until the player retries.
     pub install_failures: HashMap<String, String>,
+    /// Folders chosen on the Download & install panel (download key, download, install): the
+    /// defaults from now on once that download really starts (one that couldn't keeps them).
+    pub chosen_dirs: Option<(String, String, String)>,
     pub download_states: HashMap<String, crate::downloads::State>,
     pub download_model: Rc<VecModel<crate::DownloadData>>,
     /// The Download & install panel, while it's open.
@@ -518,6 +521,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         install_pending: None,
         install_states: HashMap::new(),
         install_failures: HashMap::new(),
+        chosen_dirs: None,
         download_states: HashMap::new(),
         download_model: Rc::new(VecModel::default()),
         setup: None,
@@ -1760,6 +1764,7 @@ impl App {
     }
 
     pub fn tick(&mut self) {
+        self.settle_chosen_dirs();
         self.push_installs();
         self.auto_install();
         self.push_downloads();
@@ -2801,7 +2806,10 @@ impl App {
                 match self.download_for_target(t) {
                     Some(job) if job.install_to.is_some() => match self.start_install(&job.key, job.install_to.clone().unwrap()) {
                         Ok(()) => { audio::play(Sound::Select); self.push_installs(); }
-                        Err(error) => self.toast("Couldn't install", &format!("{error:#}"), 2),
+                        Err(error) => {
+                            self.toast("Couldn't install", &format!("{error:#}"), 2);
+                            self.install_failures.insert(job.key.clone(), format!("{error:#}"));
+                        }
                     },
                     Some(job) => self.prepare_install(&job.key),
                     None => {}

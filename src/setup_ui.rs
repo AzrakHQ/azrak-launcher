@@ -116,6 +116,22 @@ impl App {
         self.push_setup();
     }
 
+    /// The panel's folders become the defaults once its download really started; one that went
+    /// back to choosing (it couldn't use them) leaves the defaults as they were.
+    pub fn settle_chosen_dirs(&mut self) {
+        let Some((key, download_dir, install_dir)) = self.chosen_dirs.clone() else { return };
+        match self.downloads.job(&key) {
+            Some(job) if job.state == State::Ready && job.error.is_empty() => return,
+            Some(job) if job.state != State::Ready => {
+                let mut cfg = self.cfg.lock().unwrap();
+                (cfg.download_dir, cfg.install_dir) = (download_dir, install_dir);
+                cfg.save();
+            }
+            _ => {}
+        }
+        self.chosen_dirs = None;
+    }
+
     /// Closing the panel (Back, Cancel, or Download & install): forget a lookup that never started.
     pub fn setup_closed(&mut self) {
         if let Some(setup) = self.setup.take() {
@@ -417,7 +433,7 @@ impl App {
         let (download_dir, install_dir) = (ui.get_setup_dl_path().trim().to_string(), ui.get_setup_inst_path().trim().to_string());
         match self.downloads.begin(&key, util::expand_home(&download_dir), selected, Some(util::expand_home(&install_dir))) {
             Ok(()) => {
-                { let mut cfg = self.cfg.lock().unwrap(); cfg.download_dir = download_dir; cfg.install_dir = install_dir; cfg.save(); }
+                self.chosen_dirs = Some((key.clone(), download_dir, install_dir));
                 if let Some(setup) = self.setup.as_mut() { setup.begun = true; }
                 audio::play(Sound::Select);
                 self.back();

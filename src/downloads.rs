@@ -36,21 +36,13 @@ pub enum Problem {
     Unsupported,
 }
 
-/// Marks a lookup error as the release's own problem; reads as the error itself.
+/// A lookup error and what kind of problem it is; reads as the error itself.
 #[derive(Debug)]
-struct ReleaseProblem(anyhow::Error);
-impl std::fmt::Display for ReleaseProblem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.0) }
+struct LookupError(Problem, anyhow::Error);
+impl std::fmt::Display for LookupError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}", self.1) }
 }
-impl std::error::Error for ReleaseProblem {}
-
-/// The release can't be installed by the launcher (its kind, not its torrent).
-#[derive(Debug)]
-struct Unsupported(String);
-impl std::fmt::Display for Unsupported {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str(&self.0) }
-}
-impl std::error::Error for Unsupported {}
+impl std::error::Error for LookupError {}
 
 /// A finished download's files aren't all there as they were.
 #[derive(Debug)]
@@ -60,12 +52,6 @@ impl std::fmt::Display for FilesChanged {
 }
 impl std::error::Error for FilesChanged {}
 
-#[derive(Debug)]
-struct NoAnswer;
-impl std::fmt::Display for NoAnswer {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("Metadata lookup timed out; no reachable peers. Retry later.") }
-}
-impl std::error::Error for NoAnswer {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum State { Resolving, Ready, Checking, Downloading, Paused, Complete, Failed, Cancelled }
@@ -182,6 +168,8 @@ pub struct Manager {
     tx: mpsc::Sender<Command>,
     thread: Option<std::thread::JoinHandle<()>>,
     store: PathBuf,
+    /// Downloads whose file list couldn't be read back (read again on Keep trying).
+    unreadable: Mutex<HashSet<String>>,
 }
 
 impl Manager {
@@ -204,7 +192,7 @@ impl Manager {
             runtime.block_on(Worker::new(worker_store, shared, policy).run(rx));
             runtime.shutdown_timeout(Duration::from_secs(2));
         }).expect("could not create download worker");
-        Self { jobs, tx, thread: Some(thread), store }
+        Self { jobs, tx, thread: Some(thread), store, unreadable: Default::default() }
     }
 
     /// Every download, without the file lists being chosen from (`entries`), which can be long.
@@ -225,14 +213,16 @@ impl Manager {
             let mut jobs = self.jobs.lock().unwrap();
             let Some(job) = jobs.iter_mut().find(|job| job.key == key) else { return vec![] };
             // One that couldn't be read is read again on Keep trying (retry_entries), not every second.
-            if job.state != State::Ready || !job.entries.is_empty() || !job.error.is_empty() { return job.entries.clone(); }
+            if job.state != State::Ready || !job.entries.is_empty() || self.unreadable.lock().unwrap().contains(key) { return job.entries.clone(); }
             light(job)
         };
         let read = read_entries(&self.store, &job);
         let mut jobs = self.jobs.lock().unwrap();
         let Some(job) = jobs.iter_mut().find(|job| job.key == key) else { return vec![] };
         if job.state == State::Ready && job.entries.is_empty() {
-            restore_entries(&self.store, job, read);
+            let unreadable = restore_entries(&self.store, job, read);
+            let mut set = self.unreadable.lock().unwrap();
+            if unreadable { set.insert(key.into()); } else if set.remove(key) { job.error.clear(); }
             let _ = self.tx.try_send(Command::Save);
         }
         job.entries.clone()
@@ -240,9 +230,7 @@ impl Manager {
 
     /// Read a file list that couldn't be read back again (Keep trying).
     pub fn retry_entries(&self, key: &str) -> Vec<Entry> {
-        if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key && job.state == State::Ready && job.entries.is_empty()) {
-            job.error.clear();
-        }
+        self.unreadable.lock().unwrap().remove(key);
         self.entries(key)
     }
 
@@ -288,7 +276,11 @@ impl Manager {
         let mut selected = selected;
         selected.sort_unstable();
         selected.dedup();
-        self.tx.try_send(Command::Begin { key: key.into(), base, selected, install_to }).context("Download worker is busy or unavailable")
+        self.tx.try_send(Command::Begin { key: key.into(), base, selected, install_to }).context("Download worker is busy or unavailable")?;
+        // Why it couldn't start last time no longer applies (and isn't read as this time's).
+        drop(jobs);
+        if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key) { job.error.clear(); }
+        Ok(())
     }
 
     /// Where it installs by itself (`None`: it doesn't, its game is being deleted). Takes effect
@@ -316,6 +308,12 @@ impl Manager {
     }
 
     pub fn action(&self, key: &str, action: &str) -> Result<()> {
+        if action == "delete" {
+            // Refused here, so the player hears it (the worker checks again before deleting);
+            // checked outside the lock, which the worker uses every second.
+            let job = self.job(key).context("Transfer not found")?;
+            ensure!(job.state.active() || own_folder(&job) || !job.folder.exists(), "{} isn't this download's own folder, so it's left alone", job.folder.display());
+        }
         let jobs = self.jobs.lock().unwrap();
         let job = jobs.iter().find(|job| job.key == key).context("Transfer not found")?;
         let command = match action {
@@ -325,11 +323,7 @@ impl Manager {
             "pause" if matches!(job.state, State::Checking | State::Downloading) => Command::Pause(key.into()),
             "cancel" if !matches!(job.state, State::Complete | State::Cancelled) => Command::Cancel(key.into()),
             "remove" if !job.state.active() => Command::Remove(key.into()),
-            "delete" if !job.state.active() => {
-                // Refused here, so the player hears it (the worker checks again before deleting).
-                ensure!(own_folder(job) || !job.folder.exists(), "{} isn't this download's own folder, so it's left alone", job.folder.display());
-                Command::Delete(key.into())
-            }
+            "delete" if !job.state.active() => Command::Delete(key.into()),
             "remove" | "delete" => bail!("It's downloading; cancel it first"),
             "stop_seed" if job.state == State::Complete && (job.seeding || job.verifying) => Command::StopSeed(key.into()),
             "share" if job.state == State::Complete && !job.seeding && !job.verifying => Command::Seed(key.into()),
@@ -591,26 +585,27 @@ fn read_entries(store: &Path, job: &Job) -> Result<Vec<Entry>> {
 /// by an older launcher gets its files chosen like a new one (Windows programs left out). One
 /// whose torrent is gone or bad is looked up again on Retry; one that just couldn't be read
 /// stays to be chosen, and is read again when next wanted.
-fn restore_entries(store: &Path, job: &mut Job, read: Result<Vec<Entry>>) {
+/// Returns whether it just couldn't be read (it stays to be chosen, saying so).
+fn restore_entries(store: &Path, job: &mut Job, read: Result<Vec<Entry>>) -> bool {
     let torrent = store.join(format!("{}.torrent", job.key));
     let error = match read {
+        // Its error (why it couldn't start last time, say) stays.
         Ok(entries) if entries.iter().any(|entry| !entry.blocked) => {
             if job.selected.is_none() { job.selected = Some(allowed(&entries)); }
             job.entries = entries;
-            job.error.clear();
-            return;
+            return false;
         }
         Ok(_) => {
             job.state = State::Failed;
             job.error = NOTHING_ALLOWED.into();
             job.problem = Problem::Release;
-            return;
+            return false;
         }
         _ if !torrent.exists() => "Its file list is missing. Retry looks it up again.".to_string(),
         Err(error) if error.downcast_ref::<std::io::Error>().is_some() => {
             job.error = format!("Its file list couldn't be read ({error}).");
             job.problem = Problem::Other;
-            return;
+            return true;
         }
         _ => {
             let _ = std::fs::remove_file(&torrent);
@@ -620,6 +615,7 @@ fn restore_entries(store: &Path, job: &mut Job, read: Result<Vec<Entry>>) {
     job.state = State::Failed;
     job.error = error;
     job.problem = Problem::Other;
+    false
 }
 
 /// Whether the engine's numbers are the download's: an error reports nothing done, and while
@@ -901,7 +897,7 @@ impl Worker {
                         list_only: true, output_folder: Some(folder.to_string_lossy().into_owned()),
                         initial_peers: Some(initial_peers), ..Default::default()
                     }),
-                )).await.map_err(|_| anyhow::Error::new(NoAnswer))??;
+                )).await.map_err(|_| LookupError(Problem::NoAnswer, anyhow::anyhow!("Metadata lookup timed out; no reachable peers. Retry later.")))??;
                 let AddTorrentResponse::ListOnly(response) = response else { bail!("Unexpected metadata response"); };
                 Ok(Resolved { key: key.clone(), bytes: response.torrent_bytes.to_vec(), peers: response.seen_peers })
         });
@@ -921,12 +917,7 @@ impl Worker {
             Err(_) => Err(anyhow::anyhow!("Metadata lookup task stopped unexpectedly; retry")),
         };
         if let Err(error) = resolved.and_then(|resolved| self.resolved(resolved)) {
-            let problem = match error.downcast_ref::<ReleaseProblem>() {
-                Some(release) if release.0.is::<Unsupported>() => Problem::Unsupported,
-                Some(_) => Problem::Release,
-                None if error.is::<NoAnswer>() => Problem::NoAnswer,
-                None => Problem::Other,
-            };
+            let problem = error.downcast_ref::<LookupError>().map_or(Problem::Other, |error| error.0);
             self.fail_as(&key, error, problem);
         }
     }
@@ -938,13 +929,15 @@ impl Worker {
             let (total, files, padding) = inspect_metadata(&resolved.bytes, &job.key, None)?;
             // Nothing is downloaded yet: a release the launcher couldn't install stops here.
             if let Some(why) = job.platform.and_then(|platform| crate::package::unsupported(platform, &files.iter().zip(&padding).filter(|(_, pad)| !**pad).map(|(file, _)| file.clone()).collect::<Vec<_>>())) {
-                return Err(Unsupported(format!("Azrak can't install this release: {why}. Nothing was downloaded; choose another release of this game.")).into());
+                let why = anyhow::anyhow!("Azrak can't install this release: {why}. Nothing was downloaded; choose another release of this game.");
+                return Err(LookupError(Problem::Unsupported, why).into());
             }
             let entries = entries_of(job.platform, files, padding);
             ensure!(entries.iter().any(|entry| !entry.blocked), NOTHING_ALLOWED);
             Ok((total, entries))
         })();
-        let (total, entries) = checked.map_err(|error| anyhow::Error::new(ReleaseProblem(error)))?;
+        // Anything else wrong here is the release's own problem.
+        let (total, entries) = checked.map_err(|error| if error.is::<LookupError>() { error } else { LookupError(Problem::Release, error).into() })?;
         // Saved only once it passed every check: Retry downloads only what was saved.
         secure_write(&self.store.join(format!("{}.torrent", job.key)), &resolved.bytes)?;
         self.peers.insert(job.key.clone(), resolved.peers);
@@ -1694,7 +1687,7 @@ mod tests {
             assert_eq!(handles.len(), 2);
             // Exercise the production bounded command dispatch, without production test hooks.
             let (tx, rx) = mpsc::channel(64);
-            let mut manager = Manager { jobs: worker.jobs.clone(), tx, thread: None, store: worker.store.clone() };
+            let mut manager = Manager { jobs: worker.jobs.clone(), tx, thread: None, store: worker.store.clone(), unreadable: Default::default() };
             let running = tokio::spawn(worker.run(rx));
             manager.set_seed_after_download(false).unwrap();
             wait_job(&manager, &key, |job| !job.seeding).await;
@@ -1729,7 +1722,7 @@ mod tests {
                 let handle = worker.handles[&key].clone();
                 let payload = worker.job(&key).unwrap().folder.join("public-domain-fixture.bin");
                 let (tx, rx) = mpsc::channel(64);
-                let manager = Manager { jobs: worker.jobs.clone(), tx, thread: None, store: worker.store.clone() };
+                let manager = Manager { jobs: worker.jobs.clone(), tx, thread: None, store: worker.store.clone(), unreadable: Default::default() };
                 let running = tokio::spawn(worker.run(rx));
                 if stop_first {
                     manager.action(&key, "stop_seed").unwrap();
@@ -1928,7 +1921,7 @@ mod tests {
         assert!(!restored[0].seeding);
         assert_eq!(restored[0].upload_speed, 0.0);
         let (tx, mut rx) = mpsc::channel(1);
-        let manager = Manager { jobs: Arc::new(Mutex::new(restored)), tx, thread: None, store: PathBuf::new() };
+        let manager = Manager { jobs: Arc::new(Mutex::new(restored)), tx, thread: None, store: PathBuf::new(), unreadable: Default::default() };
         manager.set_seed_after_download(false).unwrap();
         assert!(manager.set_seed_after_download(true).is_err(), "full channel must report busy, not block UI");
         assert!(matches!(rx.try_recv(), Ok(Command::SetSeedAfterDownload(false))));

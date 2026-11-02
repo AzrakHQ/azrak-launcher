@@ -259,6 +259,12 @@ impl App {
         let jobs = self.downloads.snapshot();
         let Some(job) = jobs.iter().find(|job| job.key == key) else { return };
         let install = self.installer.snapshot().into_iter().find(|record| record.key == key);
+        // Nothing that changes the download while it's being installed from.
+        let touches = !matches!(action, "folder" | "cancel_install" | "play_install" | "vpn" | "stop_seed" | "share" | "choose");
+        if touches && install.as_ref().is_some_and(|record| record.state.active()) {
+            self.toast("Installation in progress", "Cancel the installation first.", 0);
+            return self.push_downloads();
+        }
         match action {
             "folder" => {
                 let path = install.as_ref().filter(|record| record.state == Install::Installed).and_then(|record| record.path.as_ref()).unwrap_or(&job.folder);
@@ -300,9 +306,6 @@ impl App {
                 let target = Target { game, local: game.and_then(|g| self.games[g].local) };
                 self.open_setup_with(target, Some(job.clone()));
                 return;
-            }
-            _ if action != "stop_seed" && install.as_ref().is_some_and(|record| record.state.active()) => {
-                self.toast("Installation in progress", "Cancel the installation before removing its download.", 0);
             }
             _ => {
                 if let Err(error) = self.downloads.action(key, action) { self.toast("Transfer unavailable", &error.to_string(), 2); }
@@ -584,8 +587,9 @@ impl App {
                     self.install_failures.remove(&key);
                 }
                 audio::play(Sound::Select);
-                let what = match choice { "both" => "The game and its download are deleted", "game" => "The game is deleted; its download stays",
-                    "download" => "The download is deleted", _ => "Removed from Downloads; every file is kept" };
+                // The download itself goes a moment later (the worker deletes it).
+                let what = match choice { "both" => "The game is deleted, and its download is going", "game" => "The game is deleted; its download stays",
+                    "download" => "Its download is being deleted", _ => "Removed from Downloads; every file is kept" };
                 self.toast(&name, what, 1);
             }
             Err(error) => self.toast("Couldn't delete it", &format!("{error:#}"), 2),
