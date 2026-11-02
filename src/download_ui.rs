@@ -696,7 +696,8 @@ impl App {
             // One that's verifying shows how far the check is.
             let verifying = active.len() == 1 && active[0].state == State::Checking && active[0].check_total > 0 && active[0].done > 0;
             let (done, total) = active.iter().fold((0u64, 0u64), |(d, t), job| if verifying { (d + job.checked, t + job.check_total) } else { (d + job.done, t + job.total) });
-            let frac = if total > 0 { (done as f32 / total as f32).min(1.0) } else { 0.0 };
+            // A check never reads done (100%) before the download goes on, as on the page.
+            let frac = if total > 0 { (done as f32 / total as f32).min(if verifying { 0.99 } else { 1.0 }) } else { 0.0 };
             let one = (active.len() == 1).then(|| active[0].key.clone());
             let suffix = format!(" · {}%", pct(frac));
             let (words, suffix) = if active.len() > 1 { (format!("{} downloads", active.len()), suffix) }

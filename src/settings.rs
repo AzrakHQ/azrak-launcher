@@ -365,7 +365,7 @@ impl App {
         let mut chars = header.chars();
         let label: String = chars.next().into_iter().chain(chars.flat_map(|c| c.to_lowercase())).collect();
         let (sub, (note, note_kind)) = match header {
-            "SYSTEM" => ("Internet, sound and power", (String::new(), 0)),
+            "SYSTEM" => ("Internet, Bluetooth, sound and updates", (String::new(), 0)),
             "GAMES" => ("Where your games live", (String::new(), 0)),
             "PLAYING" => ("What happens when you start a game", match crate::gamepad::connected().first() {
                 Some(name) => (name.clone(), 0),
@@ -377,7 +377,9 @@ impl App {
             }),
             "UPDATES" => ("The launcher and its emulators", {
                 let ready = [self.app_update_available(), self.kyty_update_available()].iter().filter(|r| **r).count();
-                if ready > 0 { (format!("{ready} ready"), 2) } else { (String::new(), 0) }
+                // Installed and waiting: a restart is what's needed.
+                if self.upd.installed.is_some() { ("Restart".to_string(), 2) }
+                else if ready > 0 { (format!("{ready} ready"), 2) } else { (String::new(), 0) }
             }),
             "LAUNCHER" => ("Display, sounds and your game ratings", (String::new(), 0)),
             "ADVANCED" => ("KytyPS5 location and video options, the game catalog", (String::new(), 0)),
@@ -491,9 +493,10 @@ impl App {
                     self.scroll_settings();
                 }
             }
-            // Left changes a switch or a choice; anywhere else it goes back to the sections.
-            Act::Left if !matches!(kind, 2 | 3) => to_nav(self),
-            Act::Left | Act::Right => self.settings_change(self.idx as usize, if a == Act::Left { -1 } else { 1 }),
+            // Left and Right step a choice (its ‹ › show it); anywhere else Left goes back to the
+            // sections. A switch changes with ✕ only (Left never turns one off by surprise).
+            Act::Left | Act::Right if kind == 3 => self.settings_change(self.idx as usize, if a == Act::Left { -1 } else { 1 }),
+            Act::Left => to_nav(self),
             Act::Confirm => self.settings_activate(self.idx as usize),
             _ => {}
         }

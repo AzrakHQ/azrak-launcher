@@ -819,7 +819,10 @@ fn wire_callbacks(ui: &AppWindow) {
     ui.on_setup_change(|i| with_app(move |app| app.setup_change(i)));
     ui.on_setup_edit_done(|| with_app(|app| app.setup_edit_done()));
     ui.on_setup_edit_left(|which| with_app(move |app| app.setup_edit_left(which)));
-    ui.on_settings_back(|| with_app(|app| if app.overlay == Overlay::Settings { app.act(Act::Back) }));
+    // A field being typed in is cancelled first, as Esc does.
+    ui.on_settings_back(|| with_app(|app| if app.overlay == Overlay::Settings {
+        if app.edit_index >= 0 { app.finish_edit(None); } else { app.act(Act::Back) }
+    }));
     ui.on_hub_release(|delta| with_app(move |app| app.cycle_hub_release(delta)));
     ui.on_genres_scroll(|delta| with_app(move |app| app.scroll_genres(delta)));
 }
@@ -3217,7 +3220,13 @@ impl App {
         // No glass from the last time it was open (other art) until this art's is ready.
         self.ui().set_settings_has_glass(false);
         self.ui().set_settings_y(0.0);
-        self.push_overlay(Overlay::Settings, Z_SETTINGS_NAV, 0);
+        // Already open under what's shown (Settings → Downloads → VPN settings): back to it, not
+        // a second one on top (the first would come back in the second's state).
+        while self.overlay != Overlay::Settings && self.stack.iter().any(|(overlay, _, _)| *overlay == Overlay::Settings) {
+            self.back();
+        }
+        if self.overlay == Overlay::Settings { self.set_focus(Z_SETTINGS_NAV, 0); }
+        else { self.push_overlay(Overlay::Settings, Z_SETTINGS_NAV, 0); }
         self.push_settings();
     }
 
