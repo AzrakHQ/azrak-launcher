@@ -56,19 +56,49 @@ pub fn deleting_name(key: &str) -> String {
 }
 const DELETING: &str = ".azrak-deleting-";
 
-/// Finish deletes the launcher closed in the middle of, in the background. Only this user's own
-/// hidden `.azrak-deleting-` folders right inside `dirs`; links in them are removed, never followed.
-pub fn finish_deletes(mut dirs: Vec<PathBuf>) {
+/// The background deletes still going (one folder per line), so the next start finishes them
+/// wherever they are.
+static DELETES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn note_delete(path: &Path, going: bool) {
+    if cfg!(test) { return; }
+    let _one_at_a_time = DELETES.lock().unwrap_or_else(|e| e.into_inner());
+    let file = config_dir().join("deleting.txt");
+    let shown = path.to_string_lossy().into_owned();
+    let mut lines: Vec<String> = std::fs::read_to_string(&file).unwrap_or_default().lines().map(String::from).collect();
+    lines.retain(|line| *line != shown);
+    if going { lines.push(shown); }
+    let result = if lines.is_empty() { std::fs::remove_file(&file).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }) }
+        else { std::fs::write(&file, lines.join("\n") + "\n") };
+    if let Err(error) = result { crate::log!("could not note a delete: {error}"); }
+}
+
+/// Delete `doomed` (already renamed with `deleting_name`) with `remove`, on its own thread.
+pub fn delete_in_background(doomed: PathBuf, remove: impl FnOnce() -> anyhow::Result<()> + Send + 'static) {
+    note_delete(&doomed, true);
+    std::thread::spawn(move || match remove() {
+        Ok(()) => note_delete(&doomed, false),
+        Err(error) => crate::log!("deleting {} failed: {error:#}", doomed.display()),
+    });
+}
+
+/// Finish deletes the launcher closed in the middle of, in the background: the ones noted, and
+/// any left right inside `dirs`. Only this user's own hidden `.azrak-deleting-` folders; links
+/// in them are removed, never followed.
+pub fn finish_deletes(dirs: Vec<PathBuf>) {
     use std::os::unix::fs::MetadataExt;
-    dirs.sort();
-    dirs.dedup();
+    let noted: Vec<PathBuf> = std::fs::read_to_string(config_dir().join("deleting.txt")).unwrap_or_default().lines().map(PathBuf::from).collect();
     std::thread::spawn(move || {
-        for entry in dirs.iter().filter_map(|dir| std::fs::read_dir(dir).ok()).flatten().flatten() {
-            let ours = entry.file_name().to_string_lossy().starts_with(DELETING)
-                && std::fs::symlink_metadata(entry.path()).is_ok_and(|m| m.is_dir() && m.uid() == unsafe { libc::geteuid() });
+        let mut found: Vec<PathBuf> = dirs.iter().filter_map(|dir| std::fs::read_dir(dir).ok()).flatten().flatten().map(|e| e.path()).collect();
+        found.extend(noted.iter().cloned());
+        found.sort();
+        found.dedup();
+        for path in found {
+            let ours = path.file_name().is_some_and(|name| name.to_string_lossy().starts_with(DELETING))
+                && std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir() && m.uid() == unsafe { libc::geteuid() });
             if ours {
-                if let Err(error) = std::fs::remove_dir_all(entry.path()) { crate::log!("deleting {} failed: {error}", entry.path().display()); }
+                if let Err(error) = std::fs::remove_dir_all(&path) { crate::log!("deleting {} failed: {error}", path.display()); continue; }
             }
+            if noted.contains(&path) && std::fs::symlink_metadata(&path).is_err() { note_delete(&path, false); }
         }
     });
 }

@@ -84,7 +84,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             (d.group, d.kind) = (1, 1);
             d.stats = vec![(size.clone(), format!("{} files", job.file_count))];
             // One looked up before files could be chosen downloads them all.
-            if job.entries.is_empty() {
+            if job.selected.is_none() {
                 d.status = "Ready to download".into();
                 d.line = "Ready to download".into();
                 d.actions = vec![("start", "Start download", "disk"), ("discard", "Remove", "trash")];
@@ -117,7 +117,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
                 d.stats.push(("By itself".into(), "Resumes".into()));
                 d.line = "Waiting for your VPN".into();
                 // Still being looked up when the VPN went: nothing to keep, so Cancel forgets it.
-                let cancel = if job.selected.is_none() && job.entries.is_empty() && job.install_to.is_none() && job.done == 0 { "discard" } else { "cancel" };
+                let cancel = if job.selected.is_none() && job.install_to.is_none() && job.done == 0 { "discard" } else { "cancel" };
                 d.actions = vec![("vpn", "VPN settings", "gear"), (cancel, "Cancel", "close")];
             } else {
                 d.status = "Paused".into();
@@ -222,7 +222,7 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
 impl App {
     /// Download pressed: the Download & install panel, or the download if it's already under way.
     pub fn prepare_download(&mut self, target: Target) {
-        if let Some(job) = self.download_for_target(target).filter(|job| job.state != State::Ready || job.entries.is_empty()) {
+        if let Some(job) = self.download_for_target(target).filter(|job| job.state != State::Ready || job.selected.is_none()) {
             self.open_downloads(Some(&job.key));
             return;
         }
@@ -543,6 +543,10 @@ impl App {
             self.toast("Installation in progress", "Cancel the installation before deleting it.", 0);
             return self.push_downloads();
         }
+        if choice != "cancel" {
+            // First, so the install queue never installs it while (or after) it's deleted.
+            let _ = self.downloads.no_install(&key);
+        }
         if matches!(choice, "both" | "game") {
             // Never under a running game.
             let path = self.installer.snapshot().into_iter().find(|r| r.key == key).and_then(|r| r.path);
@@ -551,8 +555,6 @@ impl App {
                 self.toast("Quit the game first", &format!("{name} is running."), 2);
                 return self.push_downloads();
             }
-            // First, so the install queue never reinstalls it while (or after) it's deleted.
-            let _ = self.downloads.no_install(&key);
             match self.installer.uninstall(&key) {
                 Ok(_) => {
                     self.install_states.remove(&key);

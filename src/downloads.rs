@@ -152,7 +152,20 @@ impl Manager {
         Self { jobs, tx, thread: Some(thread), store }
     }
 
-    pub fn snapshot(&self) -> Vec<Job> { self.jobs.lock().unwrap().clone() }
+    /// Every download, without the file lists being chosen from (`entries`), which can be long.
+    pub fn snapshot(&self) -> Vec<Job> {
+        self.jobs.lock().unwrap().iter_mut().map(|job| {
+            let entries = std::mem::take(&mut job.entries);
+            let copy = job.clone();
+            job.entries = entries;
+            copy
+        }).collect()
+    }
+
+    /// The file list of a download whose files are being chosen.
+    pub fn entries(&self, key: &str) -> Vec<Entry> {
+        self.jobs.lock().unwrap().iter().find(|job| job.key == key).map(|job| job.entries.clone()).unwrap_or_default()
+    }
 
     /// The files of a download the player left out (paths inside its folder).
     pub fn left_out(&self, key: &str) -> Result<std::collections::BTreeSet<String>> {
@@ -675,11 +688,12 @@ impl Worker {
         if let Some(why) = job.platform.and_then(|platform| crate::package::unsupported(platform, &files)) {
             bail!("Azrak can't install this release: {why}. Nothing was downloaded; choose another release of this game.");
         }
-        secure_write(&self.store.join(format!("{}.torrent", job.key)), &resolved.bytes)?;
-        self.peers.insert(job.key.clone(), resolved.peers);
         let entries: Vec<Entry> = files.into_iter()
             .map(|(path, size)| Entry { blocked: blocked(job.platform, &path), path, size }).collect();
         ensure!(entries.iter().any(|entry| !entry.blocked), "Nothing in this release can be downloaded: it only holds programs a console game never needs.");
+        // Saved only once it passed every check: Retry downloads only what was saved.
+        secure_write(&self.store.join(format!("{}.torrent", job.key)), &resolved.bytes)?;
+        self.peers.insert(job.key.clone(), resolved.peers);
         self.update(&job.key, |job| {
             job.total = total; job.file_count = entries.len();
             job.selected = Some((0..entries.len()).filter(|&i| !entries[i].blocked).collect());
@@ -796,7 +810,11 @@ impl Worker {
             .filter(|job| job.state == State::Complete && !self.handles.contains_key(&job.key))
             .map(|job| job.key.clone()).collect();
         for key in keys {
-            if let Err(error) = self.seed(&key).await { self.fail(&key, error); }
+            if let Err(error) = self.seed(&key).await {
+                // Shared by hand, and it can't share now: it waits for Share again.
+                self.update(&key, |job| job.shared_by_hand = false);
+                self.fail(&key, error);
+            }
         }
     }
 
@@ -905,9 +923,8 @@ impl Worker {
                 // remove_dir_all removes links, never what they point to.
                 let doomed = job.folder.with_file_name(crate::util::deleting_name(key));
                 std::fs::rename(&job.folder, &doomed).with_context(|| format!("Delete {}", job.folder.display()))?;
-                tokio::task::spawn_blocking(move || {
-                    if let Err(error) = std::fs::remove_dir_all(&doomed) { crate::log!("deleting {} failed: {error}", doomed.display()); }
-                });
+                let gone = doomed.clone();
+                crate::util::delete_in_background(doomed, move || Ok(std::fs::remove_dir_all(&gone)?));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
@@ -1002,8 +1019,9 @@ impl Worker {
                         },
                         Some(Command::Seed(key)) => {
                             self.update(&key, |job| job.shared_by_hand = true);
-                            self.persist();
                             let result = self.seed(&key).await;
+                            if result.is_err() { self.update(&key, |job| job.shared_by_hand = false); }
+                            self.persist();
                             Some((key, result))
                         },
                         Some(Command::StopSeed(key)) => {
@@ -1819,10 +1837,12 @@ mod tests {
         let key = manager.prepare(3, "Two files", &torrent.as_magnet().to_string(), temp.path().join("default"), crate::platform::Platform::Ps4).unwrap();
         let ready = rt.block_on(wait_job(&manager, &key, |job| job.state == State::Ready));
         assert!(ready.added > 0);
-        assert_eq!(ready.entries.len(), 2);
-        let pkg = ready.entries.iter().position(|e| e.path.ends_with("game.pkg")).unwrap();
-        let other = ready.entries.iter().find(|e| e.path.ends_with("artbook.bin")).unwrap().path.clone();
-        let pkg_path = ready.entries[pkg].path.clone();
+        let entries = manager.entries(&key);
+        assert!(ready.entries.is_empty(), "snapshots leave the file list out");
+        assert_eq!(entries.len(), 2);
+        let pkg = entries.iter().position(|e| e.path.ends_with("game.pkg")).unwrap();
+        let other = entries.iter().find(|e| e.path.ends_with("artbook.bin")).unwrap().path.clone();
+        let pkg_path = entries[pkg].path.clone();
         assert_eq!(ready.selected.as_ref().unwrap().len(), 2, "everything that isn't blocked is chosen at first");
         assert!(manager.begin(&key, temp.path().join("chosen"), vec![], None).is_err(), "nothing chosen");
         assert!(manager.begin(&key, PathBuf::from("relative"), vec![pkg], None).is_err());
@@ -1831,7 +1851,7 @@ mod tests {
         let done = rt.block_on(wait_job(&manager, &key, |job| job.state == State::Complete));
         assert_eq!(done.total, game.len() as u64, "progress counts only the chosen file");
         assert_eq!(done.install_to, Some(install_to));
-        assert!(done.entries.is_empty(), "the full file list isn't kept once it started");
+        assert!(manager.entries(&key).is_empty(), "the full file list isn't kept once it started");
         assert!(done.folder.starts_with(temp.path().join("chosen").canonicalize().unwrap()));
         assert_eq!(std::fs::read(done.folder.join(&pkg_path)).unwrap(), game);
         let extra = std::fs::read(done.folder.join(&other)).unwrap_or_default();

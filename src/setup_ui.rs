@@ -65,13 +65,18 @@ impl App {
         let (topic, name, magnet, platform) = (game.g.id, game.name.clone(), game.g.magnet.clone(), game.g.platform);
         let existing = self.download_for_target(target);
         let (download_dir, install_dir) = { let cfg = self.cfg.lock().unwrap(); (cfg.download_dir.clone(), cfg.install_dir.clone()) };
+        // Already open lower down (Choose files from Downloads opened over it): this one replaces
+        // it, and still forgets the lookup on closing if the first one would have.
+        let looked_up = self.setup.take().filter(|old| old.created && !old.begun).and_then(|old| old.key);
+        self.stack.retain(|(overlay, _, _)| *overlay != Overlay::Setup);
         let (key, created, error) = match existing {
-            Some(job) => (Some(job.key), false, String::new()),
+            Some(job) => { let created = looked_up.as_ref() == Some(&job.key); (Some(job.key), created, String::new()) }
             None => match self.downloads.prepare(topic, &name, &magnet, util::expand_home(&download_dir), platform) {
                 Ok(key) => (Some(key), true, String::new()),
                 Err(error) => (None, false, format!("{error:#}")),
             },
         };
+        if let Some(old) = looked_up.filter(|old| key.as_ref() != Some(old)) { let _ = self.downloads.discard(&old); }
         self.setup = Some(Setup { key, platform, created, entries: vec![], on: vec![], error, begin_error: String::new(),
             focus: Focus::Cancel, moved: false, edit: 0, begun: false });
         self.setup_model.set_vec(vec![]);
@@ -118,14 +123,18 @@ impl App {
             const RELEASE: [&str; 9] = ["Azrak can't install", "Nothing in this release", "Torrent", "Unsafe", "Invalid", "Symlink",
                 "Duplicate", "Conflicting", "Metadata info hash"];
             // Nothing could be looked up at all (too many downloads, say): only its reason helps.
-            let nobody = setup.key.is_some() && !RELEASE.iter().any(|start| error.starts_with(start));
+            let release = RELEASE.iter().any(|start| error.starts_with(start));
             let (title, message) = if setup.key.is_none() {
                 view.go_label = "Can't download right now".into();
                 failed("This release can't be looked up", &error)
-            } else if nobody {
+            } else if !release {
                 view.go_label = "Keep trying".into();
                 view.go_enabled = true;
-                failed("The file list didn't arrive", "No other player answered, or this PC is offline. Keep trying, or close and pick a release with more players in the Game Hub.")
+                if error.starts_with("Metadata lookup") {
+                    failed("The file list didn't arrive", "No other player answered, or this PC is offline. Keep trying, or close and pick a release with more players in the Game Hub.")
+                } else {
+                    failed("The file list didn't arrive", &error)
+                }
             } else if error.starts_with("Azrak can't install") {
                 view.go_label = "Can't install this release".into();
                 failed("This release can't be installed", &error)
@@ -133,7 +142,7 @@ impl App {
                 view.go_label = "Can't download this release".into();
                 failed("This release can't be downloaded", &error)
             };
-            view.state = if nobody { 2 } else { 3 };
+            view.state = if setup.key.is_some() && !release { 2 } else { 3 };
             view.message_title = title;
             view.message = message;
         } else if !setup.entries.is_empty() {
@@ -207,15 +216,16 @@ impl App {
         if let Some(setup) = self.setup.as_mut() {
             if setup.entries.is_empty() {
                 let job = setup.key.as_ref().and_then(|key| self.downloads.snapshot().into_iter().find(|job| &job.key == key));
-                if let Some(job) = job.filter(|job| job.state == State::Ready && !job.entries.is_empty()) {
-                    let mut on: Vec<bool> = job.entries.iter().map(|e| !e.blocked).collect();
+                let entries = job.as_ref().filter(|job| job.state == State::Ready).map(|job| self.downloads.entries(&job.key)).unwrap_or_default();
+                if let Some(job) = job.filter(|_| !entries.is_empty()) {
+                    let mut on: Vec<bool> = entries.iter().map(|e| !e.blocked).collect();
                     if let Some(selected) = &job.selected {
                         let mut picked = vec![false; on.len()];
                         for &i in selected { if let Some(p) = picked.get_mut(i) { *p = true; } }
                         on.iter_mut().zip(picked).for_each(|(on, picked)| *on &= picked);
                     }
                     setup.on = on;
-                    setup.entries = job.entries;
+                    setup.entries = entries;
                 }
             }
         }

@@ -183,14 +183,12 @@ impl Manager {
                 let hidden = component(doomed.as_bytes())?;
                 let r = unsafe { libc::renameat2(parent.0.as_raw_fd(), leaf.as_ptr(), parent.0.as_raw_fd(), hidden.as_ptr(), libc::RENAME_NOREPLACE) };
                 ensure!(r == 0, "Delete {}: {}", path.display(), std::io::Error::last_os_error());
-                let shown = path.clone();
-                std::thread::spawn(move || {
-                    let result = parent.child(doomed.as_bytes(), false).and_then(|dir| remove_contents(&dir, 0)).and_then(|()| {
-                        let r = unsafe { libc::unlinkat(parent.0.as_raw_fd(), hidden.as_ptr(), libc::AT_REMOVEDIR) };
-                        ensure!(r == 0, "{}", std::io::Error::last_os_error());
-                        Ok(())
-                    });
-                    if let Err(e) = result { eprintln!("Deleting {} failed: {e:#}", shown.display()); }
+                let full = path.with_file_name(&doomed);
+                crate::util::delete_in_background(full, move || {
+                    remove_contents(&parent.child(doomed.as_bytes(), false)?, 0)?;
+                    let r = unsafe { libc::unlinkat(parent.0.as_raw_fd(), hidden.as_ptr(), libc::AT_REMOVEDIR) };
+                    ensure!(r == 0, "{}", std::io::Error::last_os_error());
+                    Ok(())
                 });
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

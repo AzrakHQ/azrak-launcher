@@ -514,13 +514,7 @@ unsafe fn vulkan_devices() -> Vec<Probed> {
 
 /// Free space where games go, in GiB (the nearest existing folder).
 pub fn free_gb(dir: &Path) -> Option<f64> {
-    let mut dir = dir;
-    while !dir.exists() {
-        dir = dir.parent()?;
-    }
-    let path = std::ffi::CString::new(dir.as_os_str().as_encoded_bytes()).ok()?;
-    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
-    (unsafe { libc::statvfs(path.as_ptr(), &mut st) } == 0).then(|| st.f_bavail as f64 * st.f_frsize as f64 / (1u64 << 30) as f64)
+    crate::downloads::drive(dir).map(|drive| drive.free as f64 / (1u64 << 30) as f64)
 }
 
 #[cfg(test)]
