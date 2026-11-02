@@ -82,6 +82,8 @@ pub struct Job {
     #[serde(skip)] pub upload_speed: f64,
     /// Checking a completed download's files before it seeds again.
     #[serde(skip)] pub verifying: bool,
+    /// Download & install was pressed and the worker is starting it.
+    #[serde(skip)] pub starting: bool,
     /// Stopped because "download only through a VPN" is on and the VPN isn't connected;
     /// resumes by itself when it is.
     #[serde(default)] pub waiting_vpn: bool,
@@ -208,12 +210,18 @@ impl Manager {
     /// The file list of a download whose files are being chosen. Not saved (it can be long): the
     /// first time after a start it's read back from the saved torrent (outside the lock, which
     /// the worker uses every second).
-    pub fn entries(&self, key: &str) -> Vec<Entry> {
+    pub fn entries(&self, key: &str) -> Vec<Entry> { self.read_back(key, false) }
+
+    /// Read a file list that couldn't be read back again (Keep trying).
+    pub fn retry_entries(&self, key: &str) -> Vec<Entry> { self.read_back(key, true) }
+
+    fn read_back(&self, key: &str, again: bool) -> Vec<Entry> {
         let job = {
             let mut jobs = self.jobs.lock().unwrap();
             let Some(job) = jobs.iter_mut().find(|job| job.key == key) else { return vec![] };
-            // One that couldn't be read is read again on Keep trying (retry_entries), not every second.
-            if job.state != State::Ready || !job.entries.is_empty() || self.unreadable.lock().unwrap().contains(key) { return job.entries.clone(); }
+            // One that couldn't be read is read again on Keep trying, not every second.
+            let unreadable = self.unreadable.lock().unwrap().contains(key);
+            if job.state != State::Ready || !job.entries.is_empty() || (unreadable && !again) { return job.entries.clone(); }
             light(job)
         };
         let read = read_entries(&self.store, &job);
@@ -222,16 +230,11 @@ impl Manager {
         if job.state == State::Ready && job.entries.is_empty() {
             let unreadable = restore_entries(&self.store, job, read);
             let mut set = self.unreadable.lock().unwrap();
-            if unreadable { set.insert(key.into()); } else if set.remove(key) { job.error.clear(); }
+            // Read at last: its "couldn't be read" goes.
+            if unreadable { set.insert(key.into()); } else if set.remove(key) && job.state == State::Ready { job.error.clear(); }
             let _ = self.tx.try_send(Command::Save);
         }
         job.entries.clone()
-    }
-
-    /// Read a file list that couldn't be read back again (Keep trying).
-    pub fn retry_entries(&self, key: &str) -> Vec<Entry> {
-        self.unreadable.lock().unwrap().remove(key);
-        self.entries(key)
     }
 
     /// The files of a download the player left out (paths inside its folder).
@@ -255,7 +258,7 @@ impl Manager {
             folder: base.join(format!("torrent-{key}")), key: key.clone(), topic,
             name: name.chars().filter(|c| !c.is_control()).take(200).collect(), magnet,
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, starting: false, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
             platform: Some(platform), entries: vec![], selected: None, install_to: None, added: crate::util::now_secs() as u64,
         };
         self.tx.try_send(Command::Prepare(job.clone())).context("Download worker is busy or unavailable")?;
@@ -268,18 +271,19 @@ impl Manager {
     pub fn begin(&self, key: &str, base: PathBuf, selected: Vec<usize>, install_to: Option<PathBuf>) -> Result<()> {
         ensure!(base.is_absolute(), "Choose an absolute download folder (or a ~/ path)");
         ensure!(install_to.as_ref().is_none_or(|path| path.is_absolute()), "Choose an absolute install folder (or a ~/ path)");
-        let jobs = self.jobs.lock().unwrap();
-        let job = jobs.iter().find(|job| job.key == key).context("Transfer not found")?;
-        ensure!(job.state == State::Ready, "This download has already started");
+        let mut jobs = self.jobs.lock().unwrap();
+        let job = jobs.iter_mut().find(|job| job.key == key).context("Transfer not found")?;
+        ensure!(job.state == State::Ready && !job.starting, "This download has already started");
         ensure!(!selected.is_empty(), "Choose at least one file");
         ensure!(selected.iter().all(|&i| job.entries.get(i).is_some_and(|entry| !entry.blocked)), "That file can't be downloaded");
         let mut selected = selected;
         selected.sort_unstable();
         selected.dedup();
+        // Starting from now (nothing can forget it meanwhile), and why it couldn't start last
+        // time no longer applies.
         self.tx.try_send(Command::Begin { key: key.into(), base, selected, install_to }).context("Download worker is busy or unavailable")?;
-        // Why it couldn't start last time no longer applies (and isn't read as this time's).
-        drop(jobs);
-        if let Some(job) = self.jobs.lock().unwrap().iter_mut().find(|job| job.key == key) { job.error.clear(); }
+        job.starting = true;
+        job.error.clear();
         Ok(())
     }
 
@@ -636,7 +640,7 @@ fn unstarted(job: &Job) -> bool {
         State::Paused => job.total == 0,
         _ => false,
     };
-    state && job.done == 0
+    state && job.done == 0 && !job.starting
 }
 
 /// A copy of a download without its file list (it can be long), for the UI.
@@ -1135,7 +1139,7 @@ impl Worker {
     /// The player's choices for a download whose file list has arrived, then start it.
     async fn begin(&mut self, key: &str, base: &Path, selected: Vec<usize>, install_to: Option<PathBuf>) -> Result<()> {
         let job = self.job(key).context("Missing transfer")?;
-        if job.state != State::Ready { return Ok(()); }
+        if job.state != State::Ready { self.update(key, |j| j.starting = false); return Ok(()); }
         // The lookup's folder is canonical: the same folder reached another way is the same.
         let folder = base.canonicalize().unwrap_or_else(|_| base.to_path_buf()).join(format!("torrent-{key}"));
         // The size is what's chosen; every file chosen is `None` once it started.
@@ -1160,7 +1164,7 @@ impl Worker {
             if folder != job.folder { remove_unused(&folder, key); }
             for dir in &made { let _ = std::fs::remove_dir(dir); }
             self.update(key, |j| {
-                j.state = State::Ready; j.folder = job.folder.clone(); j.total = job.total; j.install_to = job.install_to.clone();
+                j.state = State::Ready; j.starting = false; j.folder = job.folder.clone(); j.total = job.total; j.install_to = job.install_to.clone();
                 j.error = shown(&error); j.clear_runtime();
             });
             self.persist();
@@ -1169,7 +1173,7 @@ impl Worker {
         // Started (or waiting for the VPN). Looking it up made an empty folder where downloads
         // went by default: not there now. The file list was only for choosing.
         if folder != job.folder { remove_unused(&job.folder, key); }
-        self.update(key, |j| { j.entries = vec![]; if all { j.selected = None; } });
+        self.update(key, |j| { j.entries = vec![]; j.starting = false; if all { j.selected = None; } });
         self.persist();
         Ok(())
     }
@@ -1199,8 +1203,11 @@ impl Worker {
         let doomed = job.folder.with_file_name(crate::util::deleting_name(key));
         if present { std::fs::rename(&job.folder, &doomed).with_context(|| format!("Delete {}", job.folder.display()))?; }
         if let Err(error) = self.stop_job(key, job.state).await {
-            if present { let _ = std::fs::rename(&doomed, &job.folder); }
-            return Err(error);
+            // Still sharing: put it back as it was. Stopped all the same: it goes on.
+            if self.handles.contains_key(key) {
+                if present { let _ = std::fs::rename(&doomed, &job.folder); }
+                return Err(error);
+            }
         }
         if present {
             let gone = doomed.clone();
@@ -1384,7 +1391,7 @@ mod tests {
             key: key.into(), topic: 0, name: "Generated public-domain fixture".into(),
             magnet: format!("magnet:?xt=urn:btih:{key}"), folder: base.join(format!("torrent-{key}")),
             state: State::Resolving, done: 0, total: 0, file_count: 0, files: vec![], error: String::new(),
-            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
+            speed: 0.0, eta: String::new(), peers: 0, seeding: false, upload_speed: 0.0, verifying: false, starting: false, waiting_vpn: false, shared_by_hand: false, problem: Problem::Other,
             platform: None, entries: vec![], selected: None, install_to: None, added: 0,
         }
     }

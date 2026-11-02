@@ -84,11 +84,16 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
         State::Ready => {
             (d.group, d.kind) = (1, 1);
             d.stats = vec![(size.clone(), format!("{} files", job.file_count))];
-            d.status = "Waiting for you to choose its files".into();
-            d.line = "Choose its files".into();
-            // It couldn't start where (or with what) the player chose.
-            d.note = job.error.clone();
-            d.actions = vec![("choose", "Choose files", "check"), (if job.done == 0 { "discard" } else { "remove" }, "Remove", "trash")];
+            if job.starting {
+                d.status = "Starting the download".into();
+                d.line = "Starting".into();
+            } else {
+                d.status = "Waiting for you to choose its files".into();
+                d.line = "Choose its files".into();
+                // It couldn't start where (or with what) the player chose.
+                d.note = job.error.clone();
+                d.actions = vec![("choose", "Choose files", "check"), (if job.done == 0 { "discard" } else { "remove" }, "Remove", "trash")];
+            }
         }
         State::Checking | State::Downloading => {
             d.status = if job.state == State::Checking { "Checking what's already downloaded".into() } else { "Downloading".into() };
@@ -152,8 +157,8 @@ fn describe(job: &Job, install: Option<&Record>, failure: Option<&String>, queue
             let failed = match install {
                 // The latest attempt's reason (one that couldn't even start is newer than the record).
                 Some(record) if record.state == Install::Failed => Some(failure.cloned().unwrap_or_else(|| record.error.clone())),
-                None => failure.cloned(),
-                _ => None,
+                Some(record) if record.state == Install::Installed || record.state.active() => None,
+                _ => failure.cloned(),
             };
             match install.map(|r| r.state) {
                 Some(state) if state.active() => {
@@ -270,19 +275,7 @@ impl App {
                 let path = install.as_ref().filter(|record| record.state == Install::Installed).and_then(|record| record.path.as_ref()).unwrap_or(&job.folder);
                 if path.is_dir() { open_url(&path.to_string_lossy()); }
             }
-            "install" => {
-                // Retrying where it was set to install skips the question; otherwise ask where.
-                match job.install_to.clone() {
-                    Some(to) => match self.start_install(key, to) {
-                        Ok(()) => { audio::play(Sound::Select); self.push_installs(); }
-                        Err(error) => {
-                            self.toast("Couldn't install", &format!("{error:#}"), 2);
-                            self.install_failures.insert(key.into(), format!("{error:#}"));
-                        }
-                    },
-                    None => self.prepare_install(key),
-                }
-            }
+            "install" => self.install_download(key),
             "cancel_install" => {
                 if let Err(error) = self.installer.cancel(key) { self.toast("Installation unavailable", &error.to_string(), 2); }
             }

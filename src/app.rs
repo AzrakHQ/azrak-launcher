@@ -2802,18 +2802,7 @@ impl App {
                 self.toast("This release is a PS5 PKG package", &format!("PS5 games install from extracted releases only, not PKG packages. {tip}"), 0);
             }
             "install" => {
-                // Where it was set to install, if it was; otherwise ask where.
-                match self.download_for_target(t) {
-                    Some(job) if job.install_to.is_some() => match self.start_install(&job.key, job.install_to.clone().unwrap()) {
-                        Ok(()) => { audio::play(Sound::Select); self.push_installs(); }
-                        Err(error) => {
-                            self.toast("Couldn't install", &format!("{error:#}"), 2);
-                            self.install_failures.insert(job.key.clone(), format!("{error:#}"));
-                        }
-                    },
-                    Some(job) => self.prepare_install(&job.key),
-                    None => {}
-                }
+                if let Some(job) = self.download_for_target(t) { self.install_download(&job.key); }
             }
             "store" => {
                 if let Some(i) = self.target_info(t).filter(|i| !i.store.is_empty()) {

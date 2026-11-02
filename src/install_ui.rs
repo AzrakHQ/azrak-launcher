@@ -72,6 +72,20 @@ impl App {
         Ok(())
     }
 
+    /// Install pressed (Downloads or the Game Hub): where it was set to install, if it was;
+    /// otherwise ask where. One that can't start waits for Install by hand, saying why.
+    pub fn install_download(&mut self, key: &str) {
+        let Some(to) = self.downloads.job(key).and_then(|job| job.install_to) else { return self.prepare_install(key) };
+        match self.start_install(key, to) {
+            Ok(()) => { crate::audio::play(crate::audio::Sound::Select); self.push_installs(); }
+            Err(error) => {
+                self.toast("Couldn't install", &format!("{error:#}"), 2);
+                self.install_failures.insert(key.into(), format!("{error:#}"));
+                self.downloads.set_install_to(key, None);
+            }
+        }
+    }
+
     /// Downloads that install by themselves: when nothing is installing, the oldest finished one
     /// that hasn't been installed yet starts. One that failed waits for Retry install.
     pub fn auto_install(&mut self) {
