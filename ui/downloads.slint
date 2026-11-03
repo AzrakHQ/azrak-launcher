@@ -49,21 +49,6 @@ export component Capsule inherits Rectangle {
     Rectangle { x: parent.height / 2; y: 1px; width: parent.width - parent.height; height: 1px; background: #ffffff47; }
 }
 
-// Back, on the same glass as the live numbers: one pill, highlighted as a whole.
-component GlassBack inherits Capsule {
-    in property <bool> pad;
-    callback clicked();
-    width: row.preferred-width;
-    lit: ta.has-hover;
-    row := HorizontalLayout {
-        padding-left: (16px * S.k); padding-right: (20px * S.k); spacing: (10px * S.k);
-        Image { source: Icons.chevl; colorize: Theme.text; width: (20px * S.k); height: (20px * S.k); y: (parent.height - self.height) / 2; }
-        Text { text: "Back"; font-size: (18px * S.k); font-weight: 500; color: Theme.text; vertical-alignment: center; }
-        Text { text: root.pad ? "○" : "Esc"; font-size: (15px * S.k); color: root.pad ? #ff8f9c : Theme.text3; vertical-alignment: center; }
-    }
-    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
-}
-
 component PadGlyph inherits Rectangle {
     in property <string> glyph;
     width: (26px * S.k); height: self.width; border-radius: self.width / 2;
@@ -132,11 +117,13 @@ export component DownloadsPage inherits Rectangle {
         background: @linear-gradient(180deg, #05070fcc 0%, #05070f00 22%, #05070f00 45%, #05070fe6 72%, #05070f 82%);
     }
 
-    // Top bar: the live numbers on a capsule so they read over any art.
+    // Top bar: the Hub's Back, where the Hub has it (its chevron in the margin, left of the page's
+    // edge), and the live numbers on a capsule so they read over any art. No title: the art says
+    // which download this is.
     HorizontalLayout {
-        x: (120px * S.k); y: (40px * S.k); width: root.width - (240px * S.k); height: (52px * S.k);
+        x: (96px * S.k); y: (40px * S.k); width: root.width - (216px * S.k); height: (52px * S.k);
         spacing: (14px * S.k);
-        Text { text: "Downloads"; font-size: (28px * S.k); font-weight: 600; color: Theme.text; vertical-alignment: center; }
+        BackButton { pad: root.pad; clicked => { root.close(); } }
         Rectangle { horizontal-stretch: 1; }
         if root.any || root.vpn-kind != 0: Capsule {
             glass: root.glass; has-glass: root.has-glass && root.any; glass-w: root.width; glass-h: (800px * S.k);
@@ -153,10 +140,6 @@ export component DownloadsPage inherits Rectangle {
                     Text { text: root.vpn; font-size: (18px * S.k); font-weight: 600; color: root.vpn-kind == 1 ? Theme.ok : Theme.warn; vertical-alignment: center; }
                 }
             }
-        }
-        GlassBack {
-            glass: root.glass; has-glass: root.has-glass && root.any; glass-w: root.width; glass-h: (800px * S.k);
-            pad: root.pad; clicked => { root.close(); }
         }
     }
 
