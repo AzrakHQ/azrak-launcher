@@ -271,6 +271,11 @@ impl App {
         // Already open under what's shown (Downloads → VPN settings → Open downloads): back to
         // it, not a second one on top.
         while self.overlay != Overlay::Downloads && self.stack.iter().any(|(overlay, _, _)| *overlay == Overlay::Downloads) {
+            // What's being typed in Settings is kept, as when clicking away from it.
+            if self.overlay == Overlay::Settings && self.edit_index >= 0 {
+                let text = self.ui().get_edit_text().to_string();
+                self.finish_edit(Some(text));
+            }
             self.back();
         }
         // Looked at: the ring stops asking about what stopped.
@@ -312,7 +317,9 @@ impl App {
         let touches = !matches!(action, "folder" | "cancel_install" | "play_install" | "vpn" | "stop_seed" | "share" | "choose");
         self.dl_notes.remove(key);
         self.dl_page_note.clear();
-        self.played_from = None;
+        // A game started from this row: what it says isn't this press's news. (From another
+        // row: that row keeps saying it.)
+        if self.played_from.as_ref().is_some_and(|(_, k)| k == key) { self.played_from = None; }
         if touches && install.as_ref().is_some_and(|record| record.state.active()) {
             return self.note_download(key, "It's installing: cancel the installation first");
         }
