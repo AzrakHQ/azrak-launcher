@@ -276,6 +276,26 @@ export function needsSteamArt(topic) {
   return !(topic.game_info?.title_id || /(?:PPSA|CUSA)\d{5}/i.test(topic.title));
 }
 
+/** The Steam app Wikidata gives for a game of this name, as a search result ({ id, name }), or
+ * null. Wikidata keeps the Steam app of games Steam's own search no longer lists (taken off sale:
+ * eFootball PES 2021). Its names and aliases are matched as strictly as Steam's search results. */
+export async function wikidataSteamApp(name, { exact = false } = {}) {
+  const api = 'https://www.wikidata.org/w/api.php?format=json&';
+  const found = await get(`${api}action=wbsearchentities&type=item&language=en&limit=7&search=${encodeURIComponent(name)}`);
+  const ids = (found?.search || []).map(item => item.id).filter(id => /^Q\d+$/.test(id));
+  if (!ids.length) return null;
+  const entities = (await get(`${api}action=wbgetentities&props=claims|labels|aliases&languages=en&ids=${ids.join('|')}`))?.entities || {};
+  const items = ids.flatMap(id => {
+    const entity = entities[id];
+    // P1733: Steam application ID.
+    const appid = (entity?.claims?.P1733 || []).find(claim => claim.rank !== 'deprecated')?.mainsnak?.datavalue?.value;
+    if (!/^\d+$/.test(appid || '')) return [];
+    const names = [entity.labels?.en?.value, ...(entity.aliases?.en || []).map(alias => alias.value)].filter(Boolean);
+    return names.map(label => ({ type: 'app', id: Number(appid), name: label }));
+  });
+  return bestMatch(name, items, { exact });
+}
+
 /** Look up one release. Returns the steam block (appid null when Steam doesn't have it; `query`
  * keeps the name searched for, so a better cleanName searches again). */
 export async function lookup(title, now = new Date(), { exact = false, ratings = true } = {}) {
@@ -288,6 +308,13 @@ export async function lookup(title, now = new Date(), { exact = false, ratings =
   if (!item && shorter && shorter !== name) {
     await sleep(1600);
     item = bestMatch(shorter, await search(shorter), { exact });
+  }
+  // Not in Steam's search (taken off sale, or named otherwise there): Wikidata may know its app.
+  let via = null;
+  for (const term of [...new Set([name, shorter].filter(Boolean))]) {
+    if (item) break;
+    try { item = await wikidataSteamApp(term, { exact }); } catch { item = null; }
+    if (item) via = { via: 'wikidata', matched: item.name };
   }
   if (!item) return { appid: null, query: name, checked_at: now.toISOString() };
   await sleep(1600); // appdetails allows about 200 requests per 5 minutes
@@ -302,7 +329,7 @@ export async function lookup(title, now = new Date(), { exact = false, ratings =
   let partial = !listed || hasLogo === undefined;
   const rating = ratings ? await protondb(item.id) : null;
   if (rating === undefined) partial = true;
-  return steamBlock(item.id, data, assets, rating ?? null, now, partial);
+  return { ...steamBlock(item.id, data, assets, rating ?? null, now, partial), ...via };
 }
 
 /** Whether a topic needs (another) lookup: never looked up; a match whose artwork or rating
@@ -314,7 +341,10 @@ export function due(topic, now, retry = false) {
   if (!steam) return true;
   if (steam.appid == null) return retry || steam.query !== cleanName(topic.title)
     || now - new Date(steam.checked_at || 0) > RETRY_DAYS * 86400_000;
-  if (steam.name && !numbersAgree(cleanName(topic.title), steam.name)) return true;
+  // (A Wikidata match is checked against the name it matched, which Steam's may not be: "eFootball
+  // PES 2021" for "eFootball PES 2021 SEASON UPDATE".)
+  const matched = steam.matched || steam.name;
+  if (matched && !numbersAgree(cleanName(topic.title), matched)) return true;
   return Boolean(steam.partial) || !('protondb' in steam)
     || (retry && Object.values(steam.assets || {}).some(url => url == null));
 }
