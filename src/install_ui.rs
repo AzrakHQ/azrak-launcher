@@ -77,17 +77,23 @@ impl App {
     pub fn install_download(&mut self, key: &str) {
         let Some(to) = self.downloads.job(key).and_then(|job| job.install_to) else { return self.prepare_install(key) };
         // Another one installing: this one goes next, by itself (an old record would stop that).
+        // Pressed in the Game Hub: what happened is said under its buttons too.
+        let game = self.downloads.job(key).and_then(|job| self.games.iter().position(|game| game.g.id == job.topic))
+            .map(|g| self.game_key(crate::app::Target { game: Some(g), local: self.games[g].local }));
         if self.installer.snapshot().iter().any(|record| record.state.active()) {
             let _ = self.installer.forget(key);
             self.install_failures.remove(key);
             crate::audio::play(crate::audio::Sound::Select);
             // Its row says "Waiting to install".
+            if let Some(game) = &game { self.note_game_brief(game, "Waiting to install: it starts once the game installing now is done", false); }
             return self.push_downloads();
         }
         match self.start_install(key, to) {
             Ok(()) => { crate::audio::play(crate::audio::Sound::Select); self.push_installs(); }
             // Its row says "Couldn't install" and why.
             Err(error) => {
+                crate::audio::play(crate::audio::Sound::Error);
+                if let Some(game) = &game { self.note_game(game, &format!("Couldn't install: {error:#}"), true); }
                 self.install_failures.insert(key.into(), format!("{error:#}"));
                 self.downloads.set_install_to(key, None);
             }

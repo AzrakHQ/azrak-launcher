@@ -301,6 +301,10 @@ impl App {
         self.installer = crate::installer::Manager::load();
         self.push_downloads();
         self.note_setting(crate::settings::SId::AppUpdate, &format!("Couldn't restart: {err}"), 2);
+        // Moving to another display restarts too: said where that was pressed.
+        if self.setting_notes.get(&crate::settings::SId::Display).is_some_and(|(note, _, _)| note.starts_with("Moving to")) {
+            self.note_setting(crate::settings::SId::Display, &format!("Couldn't restart: {err}"), 2);
+        }
     }
 }
 

@@ -3062,16 +3062,25 @@ impl App {
         self.ui().set_trailer_controls(true);
     }
 
+    /// The trailer ended without a word to say: a Library card no longer waits for one.
+    fn trailer_over(&mut self) {
+        if self.library_waiting.as_ref() == Some(&self.trailer_key) { self.library_waiting = None; }
+    }
+
     fn trailer_tick(&mut self) {
         let Some(status) = crate::trailer::poll() else {
             if self.overlay == Overlay::Trailer { self.back(); }
+            self.trailer_over();
             return;
         };
         if let Some(ended) = status.ended {
             if self.overlay == Overlay::Trailer { self.back(); }
-            if let Err(e) = ended {
-                let key = self.trailer_key.clone();
-                self.note_game_brief(&key, &format!("Can't play the trailer: {e}"), true);
+            match ended {
+                Err(e) => {
+                    let key = self.trailer_key.clone();
+                    self.note_game_brief(&key, &format!("Can't play the trailer: {e}"), true);
+                }
+                Ok(_) => self.trailer_over(),
             }
             return;
         }
@@ -3090,7 +3099,10 @@ impl App {
             Act::Confirm => crate::trailer::toggle_pause(),
             Act::Left => crate::trailer::seek(-10.0, false),
             Act::Right => crate::trailer::seek(10.0, false),
-            Act::Back | Act::Trailer => return self.back(),
+            Act::Back | Act::Trailer => {
+                self.back();
+                return self.trailer_over();
+            }
             _ => {}
         }
         self.show_trailer_controls();
