@@ -239,6 +239,8 @@ export component AppWindow inherits Window {
     in-out property <length> settings-y;
     // Settings' left column: its sections, the one shown, and the rows under them (Quit).
     in property <[SettingSection]> settings-sections;
+    // Updates wants you (an update ready, a restart to finish one): a dot on the top bar's gear.
+    in property <bool> settings-dot;
     in property <int> settings-section;
     in property <string> settings-title;
     in property <string> settings-sub;
@@ -1046,6 +1048,15 @@ export component AppWindow inherits Window {
                             background: self.f ? #f5f7fb : ta-gear.has-hover ? #ffffff1a : transparent;
                             animate background { duration: 120ms; }
                             Image { source: Icons.gear; colorize: gear.f ? #0a0d18 : Theme.text2; width: (28px * S.k); height: self.width; }
+                            // On the gear's top right, ringed in the bar's colour so it stands off the teeth.
+                            if root.settings-dot: Rectangle {
+                                x: parent.width / 2 + (7px * S.k); y: parent.height / 2 - (17px * S.k);
+                                width: (13px * S.k); height: self.width;
+                                border-radius: self.width / 2;
+                                background: Theme.warn;
+                                border-width: (2.5px * S.k);
+                                border-color: gear.f ? #f5f7fb : #1b2133;
+                            }
                             ta-gear := TouchArea { mouse-cursor: pointer; clicked => { root.click(Zone.top, 3); } }
                         }
                         Rectangle { width: (13px * S.k); Rectangle { width: 1px; height: (28px * S.k); background: #ffffff29; } }
@@ -1576,7 +1587,8 @@ export component AppWindow inherits Window {
                             Rectangle {
                                 width: (10px * S.k); height: self.width; y: (25px * S.k);
                                 border-radius: self.width / 2;
-                                background: chosen ? Theme.accent : #ffffff40;
+                                // Amber while the section wants you ("1 ready"), even when it's open.
+                                background: sec.note-kind == 2 ? Theme.warn : chosen ? Theme.accent : #ffffff40;
                             }
                             Text {
                                 text: sec.label;

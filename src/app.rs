@@ -1828,6 +1828,7 @@ impl App {
         let (h, m) = (tm.tm_hour, tm.tm_min);
         let clock = format!("{}:{:02} {}", if h % 12 == 0 { 12 } else { h % 12 }, m, if h < 12 { "AM" } else { "PM" });
         let ui = self.ui();
+        ui.set_settings_dot(self.updates_need_you());
         if clock != self.clock {
             ui.set_clock(clock.clone().into());
             self.clock = clock;

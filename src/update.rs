@@ -183,6 +183,12 @@ impl App {
         std::mem::forget(t);
     }
 
+    /// Updates wants you: an update is ready, or installed and waiting for a restart. Shown as a
+    /// dot on the top bar's gear and beside Updates in Settings until it's done.
+    pub fn updates_need_you(&self) -> bool {
+        self.upd.installed.is_some() || self.app_update_available() || self.kyty_update_available()
+    }
+
     pub fn app_update_available(&self) -> bool {
         self.upd.installed.is_none() && self.upd.latest.as_ref().is_some_and(|r| is_newer(&r.version, &current_version()))
     }
