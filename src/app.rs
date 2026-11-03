@@ -287,7 +287,7 @@ pub struct App {
     /// What was just pressed for the game on screen did (key, text, a problem): over its lasting
     /// note, and gone once another game is shown. See `note_game_brief`.
     pub brief_note: Option<(String, String, bool)>,
-    /// A press on a Library card being carried out (its game's key; true once a problem was
+    /// A press on a Library card being carried out (its game's key; true once something was
     /// said about it): see `library_press`.
     pub library_press: Option<(String, bool)>,
     /// The game last started from a Library card (its key): a problem said later (it crashed,
@@ -2214,7 +2214,7 @@ impl App {
             Act::TabPrev | Act::TabNext => return self.switch_view(1 - self.view, true),
             Act::Trailer => {
                 if let Some(t) = self.focused_target() {
-                    self.library_press(t, false, |app| app.play_trailer(t));
+                    self.library_press(t, "trailer", |app| app.play_trailer(t));
                 }
                 return;
             }
@@ -2602,7 +2602,7 @@ impl App {
                 let t = self.menu_target;
                 self.back();
                 if let (Some(act), Some(t)) = (act, t) {
-                    self.library_press(t, act == "play", |app| app.run_action(act, t));
+                    self.library_press(t, act, |app| app.run_action(act, t));
                 }
             }
             _ => {}
@@ -3332,9 +3332,7 @@ impl App {
         self.game_notes.insert(key.to_string(), (one_line(text), warn));
         if self.brief_note.as_ref().is_some_and(|(k, _, _)| k == key) { self.brief_note = None; }
         self.push_game_notes();
-        // A problem stays on the download's row (until the next press there); anything else is
-        // read from the game each time.
-        self.game_note_on_download(key, warn.then_some((text, warn)));
+        self.game_note_on_download(key, None);
         self.game_note_in_library(key, warn);
     }
 
@@ -3348,12 +3346,13 @@ impl App {
         self.game_note_in_library(key, warn);
     }
 
-    /// Do `f`, pressed for `t` (from its Library card or the Options menu over it; `plays`: it
-    /// starts the game). A Library card has no room for notes: if `f` says something's wrong
-    /// with that game, its Game Hub opens after, with the note under its buttons. (Pressed
-    /// anywhere else, nothing changes.)
-    fn library_press(&mut self, t: Target, plays: bool, f: impl FnOnce(&mut App)) {
-        let on_card = self.view == 1 && self.overlay == Overlay::None && self.zone == Z_GRID;
+    /// Do `f`, action `act` pressed for `t` (from its Library card or the Options menu over it).
+    /// A Library card has no room for notes: if `f` says something about that game (it can't
+    /// start, PS4 support comes first, which file Play starts now), its Game Hub opens after,
+    /// with the note under its buttons; not for Stop ("Closing it…" is what was asked for).
+    /// Pressed anywhere else, nothing changes.
+    fn library_press(&mut self, t: Target, act: &str, f: impl FnOnce(&mut App)) {
+        let on_card = self.view == 1 && self.overlay == Overlay::None && self.zone == Z_GRID && act != "stop";
         self.library_press = on_card.then(|| (self.game_key(t), false));
         self.library_waiting = None;
         f(self);
@@ -3362,7 +3361,7 @@ impl App {
             Some((key, true)) if self.overlay == Overlay::None => {
                 if let Some(t) = self.target_for_key(&key) { self.open_hub(t); }
             }
-            Some((key, false)) if plays => self.library_waiting = Some(key),
+            Some((key, false)) if act == "play" => self.library_waiting = Some(key),
             _ => {}
         }
     }
@@ -3371,7 +3370,7 @@ impl App {
     fn target_for_key(&self, key: &str) -> Option<Target> {
         if let Some(id) = key.strip_prefix("catalog:") {
             let g = self.games.iter().position(|g| g.g.id.to_string() == id)?;
-            return Some(Target { game: Some(g), local: None });
+            return Some(Target { game: Some(g), local: self.games[g].local });
         }
         let l = self.locals.iter().position(|l| l.l.id == key)?;
         Some(Target { game: self.locals[l].cat, local: Some(l) })
@@ -3379,22 +3378,23 @@ impl App {
 
     /// See `library_press`.
     fn game_note_in_library(&mut self, key: &str, warn: bool) {
-        if !warn { return; }
         if let Some((k, said)) = self.library_press.as_mut() {
             if k == key { *said = true; }
             return;
         }
-        if self.library_waiting.as_deref() != Some(key) { return; }
+        if !warn || self.library_waiting.as_deref() != Some(key) { return; }
         self.library_waiting = None;
+        // It closed while its splash was up: the splash goes, for the Hub.
+        self.hide_launch_splash();
         let on_card = self.view == 1 && self.overlay == Overlay::None && self.zone == Z_GRID;
         if let Some(t) = self.focused_target().filter(|t| on_card && self.game_key(*t) == key) {
             self.open_hub(t);
         }
     }
 
-    /// See `played_from`. `keep`: a note that stays on the row until the next press there (what
-    /// a press did, a problem); other notes are read from the game each time (they go when it
-    /// starts).
+    /// See `played_from`. `keep`: what a press did, which stays on the row until the next press
+    /// there; lasting notes are read from the game each time (they go when it starts, from
+    /// anywhere).
     fn game_note_on_download(&mut self, key: &str, keep: Option<(&str, bool)>) {
         let Some((_, download)) = self.played_from.clone().filter(|(game, _)| game == key) else { return };
         if self.overlay == Overlay::Downloads || self.stack.iter().any(|s| s.0 == Overlay::Downloads) {
