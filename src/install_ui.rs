@@ -93,7 +93,7 @@ impl App {
             // Its row says "Couldn't install" and why.
             Err(error) => {
                 crate::audio::play(crate::audio::Sound::Error);
-                if let Some(game) = &game { self.note_game(game, &format!("Couldn't install: {error:#}"), true); }
+                if let Some(game) = &game { self.note_game_brief(game, &format!("Couldn't install: {error:#}"), true); }
                 self.install_failures.insert(key.into(), format!("{error:#}"));
                 self.downloads.set_install_to(key, None);
             }
