@@ -283,7 +283,7 @@ impl App {
         self.ring_seen.extend(needs);
         self.ring_done.clear();
         // A new visit: a game started from a row last time isn't news on it now.
-        if self.overlay != Overlay::Downloads { self.played_from = None; }
+        if self.overlay != Overlay::Downloads { self.played_from.clear(); }
         if self.overlay != Overlay::Downloads {
             self.push_overlay(Overlay::Downloads, Z_DOWNLOADS, 0);
             self.dl_shelf = 0.0;
@@ -319,7 +319,7 @@ impl App {
         self.dl_page_note.clear();
         // A game started from this row: what it says isn't this press's news. (From another
         // row: that row keeps saying it.)
-        if self.played_from.as_ref().is_some_and(|(_, k)| k == key) { self.played_from = None; }
+        self.played_from.remove(key);
         if touches && install.as_ref().is_some_and(|record| record.state.active()) {
             return self.note_download(key, "It's installing: cancel the installation first");
         }
@@ -338,7 +338,7 @@ impl App {
                     if let Some(local) = self.locals.iter().position(|game| &game.l.path == path) {
                         // A game that can't start says why here, on its row (not behind this page).
                         let id = self.locals[local].l.id.clone();
-                        self.played_from = Some((id, key.to_string()));
+                        self.played_from.insert(key.to_string(), id);
                         self.run_action("play", Target { game: self.locals[local].cat, local: Some(local) });
                     } else { self.note_download(key, "Its folder is missing: check Game folders in Settings"); }
                 }
@@ -463,8 +463,8 @@ impl App {
             }).collect();
             actions.push(ActionData { id: "folder".into(), label: "Open folder".into(), icon: "folder".into(), primary: false, danger: false, round: true });
             // What a press there did, else what the game started from it says now.
-            let pressed = self.dl_notes.get(&job.key).cloned().or_else(|| self.played_from.as_ref()
-                .filter(|(_, key)| *key == job.key).and_then(|(game, _)| self.game_notes.get(game).cloned()));
+            let pressed = self.dl_notes.get(&job.key).cloned()
+                .or_else(|| self.played_from.get(&job.key).and_then(|game| self.game_notes.get(game).cloned()));
             data.push(crate::DownloadData {
                 key: job.key.clone().into(), title: job.name.clone().into(),
                 has_art: art.is_some(), art: art.unwrap_or_default(),

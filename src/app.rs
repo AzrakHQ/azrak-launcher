@@ -290,14 +290,14 @@ pub struct App {
     /// A press on a Library card being carried out (its game's key; true once something was
     /// said about it): see `library_press`.
     pub library_press: Option<(String, bool)>,
-    /// The game last started from a Library card (its key): a problem said later (it crashed,
-    /// PS4 support couldn't be fetched) opens its Hub too, while its card is still the one
-    /// focused.
+    /// The game last pressed for on a Library card with nothing said yet (its key): what's said
+    /// about it later (a trailer that couldn't play, a rating saved, a crash) opens its Hub too,
+    /// while its card is still the one focused.
     pub library_waiting: Option<String>,
-    /// A game started from its download's row (game key, download key): while Downloads is
-    /// open, what's said about the game is said on that row too (it can't start, PS4 support is
+    /// Games started from their download's row (download key → game key): while Downloads is
+    /// open, what's said about a game is said on its row too (it can't start, PS4 support is
     /// being fetched first).
-    pub played_from: Option<(String, String)>,
+    pub played_from: HashMap<String, String>,
     /// A note on the running game's pill in the top bar (Resume couldn't switch to it), and
     /// when: it gives the clock its place back after a few seconds.
     pub running_note: (String, f64),
@@ -631,7 +631,7 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         setting_notes: HashMap::new(),
         game_notes: HashMap::new(),
         brief_note: None,
-        played_from: None,
+        played_from: HashMap::new(),
         library_press: None,
         library_waiting: None,
         running_note: (String::new(), 0.0),
@@ -2632,6 +2632,11 @@ impl App {
             if self.overlay == Overlay::Settings {
                 self.setting_notes.clear();
             }
+            // What was pressed in a Game Hub over the Library was said there (the Library has no
+            // notes to keep it).
+            if self.overlay == Overlay::Hub && self.view == 1 {
+                self.brief_note = None;
+            }
             let (ov, zone, idx) = self.stack.pop().unwrap_or((Overlay::None, if self.view == 0 { Z_ROW } else { Z_GRID }, 0));
             self.overlay = ov;
             self.ui().set_overlay(ov as i32);
@@ -3333,7 +3338,7 @@ impl App {
         if self.brief_note.as_ref().is_some_and(|(k, _, _)| k == key) { self.brief_note = None; }
         self.push_game_notes();
         self.game_note_on_download(key, None);
-        self.game_note_in_library(key, warn);
+        self.game_note_in_library(key);
     }
 
     /// A note about what was just pressed for a game (a trailer that can't play, a rating saved):
@@ -3343,7 +3348,7 @@ impl App {
         self.brief_note = Some((key.to_string(), one_line(text), warn));
         self.push_game_notes();
         self.game_note_on_download(key, Some((text, warn)));
-        self.game_note_in_library(key, warn);
+        self.game_note_in_library(key);
     }
 
     /// Do `f`, action `act` pressed for `t` (from its Library card or the Options menu over it).
@@ -3361,7 +3366,7 @@ impl App {
             Some((key, true)) if self.overlay == Overlay::None => {
                 if let Some(t) = self.target_for_key(&key) { self.open_hub(t); }
             }
-            Some((key, false)) if act == "play" => self.library_waiting = Some(key),
+            Some((key, false)) => self.library_waiting = Some(key),
             _ => {}
         }
     }
@@ -3377,15 +3382,15 @@ impl App {
     }
 
     /// See `library_press`.
-    fn game_note_in_library(&mut self, key: &str, warn: bool) {
+    fn game_note_in_library(&mut self, key: &str) {
         if let Some((k, said)) = self.library_press.as_mut() {
             if k == key { *said = true; }
             return;
         }
-        if !warn || self.library_waiting.as_deref() != Some(key) { return; }
+        if self.library_waiting.as_deref() != Some(key) { return; }
         self.library_waiting = None;
         // It closed while its splash was up: the splash goes, for the Hub.
-        self.hide_launch_splash();
+        if self.live.is_empty() { self.hide_launch_splash(); }
         let on_card = self.view == 1 && self.overlay == Overlay::None && self.zone == Z_GRID;
         if let Some(t) = self.focused_target().filter(|t| on_card && self.game_key(*t) == key) {
             self.open_hub(t);
@@ -3396,12 +3401,15 @@ impl App {
     /// there; lasting notes are read from the game each time (they go when it starts, from
     /// anywhere).
     fn game_note_on_download(&mut self, key: &str, keep: Option<(&str, bool)>) {
-        let Some((_, download)) = self.played_from.clone().filter(|(game, _)| game == key) else { return };
+        let rows: Vec<String> = self.played_from.iter().filter(|(_, game)| *game == key).map(|(row, _)| row.clone()).collect();
+        if rows.is_empty() { return; }
         if self.overlay == Overlay::Downloads || self.stack.iter().any(|s| s.0 == Overlay::Downloads) {
-            if let Some((text, warn)) = keep { self.dl_notes.insert(download, (one_line(text), warn)); }
+            if let Some((text, warn)) = keep {
+                for row in rows { self.dl_notes.insert(row, (one_line(text), warn)); }
+            }
             self.push_downloads();
         } else {
-            self.played_from = None;
+            self.played_from.retain(|_, game| game != key);
         }
     }
 

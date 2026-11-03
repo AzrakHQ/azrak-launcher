@@ -836,7 +836,7 @@ impl App {
             }
             SId::Extra => self.save_cfg(|c| c.extra_args = t),
             // Left as it opened ("~/Downloads/") or on a folder: nothing chosen yet.
-            SId::VpnAdd if util::expand_home(&t).is_dir() => {
+            SId::VpnAdd if t == "~/Downloads/" || util::expand_home(&t).is_dir() => {
                 self.note_setting(SId::VpnAdd, "Type the file itself, like ~/Downloads/wg0.conf", 0);
             }
             SId::VpnAdd if !t.is_empty() => {
