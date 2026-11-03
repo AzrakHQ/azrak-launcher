@@ -153,6 +153,10 @@ try the next one.
 Still stuck? [Open an issue](https://github.com/AzrakHQ/azrak-launcher/issues).
 Developers: see the [developer guide](docs/DEVELOPMENT.md).
 
+## License
+
+Free and open source under the [MIT License](LICENSE).
+
 ---
 
 Azrak Launcher is an unofficial fan project, not affiliated with or endorsed by Sony Interactive
