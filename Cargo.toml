@@ -9,7 +9,9 @@ rust-version = "1.92"
 slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-femtovg", "unstable-winit-030"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-ureq = { version = "2", default-features = false, features = ["tls", "json", "gzip"] }
+# No "gzip": it makes every request say Accept-Encoding, and fastpic.org (where most forum covers
+# are) answers 404 to any request that does. Catalogs are downloaded as .gz files and unpacked.
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
 regex = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 fast_image_resize = "5"
