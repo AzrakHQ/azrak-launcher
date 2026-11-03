@@ -272,7 +272,8 @@ impl App {
         let needs = self.ring_needs(&self.downloads.snapshot(), &self.installer.snapshot());
         self.ring_seen.extend(needs);
         self.ring_done.clear();
-        if self.overlay != Overlay::Downloads { self.dl_page_note.clear(); }
+        // A new visit: a game started from a row last time isn't news on it now.
+        if self.overlay != Overlay::Downloads { self.played_from = None; }
         if self.overlay != Overlay::Downloads {
             self.push_overlay(Overlay::Downloads, Z_DOWNLOADS, 0);
             self.dl_shelf = 0.0;
@@ -449,6 +450,9 @@ impl App {
                 id: (*id).into(), label: (*label).into(), icon: (*icon).into(), primary: k == 0, danger: *id == "delete", round: *id == "delete" && k >= 2,
             }).collect();
             actions.push(ActionData { id: "folder".into(), label: "Open folder".into(), icon: "folder".into(), primary: false, danger: false, round: true });
+            // What a press there did, else what the game started from it says now.
+            let pressed = self.dl_notes.get(&job.key).cloned().or_else(|| self.played_from.as_ref()
+                .filter(|(_, key)| *key == job.key).and_then(|(game, _)| self.game_notes.get(game).cloned()));
             data.push(crate::DownloadData {
                 key: job.key.clone().into(), title: job.name.clone().into(),
                 has_art: art.is_some(), art: art.unwrap_or_default(),
@@ -459,11 +463,11 @@ impl App {
                 stats: ModelRc::new(VecModel::from(d.stats.iter().map(|(v, l)| DlStat { value: v.clone().into(), label: l.clone().into() }).collect::<Vec<_>>())),
                 spark: if d.spark { self.dl_speeds.get(&job.key).map(spark_path).unwrap_or_default() } else { String::new() }.into(),
                 // What pressing something on it just did, else what it needs.
-                note: self.dl_notes.get(&job.key).map(|(text, _)| text.clone()).unwrap_or_else(|| d.note.clone()).into(),
+                note: pressed.as_ref().map(|(text, _)| text.clone()).unwrap_or_else(|| d.note.clone()).into(),
                 // What a press there couldn't do: in amber, whatever the download's own colour.
                 // A finished or ready download's own error is a problem too (its files changed, a
                 // delete refused, it couldn't start with what was chosen).
-                note_bad: self.dl_notes.get(&job.key).map_or(matches!(job.state, State::Complete | State::Ready) && !job.error.is_empty(), |(_, bad)| *bad),
+                note_bad: pressed.as_ref().map_or(matches!(job.state, State::Complete | State::Ready) && !job.error.is_empty(), |(_, bad)| *bad),
                 dl_frac: d.dl, inst_frac: d.inst, ready: d.ready, dl_label: d.dl_label.clone().into(), inst_label: d.inst_label.clone().into(), bar_kind: d.bar,
                 actions: ModelRc::new(VecModel::from(actions)),
                 line: d.line.clone().into(), tile_frac: d.tile, working: d.working,

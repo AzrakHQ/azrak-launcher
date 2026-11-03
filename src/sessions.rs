@@ -352,7 +352,9 @@ impl Sessions {
             return Err("shadPS4 isn't installed yet".into());
         }
         if !ps4 && !cfg.emulator_ok() {
-            return Err(format!("Emulator not found or not executable:\n{}", cfg.emulator_path().display()));
+            let path = cfg.emulator_path();
+            if path.as_os_str().is_empty() { return Err("No emulator set: choose KytyPS5 in Settings".into()); }
+            return Err(format!("Emulator not found or not executable:\n{}", path.display()));
         }
         let emu = if ps4 { crate::shad::emulator() } else { cfg.emulator_path() };
         let mut args: Vec<String> = vec![

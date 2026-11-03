@@ -150,8 +150,9 @@ impl App {
             ("None".into(), 0, "Connect your VPN app, and downloads use it".into())
         };
         rows.push((SId::Vpn, r));
-        if nm && !saved.is_empty() {
-            let dialog = crate::vpn::has_file_dialog();
+        // Without a file dialog, its path is typed here (even for the first one).
+        let dialog = crate::vpn::has_file_dialog();
+        if nm && (!saved.is_empty() || !dialog) {
             let mut r = row(if dialog { 4 } else { 1 }, "Add a VPN from a file");
             r.value = if dialog { "WireGuard .conf · OpenVPN .ovpn".into() } else { "".into() };
             r.hint = if dialog { "Download the file from your VPN provider's website" } else { "Type the path of a WireGuard .conf or OpenVPN .ovpn file" }.into();
@@ -351,8 +352,8 @@ impl App {
         self.settings_headers = titles;
         self.settings_section = self.settings_section.min(self.settings_sections.len() - 1);
         // What a row just did, in place of its hint (see App::note_setting): on the row of that
-        // name in a list (a network, a device). Only what just happened (good or bad) covers a
-        // problem the row shows itself, not a passing remark.
+        // name in a list (a network, a device). What just happened (good or bad) covers a problem
+        // the row shows itself; a passing remark doesn't.
         for (id, r) in rows.iter_mut() {
             let found = self.setting_notes.iter().find(|(nid, (_, _, label))| note_row(**nid, label, *id, &r.label));
             if let Some((_, (note, note_kind, _))) = found {
@@ -361,6 +362,18 @@ impl App {
         }
         self.settings_ids = rows.iter().map(|(id, _)| *id).collect();
         self.settings_rows = rows.into_iter().map(|(_, r)| r).collect();
+    }
+
+    /// Row `i` by what it is (its id and name), to find it again after the rows are rebuilt.
+    pub fn settings_row(&self, i: i32) -> Option<(SId, String)> {
+        let i = usize::try_from(i).ok()?;
+        Some((*self.settings_ids.get(i)?, self.settings_rows.get(i)?.label.to_string()))
+    }
+
+    /// Where that row is now.
+    pub fn settings_row_now(&self, row: &(SId, String)) -> Option<usize> {
+        let rows: Vec<(SId, &str)> = self.settings_ids.iter().zip(&self.settings_rows).map(|(id, r)| (*id, r.label.as_str())).collect();
+        same_row((row.0, &row.1), &rows)
     }
 
     /// What row `i` said last time goes (it's being pressed again).
@@ -821,10 +834,9 @@ impl App {
                 self.note_setting(SId::Dirs, &format!("{} found", plural(n, "installed game")), 1);
             }
             SId::Extra => self.save_cfg(|c| c.extra_args = t),
-            // Typed on Add a VPN, or on Your VPN when there's none yet.
-            SId::VpnAdd | SId::Vpn if !t.is_empty() => {
+            SId::VpnAdd if !t.is_empty() => {
                 let file = util::expand_home(&t);
-                self.vpn_task(id, "Adding…", move || crate::vpn::nm_import(&file).map(|_| ()));
+                self.vpn_task(SId::VpnAdd, "Adding…", move || crate::vpn::nm_import(&file).map(|_| ()));
             }
             SId::DownloadDir => {
                 if t.is_empty() || !util::expand_home(&t).is_absolute() {
@@ -881,6 +893,9 @@ impl App {
             return;
         }
         if !crate::vpn::has_file_dialog() {
+            // Typed on Add a VPN from a file (pressed on Your VPN: there, just below).
+            let Some(i) = self.settings_ids.iter().position(|s| *s == SId::VpnAdd) else { return };
+            self.focus_setting_row(i);
             self.edit_index = i as i32;
             let ui = self.ui();
             ui.set_edit_text("~/Downloads/".into());

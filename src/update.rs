@@ -275,7 +275,7 @@ impl App {
     /// Start the new version in place of this one (keeps the same window position/flags).
     pub fn app_restart(&mut self) {
         if !self.live.is_empty() {
-            self.note_setting(crate::settings::SId::AppUpdate, "Finish your game first: the launcher can restart once no game is running", 0);
+            self.note_setting(crate::settings::SId::AppUpdate, "Finish your game first: the launcher can restart once no game is running", 2);
             return;
         }
         let Ok(exe) = std::env::current_exe() else { return };

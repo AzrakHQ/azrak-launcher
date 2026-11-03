@@ -2033,7 +2033,7 @@ impl App {
         }
     }
 
-    pub fn on_click(&mut self, zone: i32, idx: i32) {
+    pub fn on_click(&mut self, zone: i32, mut idx: i32) {
         if self.boot.active {
             return self.boot_confirm();
         }
@@ -2041,8 +2041,15 @@ impl App {
             self.stop_search_edit();
         }
         if self.edit_index >= 0 && !(zone == Z_SETTINGS && idx == self.edit_index) {
+            // The rows held still while it was typed in: the one clicked can move once they're
+            // rebuilt (a network left the list), and is followed there.
+            let clicked = if zone == Z_SETTINGS { self.settings_row(idx) } else { None };
             let cur = self.ui().get_edit_text().to_string();
             self.finish_edit(Some(cur));
+            if let Some(row) = clicked {
+                let Some(now) = self.settings_row_now(&row) else { return };
+                idx = now as i32;
+            }
         }
         if zone == Z_SETTINGS_NAV && self.overlay == Overlay::Settings && idx >= 0 {
             // Back from the rows to their own section (the hint clicked) sounds like Back.
@@ -3310,8 +3317,7 @@ impl App {
         self.game_notes.insert(key.to_string(), (one_line(text), warn));
         if self.brief_note.as_ref().is_some_and(|(k, _, _)| k == key) { self.brief_note = None; }
         self.push_game_notes();
-        self.game_note_on_download(key, text, warn);
-        self.game_note_in_library(key, warn);
+        self.game_note_on_download(key, None);
     }
 
     /// A note about what was just pressed for a game (a trailer that can't play, a rating saved):
@@ -3320,12 +3326,13 @@ impl App {
     pub fn note_game_brief(&mut self, key: &str, text: &str, warn: bool) {
         self.brief_note = Some((key.to_string(), one_line(text), warn));
         self.push_game_notes();
-        self.game_note_on_download(key, text, warn);
+        self.game_note_on_download(key, Some((text, warn)));
         self.game_note_in_library(key, warn);
     }
 
-    /// A Library card has no room for notes: a problem with the game it's on opens its Game
-    /// Hub, where the note is under its buttons.
+    /// A Library card has no room for notes: a problem with what was just pressed for the game
+    /// it's on opens its Game Hub, where the note is under its buttons. (Lasting notes, which can
+    /// come later, wait for the Hub to be opened.)
     fn game_note_in_library(&mut self, key: &str, warn: bool) {
         if !warn || self.view != 1 || self.overlay != Overlay::None || self.zone != Z_GRID { return; }
         if let Some(t) = self.focused_target().filter(|t| self.game_key(*t) == key) {
@@ -3333,11 +3340,12 @@ impl App {
         }
     }
 
-    /// See `played_from`.
-    fn game_note_on_download(&mut self, key: &str, text: &str, warn: bool) {
+    /// See `played_from`. A lasting note is read from the game each time (it goes when the game
+    /// starts); a brief one (`brief`), about the press, stays on the row until the next press.
+    fn game_note_on_download(&mut self, key: &str, brief: Option<(&str, bool)>) {
         let Some((_, download)) = self.played_from.clone().filter(|(game, _)| game == key) else { return };
         if self.overlay == Overlay::Downloads || self.stack.iter().any(|s| s.0 == Overlay::Downloads) {
-            self.dl_notes.insert(download, (one_line(text), warn));
+            if let Some((text, warn)) = brief { self.dl_notes.insert(download, (one_line(text), warn)); }
             self.push_downloads();
         } else {
             self.played_from = None;
