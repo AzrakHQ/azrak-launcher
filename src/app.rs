@@ -290,9 +290,9 @@ pub struct App {
     /// A press on a Library card being carried out (its game's key; true once something was
     /// said about it): see `library_press`.
     pub library_press: Option<(String, bool)>,
-    /// The game last pressed for on a Library card with nothing said yet (its key): what's said
-    /// about it later (a trailer that couldn't play, a rating saved, a crash) opens its Hub too,
-    /// while its card is still the one focused.
+    /// The game last pressed for on a Library card whose result comes later (Play, Trailer, a
+    /// rating), with nothing said yet (its key): what's said about it then (a crash, a trailer
+    /// that couldn't play, the rating saved) opens its Hub too, while its card is the one focused.
     pub library_waiting: Option<String>,
     /// Games started from their download's row (download key → game key): while Downloads is
     /// open, what's said about a game is said on its row too (it can't start, PS4 support is
@@ -2635,7 +2635,8 @@ impl App {
             // What was pressed in a Game Hub over the Library was said there (the Library has no
             // notes to keep it).
             if self.overlay == Overlay::Hub && self.view == 1 {
-                self.brief_note = None;
+                let key = self.hub.map(|t| self.game_key(t));
+                if self.brief_note.as_ref().is_some_and(|(k, _, _)| Some(k) == key.as_ref()) { self.brief_note = None; }
             }
             let (ov, zone, idx) = self.stack.pop().unwrap_or((Overlay::None, if self.view == 0 { Z_ROW } else { Z_GRID }, 0));
             self.overlay = ov;
@@ -3366,7 +3367,9 @@ impl App {
             Some((key, true)) if self.overlay == Overlay::None => {
                 if let Some(t) = self.target_for_key(&key) { self.open_hub(t); }
             }
-            Some((key, false)) => self.library_waiting = Some(key),
+            Some((key, false)) if matches!(act, "play" | "trailer") || act.starts_with("rate_") && act != "rate_skip" => {
+                self.library_waiting = Some(key);
+            }
             _ => {}
         }
     }
@@ -3389,8 +3392,10 @@ impl App {
         }
         if self.library_waiting.as_deref() != Some(key) { return; }
         self.library_waiting = None;
-        // It closed while its splash was up: the splash goes, for the Hub.
-        if self.live.is_empty() { self.hide_launch_splash(); }
+        // It closed while the splash of its start from the card was up: the splash goes, for
+        // the Hub.
+        let from_card = self.stack.last().is_some_and(|(overlay, zone, _)| *overlay == Overlay::None && *zone == Z_GRID);
+        if self.overlay == Overlay::Launch && from_card && self.live.is_empty() { self.hide_launch_splash(); }
         let on_card = self.view == 1 && self.overlay == Overlay::None && self.zone == Z_GRID;
         if let Some(t) = self.focused_target().filter(|t| on_card && self.game_key(*t) == key) {
             self.open_hub(t);
