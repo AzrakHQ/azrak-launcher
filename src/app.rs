@@ -287,6 +287,13 @@ pub struct App {
     /// What was just pressed for the game on screen did (key, text, a problem): over its lasting
     /// note, and gone once another game is shown. See `note_game_brief`.
     pub brief_note: Option<(String, String, bool)>,
+    /// A press on a Library card being carried out (its game's key; true once something was
+    /// said about it): see `library_press`.
+    pub library_press: Option<(String, bool)>,
+    /// The game last pressed for on a Library card without anything said yet (its key): what
+    /// comes later about it (it crashed) opens its Hub too, while its card is still the one
+    /// focused.
+    pub library_waiting: Option<String>,
     /// A game started from its download's row (game key, download key): while Downloads is
     /// open, what's said about the game is said on that row too (it can't start, PS4 support is
     /// being fetched first).
@@ -625,6 +632,8 @@ pub fn run(ui: AppWindow, monitors: Vec<Monitor>, target_monitor: Option<Monitor
         game_notes: HashMap::new(),
         brief_note: None,
         played_from: None,
+        library_press: None,
+        library_waiting: None,
         running_note: (String::new(), 0.0),
         sticky_status: String::new(),
         trailer_key: String::new(),
@@ -2205,7 +2214,7 @@ impl App {
             Act::TabPrev | Act::TabNext => return self.switch_view(1 - self.view, true),
             Act::Trailer => {
                 if let Some(t) = self.focused_target() {
-                    self.play_trailer(t);
+                    self.library_press(t, |app| app.play_trailer(t));
                 }
                 return;
             }
@@ -2593,7 +2602,7 @@ impl App {
                 let t = self.menu_target;
                 self.back();
                 if let (Some(act), Some(t)) = (act, t) {
-                    self.run_action(act, t);
+                    self.library_press(t, |app| app.run_action(act, t));
                 }
             }
             _ => {}
@@ -2609,6 +2618,7 @@ impl App {
         if self.overlay != Overlay::None {
             if self.overlay == Overlay::Downloads {
                 self.install_pending = None;
+                self.dl_page_note.clear();
                 self.ui().set_download_consent(false);
                 self.ui().invoke_focus_root();
             }
@@ -2670,6 +2680,9 @@ impl App {
     pub fn switch_view(&mut self, v: i32, focus: bool) {
         if self.view != v {
             audio::play(Sound::Select);
+            // What was just pressed on the other tab isn't news on this one.
+            self.brief_note = None;
+            self.library_waiting = None;
         }
         self.view = v;
         let ui = self.ui();
@@ -3318,6 +3331,7 @@ impl App {
         if self.brief_note.as_ref().is_some_and(|(k, _, _)| k == key) { self.brief_note = None; }
         self.push_game_notes();
         self.game_note_on_download(key, None);
+        self.game_note_in_library(key);
     }
 
     /// A note about what was just pressed for a game (a trailer that can't play, a rating saved):
@@ -3327,15 +3341,35 @@ impl App {
         self.brief_note = Some((key.to_string(), one_line(text), warn));
         self.push_game_notes();
         self.game_note_on_download(key, Some((text, warn)));
-        self.game_note_in_library(key, warn);
+        self.game_note_in_library(key);
     }
 
-    /// A Library card has no room for notes: a problem with what was just pressed for the game
-    /// it's on opens its Game Hub, where the note is under its buttons. (Lasting notes, which can
-    /// come later, wait for the Hub to be opened.)
-    fn game_note_in_library(&mut self, key: &str, warn: bool) {
-        if !warn || self.view != 1 || self.overlay != Overlay::None || self.zone != Z_GRID { return; }
-        if let Some(t) = self.focused_target().filter(|t| self.game_key(*t) == key) {
+    /// Do `f`, pressed for `t` (from its Library card or the Options menu over it). A Library
+    /// card has no room for notes: if `f` says something about that game (it can't start, PS4
+    /// support comes first), its Game Hub opens after, with the note under its buttons. (Pressed
+    /// anywhere else, nothing changes.)
+    fn library_press(&mut self, t: Target, f: impl FnOnce(&mut App)) {
+        let on_card = self.view == 1 && self.overlay == Overlay::None && self.zone == Z_GRID;
+        self.library_press = on_card.then(|| (self.game_key(t), false));
+        self.library_waiting = None;
+        f(self);
+        match self.library_press.take() {
+            Some((_, true)) if self.overlay == Overlay::None => self.open_hub(t),
+            Some((key, false)) => self.library_waiting = Some(key),
+            _ => {}
+        }
+    }
+
+    /// See `library_press`.
+    fn game_note_in_library(&mut self, key: &str) {
+        if let Some((k, said)) = self.library_press.as_mut() {
+            if k == key { *said = true; }
+            return;
+        }
+        if self.library_waiting.as_deref() != Some(key) { return; }
+        self.library_waiting = None;
+        let on_card = self.view == 1 && self.overlay == Overlay::None && self.zone == Z_GRID;
+        if let Some(t) = self.focused_target().filter(|t| on_card && self.game_key(*t) == key) {
             self.open_hub(t);
         }
     }

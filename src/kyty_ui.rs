@@ -281,7 +281,8 @@ impl App {
     }
 
     pub fn kyty_refresh_settings(&mut self) {
-        if self.overlay == Overlay::Settings {
+        // Not under a field being typed in (see refresh_settings).
+        if self.overlay == Overlay::Settings && self.edit_index < 0 {
             self.build_settings();
             self.push_settings();
         }

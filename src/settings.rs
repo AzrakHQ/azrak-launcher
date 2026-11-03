@@ -370,10 +370,11 @@ impl App {
         Some((*self.settings_ids.get(i)?, self.settings_rows.get(i)?.label.to_string()))
     }
 
-    /// Where that row is now.
+    /// Where that row is now; none for a network or device that left the list (what took its
+    /// place isn't what was pressed).
     pub fn settings_row_now(&self, row: &(SId, String)) -> Option<usize> {
         let rows: Vec<(SId, &str)> = self.settings_ids.iter().zip(&self.settings_rows).map(|(id, r)| (*id, r.label.as_str())).collect();
-        same_row((row.0, &row.1), &rows)
+        same_row((row.0, &row.1), &rows).filter(|&i| note_row(row.0, &row.1, rows[i].0, rows[i].1))
     }
 
     /// What row `i` said last time goes (it's being pressed again).
@@ -834,7 +835,8 @@ impl App {
                 self.note_setting(SId::Dirs, &format!("{} found", plural(n, "installed game")), 1);
             }
             SId::Extra => self.save_cfg(|c| c.extra_args = t),
-            SId::VpnAdd if !t.is_empty() => {
+            // Left as it opened ("~/Downloads/") or on a folder: nothing chosen yet.
+            SId::VpnAdd if !t.is_empty() && !util::expand_home(&t).is_dir() => {
                 let file = util::expand_home(&t);
                 self.vpn_task(SId::VpnAdd, "Adding…", move || crate::vpn::nm_import(&file).map(|_| ()));
             }

@@ -268,6 +268,11 @@ impl App {
     }
 
     pub fn open_downloads(&mut self, key: Option<&str>) {
+        // Already open under what's shown (Downloads → VPN settings → Open downloads): back to
+        // it, not a second one on top.
+        while self.overlay != Overlay::Downloads && self.stack.iter().any(|(overlay, _, _)| *overlay == Overlay::Downloads) {
+            self.back();
+        }
         // Looked at: the ring stops asking about what stopped.
         let needs = self.ring_needs(&self.downloads.snapshot(), &self.installer.snapshot());
         self.ring_seen.extend(needs);
