@@ -260,15 +260,41 @@ export function collection(title) {
     || cleanName(title).includes(' + ');
 }
 
-/** The name without an edition suffix: "SILENT HILL: Townfall - Deluxe Edition" → "SILENT HILL:
- * Townfall", "Atomic Heart (Ultimate Edition)" → "Atomic Heart". Steam's search finds nothing for
- * many such release names, and its app is the base game. */
-export function baseName(name) {
-  return String(name)
-    .replace(/\s*\([^()]*\b(?:edition|cut|version)\)\s*$/i, '')
-    .replace(/\s*[-–—:]\s*(?:[\p{L}\p{N}'’™®]+\s+){0,3}(?:edition|cut)\s*$/iu, '')
-    .replace(/\s+(?:digital\s+)?(?:deluxe|ultimate|definitive|complete|gold|special|standard|premium)\s+edition\s*$/i, '')
-    .trim();
+/** A word that makes an edition, not a game: "Premium Deluxe Edition", "20th Anniversary Edition". */
+const EDITION_WORDS = String.raw`(?:digital|super|\d+(?:st|nd|rd|th)|deluxe|ultimate|definitive|complete|gold|special|standard|premium|royal|legendary|platinum|limited|extended|enhanced|anniversary|collector['’]?s|director['’]?s|goty|game\s+of\s+the\s+year)`;
+const EDITION = new RegExp(String.raw`\s*(?:[-–—:]\s*)?(?:${EDITION_WORDS}\s+)+(?:edition|cut)\s*$`, 'iu');
+/** "- Pioneer Edition", ": Emperor Edition": up to three words before "Edition", after a dash or colon. */
+const NAMED_EDITION = /\s*([-–—:])\s*((?:[\p{L}\p{N}'’™®]+\s+){0,3})(?:edition|cut)\s*$/iu;
+
+/** Shorter names to search when Steam's search finds nothing for a release's name, the closest
+ * first: Steam's app is the base game, and its search finds nothing for many edition names.
+ * "Atomic Heart (Ultimate Edition)" → "Atomic Heart"; "Tom Clancy's Splinter Cell: Blacklist
+ * Deluxe Edition" → "Tom Clancy's Splinter Cell: Blacklist", never "Tom Clancy's Splinter Cell":
+ * after a colon, words before an edition word ("Blacklist Deluxe") are the game's subtitle, so
+ * only a named edition without one ("Endless Legend: Emperor Edition") goes whole. */
+export function shorterNames(name) {
+  name = String(name).trim();
+  const named = name.match(NAMED_EDITION);
+  const cut = named && !(named[1] === ':' && new RegExp(String.raw`\b${EDITION_WORDS}\b`, 'iu').test(named[2]))
+    ? name.slice(0, named.index) : '';
+  const names = [
+    name.replace(/\s*\([^()]*\b(?:edition|cut|version)\)\s*$/i, ''),
+    name.replace(EDITION, ''),
+    cut,
+  ].map(n => n.trim());
+  return [...new Set(names)].filter(n => n && n !== name);
+}
+
+/** How lookups shortened names before 2026-11-09, cutting subtitles with the edition ("Tom
+ * Clancy's Splinter Cell: Blacklist Deluxe Edition" → "Tom Clancy's Splinter Cell"): matches
+ * found that way are looked up again (see `due`). */
+const OLD_EDITION_CUT = /\s*[-–—:]\s*(?:[\p{L}\p{N}'’™®]+\s+){0,3}(?:edition|cut)\s*$/iu;
+
+/** Whether the Steam app named `steamName` is named exactly as the release `name` or one of its
+ * shorter names. (Near names don't tell: "Splinter Cell" is near "Splinter Cell Blacklist".) */
+function namedAs(name, steamName) {
+  const item = [{ type: 'app', id: 0, name: steamName }];
+  return [name, ...shorterNames(name)].some(n => bestMatch(n, item, { exact: true }));
 }
 
 /** A console release the launcher has no title ID for, so no PlayStation artwork. */
@@ -302,25 +328,31 @@ export async function lookup(title, now = new Date(), { exact = false, ratings =
   const name = cleanName(title);
   if (collection(title)) return { appid: null, reason: 'collection', query: name, checked_at: now.toISOString() };
   const search = async term => (await get(`https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(term)}&l=english&cc=US`))?.items;
-  let item = bestMatch(name, await search(name), { exact });
+  // An app that's this game: a DLC ("Starfield - Terran Armada", in "Starfield: Terran Armada
+  // Deluxe Edition") or soundtrack of the same name isn't, so the next name is tried.
+  let item = null, data = null, via = null;
+  const accept = async (found, how = null) => {
+    if (!found) return false;
+    await sleep(1600); // appdetails allows about 200 requests per 5 minutes
+    const details = await get(`https://store.steampowered.com/api/appdetails?appids=${found.id}&l=english&cc=US`);
+    const app = details?.[found.id]?.success ? details[found.id].data : null;
+    if (!app || (app.type && app.type !== 'game')) return false;
+    [item, data, via] = [found, app, how];
+    return true;
+  };
   // Nothing for "Game: Deluxe Edition": the base game's name, matched just as strictly.
-  const shorter = baseName(name);
-  if (!item && shorter && shorter !== name) {
-    await sleep(1600);
-    item = bestMatch(shorter, await search(shorter), { exact });
+  const names = [name, ...shorterNames(name)];
+  for (const [i, term] of names.entries()) {
+    if (i > 0) await sleep(1600);
+    if (await accept(bestMatch(term, await search(term), { exact }))) break;
   }
   // Not in Steam's search (taken off sale, or named otherwise there): Wikidata may know its app.
-  let via = null;
-  for (const term of [...new Set([name, shorter].filter(Boolean))]) {
-    if (item) break;
-    try { item = await wikidataSteamApp(term, { exact }); } catch { item = null; }
-    if (item) via = { via: 'wikidata', matched: item.name };
+  for (const term of item ? [] : names) {
+    let found = null;
+    try { found = await wikidataSteamApp(term, { exact }); } catch { found = null; }
+    if (await accept(found, found && { via: 'wikidata', matched: found.name })) break;
   }
   if (!item) return { appid: null, query: name, checked_at: now.toISOString() };
-  await sleep(1600); // appdetails allows about 200 requests per 5 minutes
-  const details = await get(`https://store.steampowered.com/api/appdetails?appids=${item.id}&l=english&cc=US`);
-  const data = details?.[item.id]?.success ? details[item.id].data : null;
-  if (!data) return { appid: null, query: name, checked_at: now.toISOString() };
   const listed = (await storeAssets([item.id]))?.[item.id];
   // Steam's list has no logo: it's where older apps keep theirs, or none.
   const logo = `${ASSETS}/${item.id}/logo.png`;
@@ -335,7 +367,9 @@ export async function lookup(title, now = new Date(), { exact = false, ratings =
 /** Whether a topic needs (another) lookup: never looked up; a match whose artwork or rating
  * couldn't be checked (`partial`, or no ProtonDB answer from before that flag); no match for 30
  * days, or searched under a name cleanName now gives differently; a match from before numbers had to
- * agree, to a game numbered otherwise ("Heroes of Might and Magic" → "… III"). With `retry`: every miss, and matches missing artwork. */
+ * agree, to a game numbered otherwise ("Heroes of Might and Magic" → "… III"); a match found under a
+ * name cut short with its subtitle ("Splinter Cell: Blacklist Deluxe Edition" → "Splinter Cell").
+ * With `retry`: every miss, and matches missing artwork. */
 export function due(topic, now, retry = false) {
   const steam = topic.steam;
   if (!steam) return true;
@@ -344,7 +378,12 @@ export function due(topic, now, retry = false) {
   // (A Wikidata match is checked against the name it matched, which Steam's may not be: "eFootball
   // PES 2021" for "eFootball PES 2021 SEASON UPDATE".)
   const matched = steam.matched || steam.name;
-  if (matched && !numbersAgree(cleanName(topic.title), matched)) return true;
+  const name = cleanName(topic.title);
+  if (matched && !numbersAgree(name, matched)) return true;
+  // Found under a name cut short with its subtitle, which lookups no longer search.
+  const old = name.replace(OLD_EDITION_CUT, '').trim();
+  if (matched && old && old !== name && bestMatch(old, [{ type: 'app', id: 0, name: matched }], { exact: true })
+    && !namedAs(name, matched)) return true;
   return Boolean(steam.partial) || !('protondb' in steam)
     || (retry && Object.values(steam.assets || {}).some(url => url == null));
 }

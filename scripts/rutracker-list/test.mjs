@@ -268,14 +268,24 @@ test('console releases without a title ID get Steam art, by exact name only', as
   assert.equal(bestMatch('Superliminal', items, { exact: true }), null, 'a soundtrack is not the game');
   assert.equal(bestMatch("Darwin's Paradox! 2", items, { exact: true }), null, 'a near name is not the game');
   // Edition suffixes Steam's search doesn't find: the base game's name.
-  const { baseName } = await import('./steam.mjs');
-  assert.equal(baseName('SILENT HILL: Townfall - Deluxe Edition'), 'SILENT HILL: Townfall');
-  assert.equal(baseName('007 First Light: Deluxe Edition'), '007 First Light');
-  assert.equal(baseName('Atomic Heart (Ultimate Edition)'), 'Atomic Heart');
-  assert.equal(baseName("Assassin's Creed™ Black Flag Resynced: Deluxe Edition"), "Assassin's Creed™ Black Flag Resynced");
-  assert.equal(baseName('Mortal Kombat 1: Definitive Edition'), 'Mortal Kombat 1');
-  assert.equal(baseName('Hades II'), 'Hades II', 'no suffix, no change');
-  assert.equal(baseName('The Last of Us Part II'), 'The Last of Us Part II');
+  const { shorterNames } = await import('./steam.mjs');
+  assert.deepEqual(shorterNames('SILENT HILL: Townfall - Deluxe Edition'), ['SILENT HILL: Townfall']);
+  assert.deepEqual(shorterNames('007 First Light: Deluxe Edition'), ['007 First Light']);
+  assert.deepEqual(shorterNames('Atomic Heart (Ultimate Edition)'), ['Atomic Heart']);
+  assert.deepEqual(shorterNames("Assassin's Creed™ Black Flag Resynced: Deluxe Edition"), ["Assassin's Creed™ Black Flag Resynced"]);
+  assert.deepEqual(shorterNames('Mortal Kombat 1: Definitive Edition'), ['Mortal Kombat 1']);
+  assert.deepEqual(shorterNames('Hades II'), [], 'no suffix, no change');
+  assert.deepEqual(shorterNames('The Last of Us Part II'), []);
+  // A subtitle before the edition stays: it's another game without it.
+  assert.deepEqual(shorterNames('Tom Clancy’s Splinter Cell: Blacklist Deluxe Edition'), ['Tom Clancy’s Splinter Cell: Blacklist']);
+  assert.deepEqual(shorterNames('Kingdom Come: Deliverance Royal Edition'), ['Kingdom Come: Deliverance']);
+  assert.deepEqual(shorterNames('Company of Heroes 3: Final Stand Premium Edition'), ['Company of Heroes 3: Final Stand']);
+  assert.deepEqual(shorterNames('Beyond Good and Evil - 20th Anniversary Edition'), ['Beyond Good and Evil']);
+  assert.deepEqual(shorterNames('Monster Hunter Wilds: Premium Deluxe Edition'), ['Monster Hunter Wilds']);
+  // Named editions go whole, the closest name first.
+  assert.deepEqual(shorterNames('Endless Legend: Emperor Edition'), ['Endless Legend']);
+  assert.deepEqual(shorterNames('Space Engineers 2 - Pioneer Edition'), ['Space Engineers 2']);
+  assert.deepEqual(shorterNames('Anno 1800 - Definitive Annoversary Edition'), ['Anno 1800']);
   // PC matching stays as lenient as before (four of five words); console matching doesn't.
   const near = [{ type: 'app', id: 4, name: 'Super Meat Boy Forever' }];
   assert.equal(bestMatch('Super Meat Boy Forever Plus', near)?.id, 4);
@@ -310,6 +320,50 @@ test('Steam matches whose artwork or rating could not be checked are looked up a
   assert.equal(due({ title: 'Call of Duty 4: Modern Warfare [x86] [RUS] [Wine]', steam: cod }, now), true, 'an earlier match to another numbered game');
   assert.equal(due({ title: 'Call of Duty: Modern Warfare 4 (2026) [RUS + ENG]', steam: cod }, now), false);
   assert.equal(due({ title: 'Metro: Last Light Redux Next Gen [amd64]', steam: { ...complete, name: 'Metro: Last Light Redux' } }, now), false, 'a looser earlier match stays');
+  const blacklist = 'Tom Clancy’s Splinter Cell: Blacklist Deluxe Edition (1.03) [x86] [Multi] [Wine]';
+  assert.equal(due({ title: blacklist, steam: { ...complete, name: "Tom Clancy's Splinter Cell®" } }, now), true, 'found under a name without its subtitle');
+  assert.equal(due({ title: blacklist, steam: { ...complete, name: 'Tom Clancy’s Splinter Cell Blacklist' } }, now), false);
+  assert.equal(due({ title: 'Space Engineers 2 - Pioneer Edition [Wine]', steam: { ...complete, name: 'Space Engineers 2' } }, now), false, 'a named edition is still its game');
+});
+
+test('a release with a subtitle is searched with it, not as the game it continues', async () => {
+  const { lookup } = await import('./steam.mjs');
+  const searched = [];
+  const realFetch = globalThis.fetch, realTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (done) => realTimeout(done, 0);
+  // As Steam answers: nothing for the edition's name, the game for its name with the subtitle.
+  const fetcher = async (url) => {
+    const u = new URL(String(url));
+    if (u.pathname.includes('storesearch')) {
+      const term = u.searchParams.get('term');
+      searched.push(term);
+      const items = {
+        'Tom Clancy’s Splinter Cell: Blacklist': [{ type: 'app', id: 235600, name: 'Tom Clancy’s Splinter Cell Blacklist' }],
+        'Tom Clancy’s Splinter Cell': [{ type: 'app', id: 13560, name: "Tom Clancy's Splinter Cell®" }],
+        'Starfield: Terran Armada': [{ type: 'app', id: 3763700, name: 'Starfield - Terran Armada' }],
+      }[term] || [];
+      return Response.json({ items });
+    }
+    if (u.pathname.includes('appdetails')) return Response.json({
+      235600: { success: true, data: { type: 'game', name: 'Tom Clancy’s Splinter Cell Blacklist' } },
+      3763700: { success: true, data: { type: 'dlc', name: 'Starfield - Terran Armada' } } });
+    if (u.hostname.includes('wikidata')) return Response.json({ search: [] });
+    if (u.hostname.includes('protondb')) return Response.json({ tier: 'gold' });
+    if (u.pathname.includes('IStoreBrowseService')) return Response.json({ response: { store_items: [] } });
+    return new Response('', { status: 404 });
+  };
+  globalThis.fetch = fetcher;
+  let block;
+  try { block = await lookup('Tom Clancy’s Splinter Cell: Blacklist Deluxe Edition (1.03) [x86] [Multi] [Wine]'); }
+  finally { globalThis.fetch = realFetch; globalThis.setTimeout = realTimeout; }
+  assert.equal(block.appid, 235600);
+  assert.deepEqual(searched, ['Tom Clancy’s Splinter Cell: Blacklist Deluxe Edition', 'Tom Clancy’s Splinter Cell: Blacklist']);
+  let dlc;
+  try {
+    globalThis.fetch = fetcher; globalThis.setTimeout = (done) => realTimeout(done, 0);
+    dlc = await lookup('Starfield: Terran Armada Deluxe Edition [Wine]');
+  } finally { globalThis.fetch = realFetch; globalThis.setTimeout = realTimeout; }
+  assert.equal(dlc.appid, null, 'a DLC of the name is not the game');
 });
 
 test('a match that only lacks its ProtonDB rating just asks ProtonDB', async () => {

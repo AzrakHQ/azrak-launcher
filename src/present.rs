@@ -1196,6 +1196,7 @@ impl App {
             info.as_ref().map(|i| i.publisher.clone()).filter(|s| !s.is_empty()).unwrap_or_else(|| g.map(|g| g.detail("publisher")).unwrap_or_default()),
             g.map(|g| g.release.clone()).unwrap_or_default(), g.map(|g| g.region.clone()).unwrap_or_default(),
         ].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ").into();
+        h.release_name = g.and_then(|g| release_name(&target_name(self, t), &g.name)).unwrap_or_default().into();
         // The game on other platforms: "Play it on" PS5 / PS4 / PC (versions.rs).
         h.versions = model(self.version_tiles(t));
         if let Some(index) = t.game {
@@ -1447,4 +1448,42 @@ pub fn truncate(s: &str, max: usize) -> String {
     }
     let cut: String = s.chars().take(max).collect();
     format!("{}…", cut.rsplit_once(' ').map(|x| x.0).unwrap_or(&cut))
+}
+
+/// A release's own name for the Game Hub, when it names more than the title shown there (a
+/// store's name for the game): "Tom Clancy's Splinter Cell: Blacklist Deluxe Edition" under
+/// Steam's "Tom Clancy's Splinter Cell" shows what Download gets, even when the store's game is
+/// the wrong one. None when it only repeats the title (in other spelling, case or numerals).
+fn release_name(shown: &str, release: &str) -> Option<String> {
+    fn words(s: &str) -> Vec<String> {
+        const ROMAN: [(&str, &str); 9] = [("ii", "2"), ("iii", "3"), ("iv", "4"), ("v", "5"), ("vi", "6"), ("vii", "7"), ("viii", "8"), ("ix", "9"), ("x", "10")];
+        let s: String = s.chars().filter(|c| !matches!(c, '™' | '®' | '©')).collect();
+        util::norm(&s).split_whitespace()
+            .filter(|w| !["the", "a", "an", "of", "and", "edition"].contains(w))
+            .map(|w| ROMAN.iter().find(|(r, _)| *r == w).map_or(w, |(_, n)| *n).to_string()).collect()
+    }
+    let release = release.trim();
+    let shown = words(shown);
+    words(release).iter().any(|w| !shown.contains(w)).then(|| release.to_string())
+}
+
+#[cfg(test)]
+mod release_name_tests {
+    use super::release_name;
+
+    #[test]
+    fn shown_when_it_names_more_than_the_title() {
+        let blacklist = "Tom Clancy’s Splinter Cell: Blacklist Deluxe Edition";
+        assert_eq!(release_name("Tom Clancy's Splinter Cell", blacklist).as_deref(), Some(blacklist));
+        assert_eq!(release_name("Space Engineers 2", "Space Engineers 2 - Pioneer Edition").as_deref(), Some("Space Engineers 2 - Pioneer Edition"));
+    }
+
+    #[test]
+    fn hidden_when_it_repeats_the_title() {
+        assert_eq!(release_name("Tom Clancy’s Splinter Cell Blacklist", "Tom Clancy's Splinter Cell: Blacklist"), None);
+        assert_eq!(release_name("ELDEN RING", "Elden Ring"), None);
+        assert_eq!(release_name("Heroes of Might and Magic III", "Heroes of Might & Magic 3"), None);
+        assert_eq!(release_name("Mortal Kombat 1: Definitive Edition", "Mortal Kombat 1 Definitive"), None);
+        assert_eq!(release_name("Celeste", ""), None);
+    }
 }

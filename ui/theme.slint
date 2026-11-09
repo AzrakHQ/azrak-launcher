@@ -238,6 +238,9 @@ export struct HubData {
     facts: [FactRow],
     details: [FactRow],
     subtitle: string,
+    // The release's own name, when it says more than the title ("… Splinter Cell: Blacklist
+    // Deluxe Edition" under Steam's "Tom Clancy's Splinter Cell"); empty when it repeats it.
+    release-name: string,
     // Will it play here? One headline (kind: the Fact colours, 0 grey) and the results behind it.
     verdict: string,
     verdict-kind: int,

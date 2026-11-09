@@ -58,6 +58,9 @@ function makeProfile() {
       if (statSync(p).isFile()) copyFileSync(p, join(cache, f));
     }
     symlinkSync(join(realCache, 'img'), join(cache, 'img'));
+    // The published catalogs those caches came from (else the cache is set aside for the bundled list).
+    const realLists = join(process.env.REAL_HOME || homedir(), '.local/share/azrak/rutracker');
+    if (existsSync(realLists)) cpSync(realLists, join(profile, 'data/azrak/rutracker'), { recursive: true });
   }
   // Fairy Tail 2's title, so Home has its key art when the cache has it.
   mkdirSync(join(games, 'Game/sce_sys'), { recursive: true });
@@ -100,6 +103,12 @@ const steps = [
   ['downloads-2', ['Right']],
   ['downloads-3', ['Right']],
   ['downloads-buttons', ['Up']],
+  // With --art (this PC's catalog): a Game Hub whose release name says more than its title.
+  ...(flag('--art') ? [
+    ['library', ['Escape', 'Escape', 'Escape', 'Tab']],
+    ['library-search', [...'blacklist'.split(''), 'Return']],
+    ['hub-release', ['Return']],
+  ] : []),
 ];
 
 async function shoot([w, h]) {
@@ -133,7 +142,7 @@ async function shoot([w, h]) {
   await sleep(3000);
   for (const [name, keys] of steps) {
     if (keys.length) run('xdotool', ['key', '--delay', '160', ...keys]);
-    await sleep(name === 'settings' || name === 'downloads' ? 1600 : 900);
+    await sleep(name === 'settings' || name === 'downloads' || name.startsWith('hub') ? 1600 : 900);
     run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'x11grab', '-draw_mouse', '0',
       '-video_size', `${w}x${h}`, '-i', `${process.env.DISPLAY}+0,0`, '-frames:v', '1', join(dir, `${name}.png`)]);
   }
